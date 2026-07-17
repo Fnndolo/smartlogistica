@@ -32,9 +32,16 @@ git push -u origin main
 
 1. En tu proyecto de Railway: **New → GitHub Repo →** elige el repo.
 2. En el servicio, **Settings**:
-   - **Root Directory**: `/` (la raíz del repo — así funciona el workspace de pnpm).
-   - **Config-as-code / Railway Config File**: `apps/api/railway.json`.
-   - (Eso ya trae los comandos de build y start; no toques Build/Start Command a mano.)
+   - **Root Directory**: **déjalo VACÍO** (es la raíz del repo — así funciona el workspace de
+     pnpm y se ve `packages/shared`). ⚠️ NO pongas aquí `apps/api` ni `apps/api/railway.json`.
+   - **Build → Custom Build Command** (pégalo tal cual):
+     ```
+     pnpm install --frozen-lockfile && pnpm --filter @smartlogistica/shared build && pnpm --filter @smartlogistica/api db:generate && pnpm --filter @smartlogistica/api build
+     ```
+   - **Deploy → Custom Start Command** (pégalo tal cual):
+     ```
+     pnpm --filter @smartlogistica/api db:migrate:deploy && node apps/api/dist/main.js
+     ```
 3. **Variables** → pega TODO lo que tienes en `apps/api/.env.local`, con estos cambios
    para producción:
 
@@ -64,8 +71,15 @@ git push -u origin main
 
 1. En el mismo proyecto: **New → GitHub Repo →** el **mismo** repo (Railway permite varios servicios del mismo repo).
 2. **Settings**:
-   - **Root Directory**: `/`.
-   - **Railway Config File**: `apps/web/railway.json`.
+   - **Root Directory**: **déjalo VACÍO** (igual que el api).
+   - **Build → Custom Build Command**:
+     ```
+     pnpm install --frozen-lockfile && pnpm --filter @smartlogistica/shared build && pnpm --filter @smartlogistica/web build
+     ```
+   - **Deploy → Custom Start Command**:
+     ```
+     pnpm --filter @smartlogistica/web exec next start -p $PORT
+     ```
 3. **Variables**:
 
    | Variable | Valor |
