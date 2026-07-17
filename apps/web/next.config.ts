@@ -4,8 +4,15 @@ import type { NextConfig } from 'next';
  * URL del API alcanzable desde el SERVIDOR del web (SSR + el proxy de abajo).
  * En Railway = la URL interna del servicio api (p.ej. http://api.railway.internal:PORT)
  * o su URL publica. En local = el API en :3001.
+ *
+ * Se normaliza el esquema: si la variable viene sin http(s):// (error comun al
+ * pegar solo el dominio de Railway), se asume https:// — si no, Next rechaza el
+ * rewrite ("destination does not start with /, http:// or https://").
  */
-const apiInternal = process.env.API_INTERNAL_URL ?? 'http://localhost:3001';
+const rawApiInternal = process.env.API_INTERNAL_URL ?? 'http://localhost:3001';
+const apiInternal = /^https?:\/\//.test(rawApiInternal)
+  ? rawApiInternal
+  : `https://${rawApiInternal}`;
 
 const securityHeaders = [
   { key: 'X-Frame-Options', value: 'DENY' },
