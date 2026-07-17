@@ -1,0 +1,304 @@
+// Tenant DB — una por cliente. Contiene los datos operacionales del tenant:
+// conexiones a marketplaces (con credenciales cifradas), pedidos, items,
+// eventos de webhook y audit log local.
+//
+// Esta schema se aplica a la DB recien creada en el flujo de provisioning
+// (apps/api/src/modules/tenants/provisioning.service.ts).
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/tenant-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("TENANT_DATABASE_URL")
+}
+
+// Sede / bodega / almacen. Nombre personalizable por el tenant.
+model Warehouse {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  archived  Boolean  @default(false)
+  // Prefijo de facturacion para VTEX (ej. Pasto = "PA"). Se antepone al numero de
+  // factura de Alegra al facturar en VTEX -> invoiceNumber = "PA" + nroAlegra.
+  invoicePrefix String?
+  // Plantilla del Certificado de Garantia: overlay (cajas de tapar + textos) que
+  // se aplica sobre la factura de Alegra con pdf-lib. JSON editable visualmente.
+  // null/vacio = se envia la factura cruda (sin transformar).
+  certificateTemplate Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders       Order[]
+  members      WarehouseMember[]
+  alegra       AlegraConnection?
+  coordinadora CoordinadoraConnection?
+
+  @@index([archived])
+}
+
+// Conexion a la transportadora (Coordinadora) de una sede. 1:1 con Warehouse:
+// cada sede genera guias con su cuenta + su ORIGEN (remitente) propio. Auth de
+// Coordinadora = usuario + SHA256(password); guardamos el password CIFRADO con la
+// DEK del tenant (envelope) y calculamos el SHA256 al llamar. Ademas guarda el
+// origen (remitente) de la sede, obligatorio para generar guia. (Mirror del patron
+// AlegraConnection.)
+model CoordinadoraConnection {
+  id                String @id @default(cuid())
+  warehouseId       String @unique
+  idCliente         Int
+  usuario           String
+  encryptedPassword Bytes
+  nit               String
+  div               String @default("01")
+  // Formato del rotulo (id_rotulo de Coordinadora). 55 = 10x10 cm con cajas.
+  rotuloId          Int    @default(55)
+
+  // Origen / remitente de esta sede (se pre-llena al generar la guia; editable).
+  senderName     String
+  senderNit      String?
+  senderPhone    String
+  senderAddress  String
+  senderCityCode String // codigo DANE de 8 digitos
+  senderCityName String?
+
+  status    String   @default("connected")
+  lastError String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+}
+
+// Conexion al sistema contable (Alegra) de una sede. 1:1 con Warehouse: cada
+// bodega factura con su propia cuenta de Alegra. El API token va cifrado con la
+// DEK del tenant (envelope), nunca en claro. (Mirror del patron MarketplaceConnection.)
+model AlegraConnection {
+  id             String   @id @default(cuid())
+  warehouseId    String   @unique
+  email          String
+  encryptedToken Bytes
+  companyName    String?
+  status         String   @default("connected")
+  lastError      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+}
+
+// Que usuarios (operadores) pertenecen a que sede. userId referencia al User del
+// control plane (referencia por convencion, distinta DB). Usado para el scoping:
+// un operador solo ve los pedidos de sus sedes. (Se explota cuando exista el
+// flujo de invitaciones de usuarios.)
+model WarehouseMember {
+  id          String   @id @default(cuid())
+  warehouseId String
+  userId      String
+  createdAt   DateTime @default(now())
+
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+
+  @@unique([warehouseId, userId])
+  @@index([userId])
+}
+
+// Conexion a un proveedor de IA con vision (OpenAI / Gemini / Anthropic) a nivel
+// tenant. Una sola por tenant (el modelo a utilizar). Se usa para extraer el IMEI
+// de la foto. La API key va cifrada con la DEK del tenant (envelope).
+model AiConnection {
+  id              String   @id @default(cuid())
+  provider        String // openai | gemini | anthropic
+  model           String
+  encryptedApiKey Bytes
+  status          String   @default("connected")
+  lastError       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// Indice local IMEI -> factura de compra de Alegra. Alegra no permite buscar por
+// IMEI (vive en texto libre de la observacion de la linea), asi que espejamos las
+// facturas de compra y parseamos los IMEI aca para poder buscar O(1). imei unico
+// por tenant (cada equipo fisico es unico).
+model AlegraImeiIndex {
+  id                String    @id @default(cuid())
+  imei              String    @unique
+  billId            String
+  billNumber        String?
+  billDate          DateTime?
+  providerName      String?
+  itemName          String?
+  unitCost          Decimal?  @db.Decimal(14, 2)
+  sourceWarehouseId String
+  observations      String?
+  syncedAt          DateTime  @default(now())
+
+  @@index([sourceWarehouseId])
+  @@index([billId])
+}
+
+model MarketplaceConnection {
+  id                String    @id @default(cuid())
+  provider          String
+  accountName       String
+  // Blobs auto-contenidos: cada uno embebe [iv:12][tag:16][ciphertext:N].
+  // Una sola columna por campo cifrado = imposible mezclar iv/tag entre campos.
+  encryptedAppKey   Bytes
+  encryptedAppToken Bytes
+  webhookSecret     String
+  status            String    @default("connected")
+  lastSyncedAt      DateTime?
+  lastError         String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([provider, accountName])
+  @@index([provider, status])
+}
+
+model Order {
+  id                   String   @id @default(cuid())
+  externalId           String
+  provider             String
+  accountName          String
+  customerName         String
+  customerEmail        String?
+  customerDocument     String?
+  customerPhone        String?
+  status               String
+  totalValue           Decimal  @db.Decimal(14, 2)
+  currency             String   @default("COP")
+  // Denormalizado: suma de quantity de los items. Permite ordenar por
+  // "cantidad" en el server (con paginacion) sin un join+sum por pagina.
+  totalUnits           Int      @default(0)
+  // Asignacion a sede. null = "pedidos generales" (espejo automatico de VTEX).
+  // Cuando se asigna a una sede, el pedido queda "reclamado": pasa a tener ciclo
+  // propio y el reconcile NO lo borra aunque cambie de estado en VTEX.
+  warehouseId          String?
+  assignedAt           DateTime?
+  // Envio: denormalizado para poder listar/filtrar sin llamar a Coordinadora por fila.
+  // guideNumber se copia del evento 'guide_generated'; el resto lo refresca el rastreo.
+  guideNumber          String?
+  shippingState        String? // sin_movimientos | en_transito | novedad | entregado
+  shippingStatus       String? // descripcion cruda de Coordinadora
+  shippingUpdatedAt    DateTime?
+
+  marketplaceCreatedAt DateTime
+  receivedAt           DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  rawPayload           Json
+
+  items     OrderItem[]
+  messages  OrderMessage[]
+  events    OrderEvent[]
+  reads     OrderRead[]
+  warehouse Warehouse?  @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, externalId])
+  @@index([status, marketplaceCreatedAt(sort: Desc)])
+  @@index([status, totalUnits])
+  @@index([status, totalValue])
+  @@index([provider, status])
+  @@index([warehouseId, status])
+  @@index([warehouseId, shippingState])
+  @@index([receivedAt(sort: Desc)])
+}
+
+model OrderItem {
+  id        String  @id @default(cuid())
+  orderId   String
+  sku       String
+  name      String
+  quantity  Int
+  unitPrice Decimal @db.Decimal(14, 2)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+// Conversacion por pedido (el "chat" que se abre en el drawer de la sede).
+// Mensajes de texto y, mas adelante, la Foto IMEI como adjunto (kind='imei_photo').
+model OrderMessage {
+  id             String   @id @default(cuid())
+  orderId        String
+  authorId       String
+  authorName     String
+  kind           String   @default("text") // text | imei_photo | system
+  body           String?
+  // Adjunto (foto IMEI / documentos). Nullable hasta que exista storage (R2/S3).
+  attachmentKey  String?
+  attachmentUrl  String?
+  attachmentMime String?
+  // IMEIs extraidos del adjunto cuando kind='imei_photo' (flujo Foto IMEI, siguiente fase).
+  imeis          String[]
+  // userIds mencionados en el mensaje (@usuario) -> alimenta notificaciones.
+  mentions       String[]
+  createdAt      DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+}
+
+// Estado de lectura del chat de un pedido por usuario: hasta cuando ley el hilo.
+// Los "no leidos" = mensajes de otros creados despues de `lastReadAt`.
+model OrderRead {
+  id         String   @id @default(cuid())
+  orderId    String
+  userId     String
+  lastReadAt DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, userId])
+  @@index([userId])
+}
+
+// Linea de tiempo de actividad de un pedido (asignado / transferido / devuelto /
+// cambio de estado). Alimenta la pestaña "Actividad" del drawer.
+model OrderEvent {
+  id        String   @id @default(cuid())
+  orderId   String
+  type      String // created | assigned | transferred | returned | status_changed
+  actorId   String?
+  actorName String?
+  data      Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+}
+
+model WebhookEvent {
+  id          String    @id @default(cuid())
+  provider    String
+  eventId     String
+  signature   String?
+  payload     Json
+  status      String    @default("pending")
+  attempts    Int       @default(0)
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+  error       String?
+
+  @@unique([provider, eventId])
+  @@index([status, receivedAt])
+}
+
+model AuditLog {
+  id        BigInt   @id @default(autoincrement())
+  actorId   String?
+  action    String
+  resource  String?
+  metadata  Json
+  createdAt DateTime @default(now())
+
+  @@index([createdAt(sort: Desc)])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+}

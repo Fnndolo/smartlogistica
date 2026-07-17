@@ -1,0 +1,19 @@
+{
+  "name": "@smartlogistica/eslint-config",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "./base.js",
+  "files": [
+    "base.js",
+    "nestjs.js"
+  ],
+  "dependencies": {
+    "@eslint/js": "^9.17.0",
+    "typescript-eslint": "^8.18.1"
+  },
+  "peerDependencies": {
+    "eslint": "^9.0.0"
+  }
+}

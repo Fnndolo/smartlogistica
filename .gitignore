@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+.next/
+out/
+build/
+*.tsbuildinfo
+
+# Turborepo
+.turbo/
+
+# Env files (never commit secrets)
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Prisma generated clients live inside node_modules but we ignore extra outputs
+prisma/generated/
+
+# Local Prisma / SQLite
+*.db
+*.db-journal
+
+# Secrets and keys
+*.pem
+*.key
+*.crt
+
+# Local scratch
+.scratch/
+tmp/
+temp/

@@ -1,0 +1,116 @@
+// Control Plane DB — compartida entre todos los tenants.
+// Solo contiene identidad/registro: usuarios, tenants, memberships, sesiones,
+// DEKs envueltos y audit log de sistema. Los DATOS de cada tenant viven en
+// su propia DB (ver prisma/tenant/schema.prisma).
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/control-plane-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("CONTROL_PLANE_DATABASE_URL")
+}
+
+enum TenantStatus {
+  PROVISIONING
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum TenantRole {
+  OWNER
+  OPERATOR
+}
+
+model User {
+  id            String       @id @default(cuid())
+  email         String       @unique
+  passwordHash  String
+  emailVerified DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  memberships   Membership[]
+  sessions      Session[]
+
+  @@index([createdAt])
+}
+
+model Tenant {
+  id             String       @id @default(cuid())
+  slug           String       @unique
+  name           String
+  dbName         String       @unique
+  dbRole         String       @unique
+  dbHost         String
+  // Password del role Postgres cifrado con la KEK actual (version + iv + tag + ct).
+  // NUNCA almacenar plaintext. Se descifra solo dentro de TenantConnectionService.
+  dbRolePassword Bytes?
+  status         TenantStatus @default(PROVISIONING)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  memberships    Membership[]
+  dek            TenantDek?
+
+  @@index([status])
+}
+
+model Membership {
+  id        String     @id @default(cuid())
+  userId    String
+  tenantId  String
+  role      TenantRole @default(OPERATOR)
+  createdAt DateTime   @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tenantId])
+  @@index([tenantId])
+}
+
+// Lucia v3 expected shape: id, userId, expiresAt. Otros campos son metadata.
+model Session {
+  id        String   @id
+  userId    String
+  expiresAt DateTime
+  userAgent String?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// Data Encryption Key envuelta con la KEK actual.
+// Una DEK por tenant. Rotacion sin downtime: rewrap con KEK siguiente.
+model TenantDek {
+  id         String    @id @default(cuid())
+  tenantId   String    @unique
+  wrappedDek Bytes
+  kekVersion Int
+  createdAt  DateTime  @default(now())
+  rotatedAt  DateTime?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([kekVersion])
+}
+
+model SystemAuditLog {
+  id          BigInt   @id @default(autoincrement())
+  actorUserId String?
+  tenantId    String?
+  action      String
+  metadata    Json
+  ip          String?
+  createdAt   DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([action, createdAt])
+}

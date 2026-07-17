@@ -1,0 +1,27 @@
+{
+  "name": "smartlogistica",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Plataforma SaaS multi-tenant para centralizar pedidos de marketplaces (VTEX/Addi, Shopify, MercadoLibre, Exito).",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=20.18.0 <25",
+    "pnpm": ">=9"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "db:generate": "turbo run db:generate",
+    "db:migrate": "turbo run db:migrate",
+    "tunnel": "node scripts/tunnel.mjs",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\""
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  }
+}
