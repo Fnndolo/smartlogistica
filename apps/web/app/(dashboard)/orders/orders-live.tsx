@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Building2, ChevronLeft, ChevronRight, RefreshCw, Undo2, X } from 'lucide-react';
+import { Building2, ChevronLeft, ChevronRight, Undo2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type {
   ListOrdersResponse,
@@ -154,6 +154,8 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
   const totalPages = data?.totalPages ?? 1;
+  // En "Facturados" no se permite seleccionar (ni transferir/devolver): ya se cerro en VTEX.
+  const canSelect = state !== 'invoiced';
   const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const rangeEnd = Math.min(page * PAGE_SIZE, total);
 
@@ -207,12 +209,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
         <div className="flex flex-wrap items-center gap-2">
           <SearchFilter />
           <DateRangeFilter />
-          {state === 'invoiced' && warehouseId ? (
-            <>
-              <ShippingFilter />
-              <ShippingAutoStatus warehouseId={warehouseId} />
-            </>
-          ) : null}
+          {state === 'invoiced' && warehouseId ? <ShippingFilter /> : null}
         </div>
         <div className="flex items-center gap-4">
           <LiveIndicator live={live} lastUpdate={dataUpdatedAt} itemCount={total} />
@@ -234,9 +231,11 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
               sort={sort}
               dir={dir}
               onSort={handleSort}
-              selectedIds={selected}
-              onToggleSelect={toggleSelect}
-              onToggleSelectAll={toggleSelectAll}
+              // En "Facturados" no se selecciona: esos pedidos ya no se transfieren
+              // ni se devuelven (la factura quedo emitida contra la cuenta de la sede).
+              selectedIds={canSelect ? selected : undefined}
+              onToggleSelect={canSelect ? toggleSelect : undefined}
+              onToggleSelectAll={canSelect ? toggleSelectAll : undefined}
               onOpenOrder={openFromRow}
               showShipping={state === 'invoiced'}
             />
@@ -299,48 +298,6 @@ function ShippingFilter() {
         </option>
       ))}
     </select>
-  );
-}
-
-/**
- * El rastreo de Coordinadora corre solo en el servidor (cada ~2 min) y el estado
- * llega por SSE, asi que la lista se actualiza sola: no hay boton "Actualizar
- * envios". Este control solo informa que es automatico y deja forzar una consulta
- * inmediata (icono) para quien no quiera esperar el proximo ciclo.
- */
-function ShippingAutoStatus({ warehouseId }: { warehouseId: string }) {
-  const qc = useQueryClient();
-  const [busy, setBusy] = useState(false);
-
-  const runNow = async () => {
-    setBusy(true);
-    try {
-      const r = await api.post<{ updated: number }>(
-        `/v1/orders/refresh-shipping?warehouse=${encodeURIComponent(warehouseId)}`,
-      );
-      if (r.updated > 0) toast.success(`${r.updated} envio(s) actualizados`);
-      qc.invalidateQueries({ queryKey: ['orders'] });
-    } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'No se pudo actualizar el seguimiento');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-2.5 text-xs text-muted-foreground">
-      <span className="text-[13px]">Envios en vivo</span>
-      <button
-        type="button"
-        onClick={runNow}
-        disabled={busy}
-        title="Se actualizan solos. Clic para consultar ahora."
-        aria-label="Consultar envios ahora"
-        className="inline-flex h-6 w-6 items-center justify-center rounded hover:bg-muted disabled:opacity-50"
-      >
-        <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} />
-      </button>
-    </div>
   );
 }
 

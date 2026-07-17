@@ -16,6 +16,14 @@ const API_URL =
     ? window.location.origin
     : withScheme(process.env.API_INTERNAL_URL ?? 'http://localhost:3001'));
 
+function safeJsonParse(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -68,7 +76,10 @@ export async function apiFetch<T = unknown>(path: string, options: RequestOption
 
   const contentType = res.headers.get('content-type') ?? '';
   const isJson = contentType.includes('application/json');
-  const data = isJson ? await res.json().catch(() => null) : await res.text();
+  const text = await res.text();
+  // Un 200 con cuerpo vacio (asi serializa NestJS un `null`) debe ser `null`, NO
+  // '' — si no, el consumidor que hace `data.algo` revienta con "reading X of ''".
+  const data = text === '' ? null : isJson ? safeJsonParse(text) : text;
 
   if (!res.ok) {
     const message =

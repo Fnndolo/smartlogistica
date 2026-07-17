@@ -60,7 +60,7 @@ export function CoordinadoraConnectionCard({ warehouseId, warehouseName, initial
 
   return (
     <div className="rounded-xl border border-border bg-card p-4">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex min-w-0 items-start gap-3">
           <div className={ICON_TILE}>
             <Truck className="h-4 w-4" />

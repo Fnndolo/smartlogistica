@@ -462,7 +462,7 @@ function ShippingCell({ order }: { order: OrderSummary }) {
 const STATUS_LABELS: Record<string, { label: string; variant: 'warning' | 'success' | 'secondary' }> = {
   'ready-for-handling': { label: 'Listo para preparar', variant: 'warning' },
   handling: { label: 'Preparando', variant: 'success' },
-  invoiced: { label: 'Facturado', variant: 'secondary' },
+  invoiced: { label: 'Facturado', variant: 'success' },
   'window-to-cancel': { label: 'En ventana de cancelacion', variant: 'secondary' },
   canceled: { label: 'Cancelado', variant: 'secondary' },
 };

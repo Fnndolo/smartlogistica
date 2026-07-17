@@ -109,13 +109,15 @@ export class OrdersService {
       where.status = 'ready-for-handling';
     }
 
-    // Etapa (solo en sede): 'invoiced' = ya facturado (tiene evento 'invoiced');
-    // 'pending' = aun por preparar (sin ese evento).
+    // Etapa (solo en sede): un pedido pasa a "Facturados" cuando se cierra en VTEX
+    // (evento 'vtex_invoiced' = ya se hizo la guia + MKT y se facturo en VTEX), NO
+    // con solo facturar en Alegra. Asi, un pedido facturado en Alegra pero sin guia
+    // sigue en "Por preparar" hasta completar el flujo.
     if (query.warehouse && query.state) {
       where.events =
         query.state === 'invoiced'
-          ? { some: { type: 'invoiced' } }
-          : { none: { type: 'invoiced' } };
+          ? { some: { type: 'vtex_invoiced' } }
+          : { none: { type: 'vtex_invoiced' } };
     }
 
     // Filtro por estado del envio (Facturados). 'sin_movimientos' incluye los que
@@ -191,6 +193,20 @@ export class OrdersService {
     if (input.warehouseId) {
       const w = await prisma.warehouse.findUnique({ where: { id: input.warehouseId } });
       if (!w || w.archived) throw new NotFoundException('Sede no encontrada o archivada');
+    }
+
+    // No mover pedidos ya facturados en Alegra: la factura quedo emitida contra la
+    // cuenta de ESA sede, transferirlos o devolverlos la dejaria descuadrada.
+    const invoiced = await prisma.orderEvent.findMany({
+      where: { orderId: { in: input.orderIds }, type: 'invoiced' },
+      select: { orderId: true },
+      distinct: ['orderId'],
+    });
+    if (invoiced.length > 0) {
+      throw new BadRequestException(
+        `No se pueden mover ${invoiced.length} pedido(s) que ya estan facturados. ` +
+          'Anula la factura en Alegra primero si de verdad necesitas moverlos.',
+      );
     }
 
     // Estado previo (para clasificar cada cambio como asignado/transferido/devuelto).
