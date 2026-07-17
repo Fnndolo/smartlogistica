@@ -3,6 +3,8 @@ import Link from 'next/link';
 import { cookies } from 'next/headers';
 import { ArrowRight, Link2 } from 'lucide-react';
 
+import { INTERNAL_API_URL } from '@/lib/server-api';
+
 export const metadata: Metadata = {
   title: 'Resumen',
 };
@@ -20,9 +22,8 @@ async function fetchStats(): Promise<StatsResponse> {
   const cookieStore = await cookies();
   const session = cookieStore.get(SESSION_COOKIE_NAME);
   if (!session) return fallback;
-  const apiUrl = process.env.API_INTERNAL_URL ?? 'http://localhost:3001';
   try {
-    const res = await fetch(`${apiUrl}/v1/orders/stats`, {
+    const res = await fetch(`${INTERNAL_API_URL}/v1/orders/stats`, {
       headers: { cookie: `${SESSION_COOKIE_NAME}=${session.value}` },
       cache: 'no-store',
     });

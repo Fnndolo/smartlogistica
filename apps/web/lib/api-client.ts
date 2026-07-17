@@ -9,11 +9,12 @@
  * Asi la cookie de sesion es de un solo origen y no hay CORS. Se puede forzar
  * un origen distinto con NEXT_PUBLIC_API_URL (setup con dominio propio directo).
  */
+const withScheme = (u: string) => (/^https?:\/\//.test(u) ? u : `https://${u}`);
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   (typeof window !== 'undefined'
     ? window.location.origin
-    : (process.env.API_INTERNAL_URL ?? 'http://localhost:3001'));
+    : withScheme(process.env.API_INTERNAL_URL ?? 'http://localhost:3001'));
 
 export class ApiError extends Error {
   constructor(

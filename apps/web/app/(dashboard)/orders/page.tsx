@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
 import type { ListOrdersResponse } from '@smartlogistica/shared';
 
+import { INTERNAL_API_URL } from '@/lib/server-api';
+
 import { OrdersLive } from './orders-live';
 
 export const metadata: Metadata = { title: 'Pedidos' };
@@ -32,8 +34,7 @@ async function fetchOrders(params: {
   const session = cookieStore.get(SESSION_COOKIE_NAME);
   if (!session) return FALLBACK;
 
-  const apiUrl = process.env.API_INTERNAL_URL ?? 'http://localhost:3001';
-  const url = new URL('/v1/orders', apiUrl);
+  const url = new URL('/v1/orders', INTERNAL_API_URL);
   url.searchParams.set('page', String(params.page));
   url.searchParams.set('limit', '50');
   url.searchParams.set('sort', params.sort === 'quantity' || params.sort === 'price' ? params.sort : 'date');

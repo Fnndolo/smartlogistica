@@ -2,6 +2,8 @@ import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
 import type { WarehouseSummary } from '@smartlogistica/shared';
 
+import { INTERNAL_API_URL } from '@/lib/server-api';
+
 import { WarehousesManager } from './warehouses-manager';
 
 export const metadata: Metadata = { title: 'Sedes' };
@@ -12,9 +14,8 @@ async function fetchWarehouses(): Promise<WarehouseSummary[]> {
   const cookieStore = await cookies();
   const session = cookieStore.get(SESSION_COOKIE_NAME);
   if (!session) return [];
-  const apiUrl = process.env.API_INTERNAL_URL ?? 'http://localhost:3001';
   try {
-    const res = await fetch(`${apiUrl}/v1/warehouses`, {
+    const res = await fetch(`${INTERNAL_API_URL}/v1/warehouses`, {
       headers: { cookie: `${SESSION_COOKIE_NAME}=${session.value}` },
       cache: 'no-store',
     });

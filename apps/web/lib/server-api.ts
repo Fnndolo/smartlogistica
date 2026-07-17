@@ -5,6 +5,17 @@ import type { WarehouseSummary } from '@smartlogistica/shared';
 const SESSION_COOKIE_NAME = 'smartlog_session';
 
 /**
+ * URL del API para los fetch del SERVIDOR (SSR). Se normaliza el esquema: si la
+ * variable viene sin http(s):// (error comun al pegar el dominio de Railway) se
+ * asume https://, si no `fetch`/`new URL` revientan con una URL invalida.
+ * Usar SIEMPRE esta constante en el SSR (no leer process.env.API_INTERNAL_URL crudo).
+ */
+export const INTERNAL_API_URL = ((raw: string) =>
+  /^https?:\/\//.test(raw) ? raw : `https://${raw}`)(
+  process.env.API_INTERNAL_URL ?? 'http://localhost:3001',
+);
+
+/**
  * Resultado de un fetch desde el servidor. Distingue "no pude preguntar" de la
  * respuesta: sin esto, un API caido y un "no hay nada" son indistinguibles y la
  * pagina termina afirmando que no tienes datos cuando si los tienes.
@@ -15,7 +26,7 @@ export type ServerResult<T> = { ok: true; data: T } | { ok: false };
 export async function serverFetchResult<T>(path: string): Promise<ServerResult<T>> {
   const session = (await cookies()).get(SESSION_COOKIE_NAME);
   if (!session) return { ok: false };
-  const apiUrl = process.env.API_INTERNAL_URL ?? 'http://localhost:3001';
+  const apiUrl = INTERNAL_API_URL;
   try {
     const res = await fetch(`${apiUrl}${path}`, {
       headers: { cookie: `${SESSION_COOKIE_NAME}=${session.value}` },
