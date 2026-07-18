@@ -195,17 +195,18 @@ export class OrdersService {
       if (!w || w.archived) throw new NotFoundException('Sede no encontrada o archivada');
     }
 
-    // No mover pedidos ya facturados en Alegra: la factura quedo emitida contra la
-    // cuenta de ESA sede, transferirlos o devolverlos la dejaria descuadrada.
-    const invoiced = await prisma.orderEvent.findMany({
-      where: { orderId: { in: input.orderIds }, type: 'invoiced' },
+    // No mover pedidos ya FINALIZADOS (estado "Facturado" = cerrados en VTEX, con
+    // guia + MKT hechos). Un pedido solo facturado en Alegra pero sin cerrar en
+    // VTEX todavia se puede mover (sigue en "Por preparar").
+    const finalized = await prisma.orderEvent.findMany({
+      where: { orderId: { in: input.orderIds }, type: 'vtex_invoiced' },
       select: { orderId: true },
       distinct: ['orderId'],
     });
-    if (invoiced.length > 0) {
+    if (finalized.length > 0) {
       throw new BadRequestException(
-        `No se pueden mover ${invoiced.length} pedido(s) que ya estan facturados. ` +
-          'Anula la factura en Alegra primero si de verdad necesitas moverlos.',
+        `No se pueden mover ${finalized.length} pedido(s) ya facturados (finalizados en VTEX). ` +
+          'Estos pedidos ya estan cerrados.',
       );
     }
 
