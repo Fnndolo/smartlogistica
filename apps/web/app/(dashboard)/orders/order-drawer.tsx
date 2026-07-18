@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns/format';
 import { es } from 'date-fns/locale/es';
@@ -72,6 +73,11 @@ export function OrderDrawer({
   // Mantener el contenido montado durante la animacion de salida.
   const [rendered, setRendered] = useState<OrderSummary | null>(order);
   const [shown, setShown] = useState(false);
+  // Portal a <body>: evita que el drawer herede margenes/containing-block de sus
+  // contenedores (el `space-y-6` de la pagina le metia margin-top:24px y por eso
+  // el overlay `fixed inset-0` arrancaba 24px mas abajo, dejando ver el fondo).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
     if (order) {
@@ -98,15 +104,13 @@ export function OrderDrawer({
     };
   }, [rendered, onClose]);
 
-  if (!rendered) return null;
+  if (!rendered || !mounted) return null;
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-40">
       <div
         className={cn(
-          // Fondo bien oscuro para que la lista de atras no distraiga (antes /40
-          // se leia clarito = parecia que el chat "dejaba ver el fondo").
-          'absolute inset-0 bg-black/70 transition-opacity duration-200',
+          'absolute inset-0 bg-black/50 transition-opacity duration-200',
           shown ? 'opacity-100' : 'opacity-0',
         )}
         onClick={onClose}
@@ -127,7 +131,8 @@ export function OrderDrawer({
           initialTab={initialTab ?? 'detalle'}
         />
       </aside>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
