@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Building2, ChevronLeft, ChevronRight, Undo2, X } from 'lucide-react';
+import { Building2, Check, ChevronDown, ChevronLeft, ChevronRight, Truck, Undo2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type {
   ListOrdersResponse,
@@ -15,6 +15,7 @@ import type {
 
 import { Button } from '@/components/ui/button';
 import { ApiError, api } from '@/lib/api-client';
+import { cn } from '@/lib/utils';
 
 import { OrdersTable } from './orders-table';
 import { OrderDrawer } from './order-drawer';
@@ -263,41 +264,94 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
 }
 
 const SHIPPING_OPTIONS = [
-  { value: '', label: 'Envio: todos' },
+  { value: '', label: 'Todos' },
   { value: 'sin_movimientos', label: 'Sin movimientos' },
   { value: 'en_transito', label: 'En transito' },
   { value: 'novedad', label: 'Con novedad' },
   { value: 'entregado', label: 'Entregado' },
 ] as const;
 
-/** Filtro por estado del envio (Facturados). Vive en la URL (?shipping=). */
+/**
+ * Filtro por estado del envio (Facturados). Vive en la URL (?shipping=). Mismo
+ * diseno que DateRangeFilter (boton outline + popover) para que se vean iguales.
+ */
 function ShippingFilter() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
   const current = searchParams.get('shipping') ?? '';
+  const hasFilter = current !== '';
+  const label = SHIPPING_OPTIONS.find((o) => o.value === current)?.label ?? 'Todos';
 
-  const onChange = (value: string) => {
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  const set = (value: string) => {
     const params = new URLSearchParams(searchParams.toString());
     if (value) params.set('shipping', value);
     else params.delete('shipping');
     params.delete('page');
     router.replace(`${pathname}${params.toString() ? `?${params.toString()}` : ''}`);
+    setOpen(false);
   };
 
   return (
-    <select
-      value={current}
-      onChange={(e) => onChange(e.target.value)}
-      className="h-9 rounded-md border border-input bg-background px-2.5 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      aria-label="Filtrar por estado del envio"
-    >
-      {SHIPPING_OPTIONS.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
+    <div className="relative" ref={ref}>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => setOpen((s) => !s)}
+        className={cn(hasFilter && 'border-foreground/40')}
+      >
+        <Truck className="h-3.5 w-3.5" />
+        <span className="text-xs">
+          Envio: <span className="font-semibold">{label}</span>
+        </span>
+        {hasFilter ? (
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label="Limpiar filtro"
+            onClick={(e) => {
+              e.stopPropagation();
+              set('');
+            }}
+            className="ml-0.5 flex h-4 w-4 items-center justify-center rounded-sm hover:bg-muted"
+          >
+            <X className="h-3 w-3" />
+          </span>
+        ) : (
+          <ChevronDown className="h-3.5 w-3.5" />
+        )}
+      </Button>
+
+      {open ? (
+        <div className="absolute left-0 top-full z-20 mt-2 w-48 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-lg">
+          {SHIPPING_OPTIONS.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => set(o.value)}
+              className={cn(
+                'flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-muted',
+                current === o.value && 'font-medium',
+              )}
+            >
+              {o.label}
+              {current === o.value ? <Check className="h-3.5 w-3.5" /> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

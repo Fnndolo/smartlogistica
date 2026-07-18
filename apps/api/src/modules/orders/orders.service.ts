@@ -1205,7 +1205,8 @@ export class OrdersService {
   private toDetail(o: OrderWithItems, hasDevicePhoto = false): OrderDetail {
     return {
       ...this.toSummary(o, hasDevicePhoto),
-      customerEmail: o.customerEmail,
+      // El correo REAL (el de facturar), nunca el enmascarado @ct.vtex.com.br.
+      customerEmail: extractRealEmail(o.rawPayload) ?? pickRealEmail(o.customerEmail),
       customerPhone: o.customerPhone,
       shippingAddress: extractShippingAddress(o.rawPayload),
       updatedAt: o.updatedAt.toISOString(),
@@ -1355,6 +1356,18 @@ function normalizeCoPhone(phone: string | null): string | null {
   if (!phone) return null;
   const digits = phone.replace(/\D/g, '').replace(/^57(?=\d{10}$)/, '');
   return digits || null;
+}
+
+/**
+ * Email REAL del cliente desde el rawPayload de VTEX (el mismo que se usa para
+ * facturar): el de clientProfileData es el enmascarado (...@ct.vtex.com.br); el
+ * real viene en openTextField.value (las notas del marketplace). null si no hay.
+ */
+function extractRealEmail(rawPayload: unknown): string | null {
+  const raw = (rawPayload ?? {}) as Record<string, unknown>;
+  const cpd = (raw.clientProfileData ?? {}) as Record<string, unknown>;
+  const notes = (raw.openTextField as { value?: unknown } | undefined)?.value;
+  return pickRealEmail(notes, cpd.email);
 }
 
 /** Devuelve el primer candidato que sea un email real (no el enmascarado de VTEX). */

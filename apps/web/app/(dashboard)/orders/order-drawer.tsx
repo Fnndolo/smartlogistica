@@ -104,7 +104,9 @@ export function OrderDrawer({
     <div className="fixed inset-0 z-40">
       <div
         className={cn(
-          'absolute inset-0 bg-black/40 transition-opacity duration-200',
+          // Fondo bien oscuro para que la lista de atras no distraiga (antes /40
+          // se leia clarito = parecia que el chat "dejaba ver el fondo").
+          'absolute inset-0 bg-black/70 transition-opacity duration-200',
           shown ? 'opacity-100' : 'opacity-0',
         )}
         onClick={onClose}
@@ -342,12 +344,14 @@ function ConversacionTab({ orderId }: { orderId: string }) {
   const send = useMutation({
     mutationFn: ({ body, mentions }: { body: string; mentions: string[] }) =>
       api.post<OrderMessage>(`/v1/orders/${orderId}/messages`, { body, mentions }),
-    // Envio optimista: el mensaje aparece de inmediato para quien lo escribe.
+    // Envio estilo WhatsApp: el mensaje aparece de inmediato (optimista) y NO se
+    // refetchea al terminar (se reemplaza el temporal por el real en su sitio, sin
+    // parpadeo). Asi se pueden mandar mensajes seguidos sin esperar "carga".
     onMutate: async ({ body, mentions }) => {
       await qc.cancelQueries({ queryKey: ['order-messages', orderId] });
-      const prev = qc.getQueryData<OrderMessage[]>(['order-messages', orderId]);
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const temp: OrderMessage = {
-        id: `temp-${Date.now()}`,
+        id: tempId,
         orderId,
         authorId: me?.id ?? 'me',
         authorName: me?.email ?? 'Yo',
@@ -362,18 +366,26 @@ function ConversacionTab({ orderId }: { orderId: string }) {
       qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) => [...old, temp]);
       setText('');
       setMention(null);
-      return { prev };
+      return { tempId };
+    },
+    onSuccess: (real, _vars, ctx) => {
+      // Reemplaza el temporal por el real (sin refetch -> sin parpadeo).
+      qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) =>
+        old.map((m) => (m.id === ctx?.tempId ? real : m)),
+      );
     },
     onError: (err, _vars, ctx) => {
-      if (ctx?.prev) qc.setQueryData(['order-messages', orderId], ctx.prev);
+      // Solo quita el temporal que fallo (deja intactos otros mensajes en vuelo).
+      qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) =>
+        old.filter((m) => m.id !== ctx?.tempId),
+      );
       toast.error(err instanceof ApiError ? err.message : 'No se pudo enviar el mensaje');
     },
-    onSettled: () => qc.invalidateQueries({ queryKey: ['order-messages', orderId] }),
   });
 
   const submit = () => {
     const body = text.trim();
-    if (!body || send.isPending) return;
+    if (!body) return;
     send.mutate({ body, mentions: mentionsInText(body, members) });
   };
 
@@ -629,7 +641,7 @@ function ConversacionTab({ orderId }: { orderId: string }) {
               className="max-h-32 min-h-[2.25rem] w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
-          <Button size="icon" onClick={submit} loading={send.isPending} disabled={!text.trim()}>
+          <Button size="icon" onClick={submit} disabled={!text.trim()}>
             <Send className="h-4 w-4" />
           </Button>
         </div>
