@@ -1,19 +1,20 @@
 /**
  * Service worker minimo para la PWA de SmartLogistica.
  *
- * Objetivos: habilitar la instalacion y dar arranque rapido de los assets
- * estaticos, SIN cachear datos con sesion (nada de /v1, ni HTML de paginas
- * autenticadas) para no servir informacion vieja o de otro usuario.
+ * SOLO existe para la instalabilidad (que se pueda "instalar" la app) + cache de
+ * los iconos para el arranque. NO cachea los chunks de Next ni el HTML.
  *
- * Estrategia:
- *  - Navegaciones (documentos): SIEMPRE a la red (network-first). Asi el usuario
- *    ve datos frescos y respeta la sesion/cookies; el SW solo existe para la
- *    instalabilidad y el cache de assets.
- *  - Assets del build de Next (/_next/static, iconos, fuentes): cache-first
- *    (son inmutables, llevan hash).
- *  - Nunca se toca /v1 (API) ni peticiones a otros origenes.
+ * Por que NO cachear los chunks de Next: antes se hacia cache-first de todos los
+ * `.js` y se guardaba cualquier respuesta. Si en un deploy un chunk devolvia un
+ * 404/HTML transitorio, quedaba cacheado como si fuera JS -> "Unexpected token '<'"
+ * -> la app entera reventaba con "client-side exception". Ademas los assets de
+ * Next ya llevan hash + Cache-Control inmutable, asi que el cache HTTP del
+ * navegador los maneja perfecto y SEGURO sin el SW.
+ *
+ * Version del cache: subirla PURGA el cache viejo en `activate` (recupera a los
+ * usuarios que quedaron con un cache envenenado de una version anterior).
  */
-const CACHE = 'smartlog-static-v1';
+const CACHE = 'smartlog-static-v2';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -33,37 +34,29 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-function isStaticAsset(url) {
-  return (
-    url.pathname.startsWith('/_next/static/') ||
-    url.pathname.startsWith('/icons/') ||
-    url.pathname === '/pdf.worker.min.mjs' ||
-    /\.(?:css|js|woff2?|png|jpg|jpeg|svg|webp|gif|ico)$/.test(url.pathname)
-  );
-}
-
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
 
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin) return; // otros origenes: sin tocar
-  if (url.pathname.startsWith('/v1/')) return; // API con sesion: nunca cachear
+  if (url.origin !== self.location.origin) return;
 
-  // Assets inmutables del build: cache-first.
-  if (isStaticAsset(url)) {
+  // SOLO los iconos se sirven cache-first (para instalabilidad). Y solo se cachea
+  // si la respuesta es 200 (nunca un 404/HTML). Todo lo demas -chunks de Next, CSS,
+  // HTML, /v1- va a la RED directa, sin que el SW lo toque.
+  if (url.pathname.startsWith('/icons/')) {
     event.respondWith(
       caches.match(request).then(
         (cached) =>
           cached ||
           fetch(request).then((res) => {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(request, copy)).catch(() => undefined);
+            if (res.ok) {
+              const copy = res.clone();
+              caches.open(CACHE).then((c) => c.put(request, copy)).catch(() => undefined);
+            }
             return res;
           }),
       ),
     );
-    return;
   }
-  // Todo lo demas (navegaciones/HTML): red directa, sin cache.
 });
