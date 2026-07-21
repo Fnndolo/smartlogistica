@@ -131,6 +131,12 @@ export class OrdersService {
       }
     }
 
+    // Filtro por confirmacion de direccion (WhatsApp). Aplica en General y Por
+    // preparar (no en Facturados). 'pending' = el cliente aun no responde (null).
+    if (query.address && query.state !== 'invoiced') {
+      where.addressStatus = query.address === 'pending' ? null : query.address;
+    }
+
     if (query.from || query.to) {
       where.marketplaceCreatedAt = {};
       if (query.from) (where.marketplaceCreatedAt as Prisma.DateTimeFilter).gte = new Date(query.from);

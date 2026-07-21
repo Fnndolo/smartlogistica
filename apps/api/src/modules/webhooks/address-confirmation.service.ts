@@ -27,7 +27,15 @@ export class AddressConfirmationService {
     input: ConfirmAddressWebhookInput,
   ): Promise<{ updated: number }> {
     const digits = this.tenDigits(input.phone);
-    if (digits.length < 7) return { updated: 0 };
+    // Log del telefono crudo que manda Whapify: si un cliente "confirma" pero no
+    // se refleja, aqui se ve si el numero llego distinto al del pedido.
+    this.logger.log(
+      `Webhook direccion recibido: raw="${input.phone}" -> ...${digits} action=${input.action}`,
+    );
+    if (digits.length < 7) {
+      this.logger.warn(`Telefono demasiado corto tras normalizar: "${input.phone}" -> "${digits}"`);
+      return { updated: 0 };
+    }
 
     // Candidatos: pedidos pendientes (no cerrados en VTEX) cuyo telefono contiene
     // esos digitos. Se refina por coincidencia exacta de los ultimos 10.

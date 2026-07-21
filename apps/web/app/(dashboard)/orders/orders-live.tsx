@@ -3,7 +3,7 @@
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Building2, Check, ChevronDown, ChevronLeft, ChevronRight, Truck, Undo2, X } from 'lucide-react';
+import { Building2, Check, ChevronDown, ChevronLeft, ChevronRight, MapPin, Truck, Undo2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type {
   ListOrdersResponse,
@@ -54,12 +54,13 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const to = searchParams.get('to') ?? undefined;
   const q = searchParams.get('q') ?? undefined;
   const shipping = searchParams.get('shipping') ?? undefined;
+  const address = searchParams.get('address') ?? undefined;
   const sort = parseSort(searchParams.get('sort'));
   const dir = parseDir(searchParams.get('dir'));
   const warehouseId = scope.kind === 'warehouse' ? scope.id : undefined;
 
   const { data, dataUpdatedAt } = useQuery({
-    queryKey: ['orders', { scope: warehouseId ?? 'general', state, shipping, page, from, to, q, sort, dir }],
+    queryKey: ['orders', { scope: warehouseId ?? 'general', state, shipping, address, page, from, to, q, sort, dir }],
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set('page', String(page));
@@ -72,6 +73,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       if (warehouseId) params.set('warehouse', warehouseId);
       if (state) params.set('state', state);
       if (shipping) params.set('shipping', shipping);
+      if (address) params.set('address', address);
       return api.get<ListOrdersResponse>(`/v1/orders?${params.toString()}`);
     },
     // El SSR de page.tsx ya respeta scope/page/from/to actual, asi que el
@@ -95,7 +97,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   useEffect(() => {
     setSelected(new Set());
-  }, [page, q, from, to, sort, dir, warehouseId, shipping]);
+  }, [page, q, from, to, sort, dir, warehouseId, shipping, address]);
 
   // Pedido abierto en el drawer (click en la fila).
   const [openOrder, setOpenOrder] = useState<OrderSummary | null>(null);
@@ -211,6 +213,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
           <SearchFilter />
           <DateRangeFilter />
           {state === 'invoiced' && warehouseId ? <ShippingFilter /> : null}
+          {state !== 'invoiced' ? <AddressFilter /> : null}
         </div>
         <div className="flex items-center gap-4">
           <LiveIndicator live={live} lastUpdate={dataUpdatedAt} itemCount={total} />
@@ -338,6 +341,97 @@ function ShippingFilter() {
       {open ? (
         <div className="absolute left-0 top-full z-20 mt-2 w-48 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-lg">
           {SHIPPING_OPTIONS.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => set(o.value)}
+              className={cn(
+                'flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-muted',
+                current === o.value && 'font-medium',
+              )}
+            >
+              {o.label}
+              {current === o.value ? <Check className="h-3.5 w-3.5" /> : null}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const ADDRESS_OPTIONS = [
+  { value: '', label: 'Todas' },
+  { value: 'confirmed', label: 'Confirmada' },
+  { value: 'modified', label: 'Modificada' },
+  { value: 'pending', label: 'Sin responder' },
+] as const;
+
+/**
+ * Filtro por confirmacion de direccion (General + Por preparar). Vive en la URL
+ * (?address=). Mismo diseno que ShippingFilter para que se vean iguales.
+ */
+function AddressFilter() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const current = searchParams.get('address') ?? '';
+  const hasFilter = current !== '';
+  const label = ADDRESS_OPTIONS.find((o) => o.value === current)?.label ?? 'Todas';
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  const set = (value: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (value) params.set('address', value);
+    else params.delete('address');
+    params.delete('page');
+    router.replace(`${pathname}${params.toString() ? `?${params.toString()}` : ''}`);
+    setOpen(false);
+  };
+
+  return (
+    <div className="relative" ref={ref}>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => setOpen((s) => !s)}
+        className={cn(hasFilter && 'border-foreground/40')}
+      >
+        <MapPin className="h-3.5 w-3.5" />
+        <span className="text-xs">
+          Direccion: <span className="font-semibold">{label}</span>
+        </span>
+        {hasFilter ? (
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label="Limpiar filtro"
+            onClick={(e) => {
+              e.stopPropagation();
+              set('');
+            }}
+            className="ml-0.5 flex h-4 w-4 items-center justify-center rounded-sm hover:bg-muted"
+          >
+            <X className="h-3 w-3" />
+          </span>
+        ) : (
+          <ChevronDown className="h-3.5 w-3.5" />
+        )}
+      </Button>
+
+      {open ? (
+        <div className="absolute left-0 top-full z-20 mt-2 w-48 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-lg">
+          {ADDRESS_OPTIONS.map((o) => (
             <button
               key={o.value}
               type="button"

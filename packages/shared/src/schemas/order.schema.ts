@@ -16,6 +16,10 @@ export const shippingStateSchema = z.enum(['sin_movimientos', 'en_transito', 'no
 export const addressStatusSchema = z.enum(['confirmed', 'modified']);
 export type AddressStatus = z.infer<typeof addressStatusSchema>;
 
+/** Filtro de la columna "Direccion": confirmada, modificada, o 'pending' (sin responder = null). */
+export const addressFilterSchema = z.enum(['confirmed', 'modified', 'pending']);
+export type AddressFilter = z.infer<typeof addressFilterSchema>;
+
 /** Cuerpo que manda Whapify (Solicitud de API Externa) al confirmar/modificar la direccion. */
 export const confirmAddressWebhookSchema = z.object({
   phone: z.string().trim().min(5).max(30),
@@ -105,6 +109,8 @@ export const listOrdersQuerySchema = z.object({
   state: orderStateFilterSchema.optional(),
   // Filtro por estado del envio (Facturados).
   shipping: shippingStateSchema.optional(),
+  // Filtro por confirmacion de direccion (General + Por preparar).
+  address: addressFilterSchema.optional(),
   // Busqueda universal: matchea por nombre de cliente, N.º de pedido (externalId),
   // cedula (customerDocument) o nombre de producto (incluye multi-producto).
   q: z.string().trim().min(1).max(120).optional(),
