@@ -58,9 +58,14 @@ export class WarehousesService {
     });
     if (warehouses.length === 0) return [];
 
+    // El contador de la sede = pedidos por PREPARAR (sin cerrar en VTEX). Los ya
+    // facturados/finalizados no cuentan (viven en la seccion "Facturados").
     const counts = await prisma.order.groupBy({
       by: ['warehouseId'],
-      where: { warehouseId: { in: warehouses.map((w) => w.id) } },
+      where: {
+        warehouseId: { in: warehouses.map((w) => w.id) },
+        events: { none: { type: 'vtex_invoiced' } },
+      },
       _count: { _all: true },
     });
     const countById = new Map(counts.map((c) => [c.warehouseId, c._count._all]));
@@ -77,7 +82,9 @@ export class WarehousesService {
       where: { id },
       data: { name: input.name, invoicePrefix: input.invoicePrefix || null },
     });
-    const count = await prisma.order.count({ where: { warehouseId: id } });
+    const count = await prisma.order.count({
+      where: { warehouseId: id, events: { none: { type: 'vtex_invoiced' } } },
+    });
     return this.toSummary(w, count);
   }
 
