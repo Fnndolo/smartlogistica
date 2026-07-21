@@ -186,6 +186,12 @@ model Order {
   shippingStatus       String? // descripcion cruda de Coordinadora
   shippingUpdatedAt    DateTime?
 
+  // Confirmacion de direccion por WhatsApp (Whapify): el cliente confirma o
+  // modifica su direccion desde el mensaje de confirmacion del pedido.
+  addressStatus        String? // null=sin responder | confirmed | modified
+  confirmedAddress     String? // texto de la nueva direccion cuando modified
+  addressConfirmedAt   DateTime?
+
   marketplaceCreatedAt DateTime
   receivedAt           DateTime @default(now())
   updatedAt            DateTime @updatedAt

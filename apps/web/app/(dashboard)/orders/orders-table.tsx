@@ -26,6 +26,8 @@ interface OrdersTableProps {
   onOpenOrder?: (order: OrderSummary) => void;
   /** Muestra la columna "Envio" (estado del rastreo). Solo en Facturados. */
   showShipping?: boolean;
+  /** Muestra la columna "Direccion" (confirmacion por WhatsApp). General + Por preparar. */
+  showAddress?: boolean;
 }
 
 export function OrdersTable({
@@ -38,11 +40,12 @@ export function OrdersTable({
   onToggleSelectAll,
   onOpenOrder,
   showShipping = false,
+  showAddress = false,
 }: OrdersTableProps) {
   const qc = useQueryClient();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const selectable = Boolean(selectedIds && onToggleSelect);
-  const colCount = (selectable ? 8 : 7) + (showShipping ? 1 : 0);
+  const colCount = (selectable ? 8 : 7) + (showShipping ? 1 : 0) + (showAddress ? 1 : 0);
   const allSelected = selectable && items.length > 0 && items.every((o) => selectedIds!.has(o.id));
 
   const toggle = (id: string) =>
@@ -65,6 +68,7 @@ export function OrdersTable({
             onToggleSelect={onToggleSelect}
             onOpenOrder={onOpenOrder}
             showShipping={showShipping}
+            showAddress={showAddress}
             onPrefetch={() => onOpenOrder && prefetchOrder(qc, order.id)}
           />
         ))}
@@ -93,6 +97,7 @@ export function OrdersTable({
           <SortHeader label="Precio de venta" field="price" sort={sort} dir={dir} onSort={onSort} align="right" />
           <SortHeader label="Fecha" field="date" sort={sort} dir={dir} onSort={onSort} />
           <TableHead>Estado</TableHead>
+          {showAddress ? <TableHead>Direccion</TableHead> : null}
           {showShipping ? <TableHead>Envio</TableHead> : null}
         </TableRow>
       </TableHeader>
@@ -195,6 +200,11 @@ export function OrdersTable({
                 <TableCell>
                   <StatusBadge status={order.status} />
                 </TableCell>
+                {showAddress ? (
+                  <TableCell>
+                    <AddressCell order={order} />
+                  </TableCell>
+                ) : null}
                 {showShipping ? (
                   <TableCell>
                     <ShippingCell order={order} />
@@ -256,6 +266,7 @@ function OrderCard({
   onToggleSelect,
   onOpenOrder,
   showShipping,
+  showAddress,
   onPrefetch,
 }: {
   order: OrderSummary;
@@ -264,6 +275,7 @@ function OrderCard({
   onToggleSelect?: (id: string) => void;
   onOpenOrder?: (order: OrderSummary) => void;
   showShipping: boolean;
+  showAddress: boolean;
   onPrefetch: () => void;
 }) {
   const first = order.items[0];
@@ -328,6 +340,12 @@ function OrderCard({
             {format(new Date(order.marketplaceCreatedAt), "d MMM '·' HH:mm", { locale: es })}
           </span>
         </div>
+
+        {showAddress ? (
+          <div className="mt-2">
+            <AddressCell order={order} />
+          </div>
+        ) : null}
 
         {showShipping && order.guideNumber ? (
           <div className="mt-2">
@@ -455,6 +473,39 @@ function ShippingCell({ order }: { order: OrderSummary }) {
         </span>
       ) : null}
       <span className="font-mono text-[10px] text-muted-foreground">{order.guideNumber}</span>
+    </div>
+  );
+}
+
+/** Estado de confirmacion de direccion (respuesta del cliente por WhatsApp). */
+export const ADDRESS_LABELS: Record<
+  string,
+  { label: string; variant: 'success' | 'warning' | 'outline' }
+> = {
+  confirmed: { label: 'Confirmada', variant: 'success' },
+  modified: { label: 'Modificada', variant: 'warning' },
+};
+
+const ADDRESS_FALLBACK = { label: 'Confirmada', variant: 'success' } as const;
+
+function AddressCell({ order }: { order: OrderSummary }) {
+  if (!order.addressStatus) {
+    return <Badge variant="outline" className="whitespace-nowrap text-muted-foreground">Sin responder</Badge>;
+  }
+  const meta = ADDRESS_LABELS[order.addressStatus] ?? ADDRESS_FALLBACK;
+  return (
+    <div className="flex flex-col items-start gap-0.5">
+      <Badge variant={meta.variant} className="whitespace-nowrap">
+        {meta.label}
+      </Badge>
+      {order.addressStatus === 'modified' && order.confirmedAddress ? (
+        <span
+          className="max-w-[180px] truncate text-[11px] text-muted-foreground"
+          title={order.confirmedAddress}
+        >
+          {order.confirmedAddress}
+        </span>
+      ) : null}
     </div>
   );
 }

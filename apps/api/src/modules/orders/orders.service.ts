@@ -794,7 +794,12 @@ export class OrdersService {
       recipient: {
         name: client.name,
         document: client.identification,
-        address: client.address?.street ?? extractShippingAddress(order.rawPayload) ?? '',
+        // Si el cliente MODIFICO su direccion por WhatsApp, la guia arranca con esa
+        // (editable/verificable antes de generar). Si no, la de VTEX.
+        address:
+          order.addressStatus === 'modified' && order.confirmedAddress
+            ? order.confirmedAddress
+            : (client.address?.street ?? extractShippingAddress(order.rawPayload) ?? ''),
         cityCode: city?.code ?? null,
         cityName: city?.name ?? client.address?.city ?? null,
         phone: client.phone,
@@ -1198,6 +1203,9 @@ export class OrdersService {
       shippingState: (o.shippingState as OrderSummary['shippingState']) ?? null,
       shippingStatus: o.shippingStatus,
       shippingUpdatedAt: o.shippingUpdatedAt ? o.shippingUpdatedAt.toISOString() : null,
+      addressStatus: (o.addressStatus as OrderSummary['addressStatus']) ?? null,
+      confirmedAddress: o.confirmedAddress,
+      addressConfirmedAt: o.addressConfirmedAt ? o.addressConfirmedAt.toISOString() : null,
       marketplaceCreatedAt: o.marketplaceCreatedAt.toISOString(),
       receivedAt: o.receivedAt.toISOString(),
     };

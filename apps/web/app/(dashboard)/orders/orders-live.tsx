@@ -239,6 +239,8 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
               onToggleSelectAll={canSelect ? toggleSelectAll : undefined}
               onOpenOrder={openFromRow}
               showShipping={state === 'invoiced'}
+              // Confirmacion de direccion: en General y Por preparar (no en Facturados).
+              showAddress={state !== 'invoiced'}
             />
           </div>
 

@@ -11,6 +11,18 @@ export type MarketplaceProvider = z.infer<typeof marketplaceProviderSchema>;
  * para poder listar/filtrar sin llamar a la transportadora por fila).
  */
 export const shippingStateSchema = z.enum(['sin_movimientos', 'en_transito', 'novedad', 'entregado']);
+
+/** Confirmacion de direccion por WhatsApp: confirmada tal cual, o modificada por el cliente. */
+export const addressStatusSchema = z.enum(['confirmed', 'modified']);
+export type AddressStatus = z.infer<typeof addressStatusSchema>;
+
+/** Cuerpo que manda Whapify (Solicitud de API Externa) al confirmar/modificar la direccion. */
+export const confirmAddressWebhookSchema = z.object({
+  phone: z.string().trim().min(5).max(30),
+  action: addressStatusSchema, // 'confirmed' | 'modified'
+  address: z.string().trim().max(500).optional(), // requerido cuando action='modified'
+});
+export type ConfirmAddressWebhookInput = z.infer<typeof confirmAddressWebhookSchema>;
 export type ShippingState = z.infer<typeof shippingStateSchema>;
 
 export const orderItemSummarySchema = z.object({
@@ -49,6 +61,10 @@ export const orderSummarySchema = z.object({
   shippingState: shippingStateSchema.nullable(),
   shippingStatus: z.string().nullable(),
   shippingUpdatedAt: z.string().datetime().nullable(),
+  // Confirmacion de direccion por WhatsApp: null = sin responder.
+  addressStatus: addressStatusSchema.nullable(),
+  confirmedAddress: z.string().nullable(),
+  addressConfirmedAt: z.string().datetime().nullable(),
   marketplaceCreatedAt: z.string().datetime(),
   receivedAt: z.string().datetime(),
 });

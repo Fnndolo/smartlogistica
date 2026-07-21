@@ -129,6 +129,9 @@ CREATE TABLE "Order" (
     "shippingState" TEXT,
     "shippingStatus" TEXT,
     "shippingUpdatedAt" TIMESTAMP(3),
+    "addressStatus" TEXT,
+    "confirmedAddress" TEXT,
+    "addressConfirmedAt" TIMESTAMP(3),
     "marketplaceCreatedAt" TIMESTAMP(3) NOT NULL,
     "receivedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -161,9 +164,20 @@ CREATE TABLE "OrderMessage" (
     "attachmentUrl" TEXT,
     "attachmentMime" TEXT,
     "imeis" TEXT[],
+    "mentions" TEXT[],
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "OrderMessage_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "OrderRead" (
+    "id" TEXT NOT NULL,
+    "orderId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "lastReadAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "OrderRead_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -271,6 +285,12 @@ CREATE INDEX "OrderItem_orderId_idx" ON "OrderItem"("orderId");
 CREATE INDEX "OrderMessage_orderId_createdAt_idx" ON "OrderMessage"("orderId", "createdAt");
 
 -- CreateIndex
+CREATE INDEX "OrderRead_userId_idx" ON "OrderRead"("userId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "OrderRead_orderId_userId_key" ON "OrderRead"("orderId", "userId");
+
+-- CreateIndex
 CREATE INDEX "OrderEvent_orderId_createdAt_idx" ON "OrderEvent"("orderId", "createdAt");
 
 -- CreateIndex
@@ -305,6 +325,9 @@ ALTER TABLE "OrderItem" ADD CONSTRAINT "OrderItem_orderId_fkey" FOREIGN KEY ("or
 
 -- AddForeignKey
 ALTER TABLE "OrderMessage" ADD CONSTRAINT "OrderMessage_orderId_fkey" FOREIGN KEY ("orderId") REFERENCES "Order"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "OrderRead" ADD CONSTRAINT "OrderRead_orderId_fkey" FOREIGN KEY ("orderId") REFERENCES "Order"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "OrderEvent" ADD CONSTRAINT "OrderEvent_orderId_fkey" FOREIGN KEY ("orderId") REFERENCES "Order"("id") ON DELETE CASCADE ON UPDATE CASCADE;

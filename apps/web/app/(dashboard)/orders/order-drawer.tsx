@@ -7,8 +7,10 @@ import { format } from 'date-fns/format';
 import { es } from 'date-fns/locale/es';
 import {
   Activity,
+  AlertTriangle,
   ArrowRightLeft,
   Camera,
+  Check,
   Download,
   Image as ImageIcon,
   Info,
@@ -219,6 +221,39 @@ function DrawerContent({
 
 // === Tab: Detalle ===
 
+/** Estado de la confirmacion de direccion por WhatsApp (Whapify). */
+function AddressConfirmation({ order }: { order: OrderSummary }) {
+  if (!order.addressStatus) {
+    return (
+      <div className="flex items-start gap-2.5 rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+        <MessageSquare className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        El cliente aun no confirma su direccion (WhatsApp).
+      </div>
+    );
+  }
+  if (order.addressStatus === 'confirmed') {
+    return (
+      <div className="flex items-start gap-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
+        <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        El cliente confirmo que su direccion es correcta.
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2.5 text-xs">
+      <div className="flex items-center gap-2 font-medium text-amber-700 dark:text-amber-400">
+        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+        El cliente MODIFICO su direccion — verificala antes de generar la guia.
+      </div>
+      {order.confirmedAddress ? (
+        <p className="mt-1.5 whitespace-pre-wrap break-words text-foreground">
+          {order.confirmedAddress}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function DetalleTab({ order, detail }: { order: OrderSummary; detail: OrderDetail | undefined }) {
   const items = detail?.items ?? order.items;
   return (
@@ -239,6 +274,7 @@ function DetalleTab({ order, detail }: { order: OrderSummary; detail: OrderDetai
         <InfoRow icon={Mail} value={detail?.customerEmail} placeholder="Sin email" />
         <InfoRow icon={Phone} value={detail?.customerPhone} placeholder="Sin telefono" />
         <InfoRow icon={MapPin} value={detail?.shippingAddress} placeholder="Sin direccion de envio" />
+        <AddressConfirmation order={order} />
       </section>
 
       {/* Productos */}
