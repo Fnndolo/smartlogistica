@@ -14,10 +14,13 @@ interface PageProps {
 export default async function WarehousePendingPage({ params, searchParams }: PageProps) {
   const { id } = await params;
   const sp = await searchParams;
-  const warehouse = (await getWarehouses()).find((w) => w.id === id);
-  const initialData =
-    (await serverFetch<ListOrdersResponse>(`/v1/orders?${ordersQueryString(id, 'pending', sp)}`)) ??
-    FALLBACK;
+  // En paralelo: las sedes (cacheadas, compartidas con el layout) y los pedidos.
+  const [warehouses, orders] = await Promise.all([
+    getWarehouses(),
+    serverFetch<ListOrdersResponse>(`/v1/orders?${ordersQueryString(id, 'pending', sp)}`),
+  ]);
+  const warehouse = warehouses.find((w) => w.id === id);
+  const initialData = orders ?? FALLBACK;
 
   return (
     <OrdersLive
