@@ -42,12 +42,16 @@ async function main() {
   const control = new Client({ connectionString: strip(process.env.CONTROL_PLANE_DATABASE_URL), ssl: ssl() });
   await control.connect();
   const { rows: tenants } = await control.query(
-    `SELECT slug, "dbName" FROM "Tenant" WHERE status='ACTIVE' ORDER BY "createdAt" ASC`,
+    `SELECT slug, "dbName", "dbRole" FROM "Tenant" WHERE status='ACTIVE' ORDER BY "createdAt" ASC`,
   );
   await control.end();
 
   console.log(`Creando ConfirmationLog en ${tenants.length} tenant(s)...\n`);
   for (const t of tenants) {
+    if (!/^[a-z0-9_-]+$/i.test(t.dbRole)) {
+      console.error(`  ✗ ${t.slug}: dbRole sospechoso, saltado`);
+      continue;
+    }
     const db = new Client({
       connectionString: strip(adminDb(process.env.TENANT_DB_ADMIN_URL, t.dbName)),
       ssl: ssl(),
@@ -55,7 +59,10 @@ async function main() {
     try {
       await db.connect();
       await db.query(DDL);
-      console.log(`  ✓ ${t.slug} — ConfirmationLog lista`);
+      // La app se conecta con el rol del tenant (no el admin): la tabla debe ser
+      // suya, igual que las que crea init.sql en el provisioning.
+      await db.query(`ALTER TABLE "ConfirmationLog" OWNER TO "${t.dbRole}"`);
+      console.log(`  ✓ ${t.slug} — ConfirmationLog lista (owner ${t.dbRole})`);
     } catch (err) {
       console.error(`  ✗ ${t.slug}: ${err.message}`);
     } finally {
