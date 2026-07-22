@@ -11,6 +11,8 @@ export const metadata: Metadata = { title: 'Pedidos' };
 const SESSION_COOKIE_NAME = 'smartlog_session';
 const FALLBACK: ListOrdersResponse = { items: [], total: 0, page: 1, limit: 50, totalPages: 1 };
 
+const ADDRESS_VALUES = new Set(['confirmed', 'modified', 'pending']);
+
 interface PageProps {
   searchParams: Promise<{
     page?: string;
@@ -19,6 +21,7 @@ interface PageProps {
     q?: string;
     sort?: string;
     dir?: string;
+    address?: string;
   }>;
 }
 
@@ -29,6 +32,7 @@ async function fetchOrders(params: {
   q?: string;
   sort?: string;
   dir?: string;
+  address?: string;
 }): Promise<ListOrdersResponse> {
   const cookieStore = await cookies();
   const session = cookieStore.get(SESSION_COOKIE_NAME);
@@ -42,6 +46,7 @@ async function fetchOrders(params: {
   if (params.from) url.searchParams.set('from', params.from);
   if (params.to) url.searchParams.set('to', params.to);
   if (params.q) url.searchParams.set('q', params.q);
+  if (params.address && ADDRESS_VALUES.has(params.address)) url.searchParams.set('address', params.address);
 
   try {
     const res = await fetch(url, {
@@ -65,6 +70,7 @@ export default async function OrdersPage({ searchParams }: PageProps) {
     q: params.q,
     sort: params.sort,
     dir: params.dir,
+    address: params.address,
   });
 
   return (

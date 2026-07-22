@@ -58,8 +58,18 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const dir = parseDir(searchParams.get('dir'));
   const warehouseId = scope.kind === 'warehouse' ? scope.id : undefined;
 
-  const { data, dataUpdatedAt } = useQuery({
-    queryKey: ['orders', { scope: warehouseId ?? 'general', state, shipping, address, page, from, to, q, sort, dir }],
+  const queryKey = [
+    'orders',
+    { scope: warehouseId ?? 'general', state, shipping, address, page, from, to, q, sort, dir },
+  ] as const;
+  // Clave con la que se monto la pagina (la que corresponde al initialData del
+  // SSR). Se fija UNA vez: si initialData se pasara plano, React Query lo
+  // sembraria en CADA clave nueva (al aplicar un filtro) y la tabla mostraba los
+  // datos SIN filtrar como si el filtro "no aplicara" hasta terminar el fetch.
+  const [mountKey] = useState(() => JSON.stringify(queryKey));
+
+  const { data, dataUpdatedAt, isPlaceholderData } = useQuery({
+    queryKey,
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set('page', String(page));
@@ -75,9 +85,8 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       if (address) params.set('address', address);
       return api.get<ListOrdersResponse>(`/v1/orders?${params.toString()}`);
     },
-    // El SSR de page.tsx ya respeta scope/page/from/to actual, asi que el
-    // initialData siempre matchea la primera query del cliente.
-    initialData,
+    // Solo la clave inicial recibe el initialData del SSR (ver mountKey arriba).
+    initialData: () => (JSON.stringify(queryKey) === mountKey ? initialData : undefined),
     // Mantener los resultados anteriores mientras carga la nueva busqueda/pagina
     // -> la tabla no parpadea a vacio (se siente fluido al escribir).
     placeholderData: keepPreviousData,
@@ -257,7 +266,14 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
         <EmptyState />
       ) : (
         <>
-          <div className="rounded-xl border border-border bg-card">
+          {/* Mientras llega el resultado de un filtro/pagina nuevo se muestran los
+              datos anteriores atenuados: se VE que esta aplicando. */}
+          <div
+            className={cn(
+              'rounded-xl border border-border bg-card transition-opacity duration-150',
+              isPlaceholderData && 'pointer-events-none opacity-50',
+            )}
+          >
             <OrdersTable
               items={items}
               sort={sort}

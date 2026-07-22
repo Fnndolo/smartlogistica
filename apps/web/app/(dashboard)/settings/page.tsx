@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { serverFetchResult } from '@/lib/server-api';
 
 import { ChangePasswordCard } from './change-password-card';
+import { ConfirmationLogCard } from './confirmation-log-card';
 
 export const metadata: Metadata = { title: 'Ajustes' };
 
@@ -91,6 +92,15 @@ export default async function SettingsPage() {
           description="VTEX/Addi e inteligencia artificial. Alegra, Coordinadora y el certificado se configuran dentro de cada sede."
         />
       </section>
+
+      {isOwner ? (
+        <section className="space-y-3">
+          <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            WhatsApp
+          </h2>
+          <ConfirmationLogCard />
+        </section>
+      ) : null}
     </div>
   );
 }

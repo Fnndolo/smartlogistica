@@ -7,7 +7,7 @@ const FALLBACK: ListOrdersResponse = { items: [], total: 0, page: 1, limit: 50, 
 
 interface PageProps {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ page?: string; from?: string; to?: string; q?: string; sort?: string; dir?: string }>;
+  searchParams: Promise<import('@/lib/server-api').OrdersSearchParams>;
 }
 
 /** Pedidos FACTURADOS de la sede (ya facturados; aqui va el seguimiento). */

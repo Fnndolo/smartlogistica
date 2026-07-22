@@ -296,6 +296,21 @@ model WebhookEvent {
   @@index([status, receivedAt])
 }
 
+/// Cada llamada que hace Whapify al webhook de confirmacion de direccion.
+/// Fuente de verdad para diagnosticar: si el cliente confirmo en WhatsApp y
+/// no hay fila aqui, Whapify nunca llamo a la plataforma.
+model ConfirmationLog {
+  id        String   @id @default(cuid())
+  phone     String
+  action    String
+  address   String?
+  matched   Int      @default(0)
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt(sort: Desc)])
+}
+
 model AuditLog {
   id        BigInt   @id @default(autoincrement())
   actorId   String?

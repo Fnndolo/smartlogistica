@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { PrismaClient as TenantPrismaClient } from '.prisma/tenant-client';
-import type { ConfirmAddressWebhookInput } from '@smartlogistica/shared';
+import type { ConfirmAddressWebhookInput, ConfirmationLogEntry } from '@smartlogistica/shared';
 
 import { RealtimeService } from '../../infrastructure/realtime/realtime.service';
 
@@ -8,6 +8,10 @@ import { RealtimeService } from '../../infrastructure/realtime/realtime.service'
  * Aplica la confirmacion de direccion que llega por WhatsApp (Whapify) a los
  * pedidos PENDIENTES (sin cerrar en VTEX) del telefono que respondio. La
  * direccion es por persona, asi que se marca en todos sus pedidos pendientes.
+ *
+ * Cada llamada queda en "ConfirmationLog" (aplicada o no): es la fuente de
+ * verdad para diagnosticar confirmaciones que "no llegan" — si no hay fila,
+ * Whapify nunca llamo a la plataforma.
  */
 @Injectable()
 export class AddressConfirmationService {
@@ -41,6 +45,30 @@ export class AddressConfirmationService {
     );
   }
 
+  /** Registra la llamada en ConfirmationLog. Nunca lanza (el log no puede tumbar el webhook). */
+  private async record(
+    prisma: TenantPrismaClient,
+    input: ConfirmAddressWebhookInput,
+    matched: number,
+    note: string | null,
+  ): Promise<void> {
+    try {
+      await prisma.confirmationLog.create({
+        data: {
+          phone: input.phone,
+          action: input.action,
+          address: input.address?.trim() || null,
+          matched,
+          note,
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `No se pudo registrar en ConfirmationLog: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
   async apply(
     tenantId: string,
     prisma: TenantPrismaClient,
@@ -54,6 +82,7 @@ export class AddressConfirmationService {
     );
     if (digits.length < 7) {
       this.logger.warn(`Telefono demasiado corto tras normalizar: "${input.phone}" -> "${digits}"`);
+      await this.record(prisma, input, 0, 'Telefono invalido (muy corto)');
       return { updated: 0 };
     }
 
@@ -64,6 +93,12 @@ export class AddressConfirmationService {
       this.logger.warn(
         `Direccion 'modified' ignorada: llego el texto del boton en vez de la direccion ` +
           `("${input.address ?? ''}"). Revisar el paso de captura de la respuesta en el flujo de Whapify.`,
+      );
+      await this.record(
+        prisma,
+        input,
+        0,
+        'Descartada: llego el texto del boton, no una direccion (revisa el flujo)',
       );
       return { updated: 0 };
     }
@@ -82,6 +117,7 @@ export class AddressConfirmationService {
       .map((o) => o.id);
     if (ids.length === 0) {
       this.logger.warn(`Confirmacion de direccion sin pedido pendiente para tel ...${digits}`);
+      await this.record(prisma, input, 0, 'Sin pedido pendiente con ese telefono');
       return { updated: 0 };
     }
 
@@ -94,9 +130,27 @@ export class AddressConfirmationService {
         addressConfirmedAt: new Date(),
       },
     });
+    await this.record(prisma, input, ids.length, null);
 
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
     this.logger.log(`Direccion ${input.action} en ${ids.length} pedido(s) del tel ...${digits}`);
     return { updated: ids.length };
+  }
+
+  /** Ultimas llamadas recibidas (para la vista de diagnostico en Ajustes). */
+  async recent(prisma: TenantPrismaClient): Promise<ConfirmationLogEntry[]> {
+    const rows = await prisma.confirmationLog.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      phone: r.phone,
+      action: r.action,
+      address: r.address,
+      matched: r.matched,
+      note: r.note,
+      createdAt: r.createdAt.toISOString(),
+    }));
   }
 }

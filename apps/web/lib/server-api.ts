@@ -57,11 +57,26 @@ export const getWarehouses = cache(
   async (): Promise<WarehouseSummary[]> => (await serverFetch<WarehouseSummary[]>('/v1/warehouses')) ?? [],
 );
 
+const SHIPPING_VALUES = new Set(['sin_movimientos', 'en_transito', 'novedad', 'entregado']);
+const ADDRESS_VALUES = new Set(['confirmed', 'modified', 'pending']);
+
+/** Filtros que puede traer la URL de una vista de pedidos. */
+export interface OrdersSearchParams {
+  page?: string;
+  from?: string;
+  to?: string;
+  q?: string;
+  sort?: string;
+  dir?: string;
+  shipping?: string;
+  address?: string;
+}
+
 /** Construye el querystring de `/v1/orders` para una sede + etapa + filtros de la URL. */
 export function ordersQueryString(
   warehouseId: string,
   state: 'pending' | 'invoiced' | undefined,
-  sp: { page?: string; from?: string; to?: string; q?: string; sort?: string; dir?: string },
+  sp: OrdersSearchParams,
 ): string {
   const params = new URLSearchParams();
   params.set('warehouse', warehouseId);
@@ -73,5 +88,8 @@ export function ordersQueryString(
   if (sp.from) params.set('from', sp.from);
   if (sp.to) params.set('to', sp.to);
   if (sp.q) params.set('q', sp.q);
+  // Solo valores validos: un valor inventado en la URL haria fallar el zod del API.
+  if (sp.shipping && SHIPPING_VALUES.has(sp.shipping)) params.set('shipping', sp.shipping);
+  if (sp.address && ADDRESS_VALUES.has(sp.address)) params.set('address', sp.address);
   return params.toString();
 }

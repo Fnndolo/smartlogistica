@@ -210,6 +210,19 @@ CREATE TABLE "WebhookEvent" (
 );
 
 -- CreateTable
+CREATE TABLE "ConfirmationLog" (
+    "id" TEXT NOT NULL,
+    "phone" TEXT NOT NULL,
+    "action" TEXT NOT NULL,
+    "address" TEXT,
+    "matched" INTEGER NOT NULL DEFAULT 0,
+    "note" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "ConfirmationLog_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "AuditLog" (
     "id" BIGSERIAL NOT NULL,
     "actorId" TEXT,
@@ -298,6 +311,9 @@ CREATE INDEX "WebhookEvent_status_receivedAt_idx" ON "WebhookEvent"("status", "r
 
 -- CreateIndex
 CREATE UNIQUE INDEX "WebhookEvent_provider_eventId_key" ON "WebhookEvent"("provider", "eventId");
+
+-- CreateIndex
+CREATE INDEX "ConfirmationLog_createdAt_idx" ON "ConfirmationLog"("createdAt" DESC);
 
 -- CreateIndex
 CREATE INDEX "AuditLog_createdAt_idx" ON "AuditLog"("createdAt" DESC);

@@ -2,7 +2,9 @@ import {
   Body,
   Controller,
   ForbiddenException,
+  Get,
   HttpCode,
+  Logger,
   NotFoundException,
   Param,
   Post,
@@ -10,12 +12,20 @@ import {
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { timingSafeEqual } from 'node:crypto';
-import { confirmAddressWebhookSchema, type ConfirmAddressWebhookInput } from '@smartlogistica/shared';
+import {
+  confirmAddressWebhookSchema,
+  type ConfirmAddressWebhookInput,
+  type ConfirmationLogEntry,
+} from '@smartlogistica/shared';
 
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
+import { isAdmin } from '../../common/rbac';
+import type { AuthContext } from '../../common/types/authenticated-request';
 import { ControlPlaneService } from '../../infrastructure/prisma/control-plane.service';
 import { TenantConnectionService } from '../../infrastructure/prisma/tenant-connection.service';
+import { getTenantContext } from '../../infrastructure/tenant-context';
 import { AddressConfirmationService } from './address-confirmation.service';
 
 /**
@@ -27,11 +37,21 @@ import { AddressConfirmationService } from './address-confirmation.service';
  */
 @Controller('webhooks/confirmation')
 export class ConfirmationWebhookController {
+  private readonly logger = new Logger(ConfirmationWebhookController.name);
+
   constructor(
     private readonly control: ControlPlaneService,
     private readonly tenants: TenantConnectionService,
     private readonly confirmation: AddressConfirmationService,
   ) {}
+
+  /** Registro de llamadas recibidas (diagnostico, solo admins). */
+  @Get('log')
+  async log(@CurrentUser() user: AuthContext): Promise<ConfirmationLogEntry[]> {
+    if (!isAdmin(user)) throw new ForbiddenException('Solo administradores');
+    const { prisma } = getTenantContext();
+    return this.confirmation.recent(prisma);
+  }
 
   @Public()
   @Post(':tenantSlug')
@@ -41,7 +61,7 @@ export class ConfirmationWebhookController {
     @Param('tenantSlug') tenantSlug: string,
     @Query('token') token: string | undefined,
     @Body(new ZodValidationPipe(confirmAddressWebhookSchema)) body: ConfirmAddressWebhookInput,
-  ): Promise<{ ok: true; updated: number }> {
+  ): Promise<{ ok: true }> {
     this.assertToken(token);
 
     const tenant = await this.control.tenant.findUnique({ where: { slug: tenantSlug } });
@@ -49,9 +69,20 @@ export class ConfirmationWebhookController {
       throw new NotFoundException('Tenant no encontrado o inactivo');
     }
 
-    const { client: prisma } = await this.tenants.getForTenant(tenant.id);
-    const { updated } = await this.confirmation.apply(tenant.id, prisma, body);
-    return { ok: true, updated };
+    // Responder YA y procesar en background: el nodo de Whapify corta por timeout
+    // y marca "Fallo" (sin reintento) si tardamos — p. ej. cuando toca reabrir la
+    // conexion a la DB del tenant. La confirmacion se perdia en silencio. El
+    // resultado queda en ConfirmationLog y en los logs del servicio.
+    void (async () => {
+      const { client } = await this.tenants.getForTenant(tenant.id);
+      await this.confirmation.apply(tenant.id, client, body);
+    })().catch((err) => {
+      this.logger.error(
+        `Confirmacion en background fallo (tel ${body.phone}): ${err instanceof Error ? err.message : err}`,
+      );
+    });
+
+    return { ok: true };
   }
 
   /** Compara el token con el secreto (tiempo constante). */

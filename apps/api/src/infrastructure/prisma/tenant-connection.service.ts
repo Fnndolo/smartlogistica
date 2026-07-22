@@ -13,7 +13,11 @@ interface CachedTenant {
 }
 
 const POOL_MAX = 50;
-const POOL_TTL_MS = 1000 * 60 * 15; // 15 minutos sin uso -> evict
+// 6h sin uso -> evict. Con TTL corto (antes 15 min) la primera peticion tras un
+// rato idle pagaba reabrir la conexion (~1-2s) — se sentia como "lentitud
+// aleatoria" y hacia que el webhook de Whapify cortara por timeout. POOL_MAX
+// sigue acotando la memoria; updateAgeOnGet mantiene vivos los activos.
+const POOL_TTL_MS = 1000 * 60 * 60 * 6;
 
 /**
  * Pool LRU de PrismaClient por tenant.

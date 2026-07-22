@@ -27,6 +27,20 @@ export const confirmAddressWebhookSchema = z.object({
   address: z.string().trim().max(500).optional(), // requerido cuando action='modified'
 });
 export type ConfirmAddressWebhookInput = z.infer<typeof confirmAddressWebhookSchema>;
+
+/** Fila del registro de llamadas al webhook de confirmacion (diagnostico). */
+export const confirmationLogEntrySchema = z.object({
+  id: z.string(),
+  phone: z.string(),
+  action: z.string(),
+  address: z.string().nullable(),
+  /** Cuantos pedidos se actualizaron (0 = no matcheo / descartada). */
+  matched: z.number().int(),
+  /** Por que no se aplico (null cuando si se aplico). */
+  note: z.string().nullable(),
+  createdAt: z.string().datetime(),
+});
+export type ConfirmationLogEntry = z.infer<typeof confirmationLogEntrySchema>;
 export type ShippingState = z.infer<typeof shippingStateSchema>;
 
 export const orderItemSummarySchema = z.object({
