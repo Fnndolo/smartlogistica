@@ -97,8 +97,8 @@ export function OrdersTable({
           <SortHeader label="Precio de venta" field="price" sort={sort} dir={dir} onSort={onSort} align="right" />
           <SortHeader label="Fecha" field="date" sort={sort} dir={dir} onSort={onSort} />
           <TableHead>Estado</TableHead>
-          {showAddress ? <TableHead>Direccion</TableHead> : null}
-          {showShipping ? <TableHead>Envio</TableHead> : null}
+          {showAddress ? <TableHead>Dirección</TableHead> : null}
+          {showShipping ? <TableHead>Envío</TableHead> : null}
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -493,20 +493,11 @@ function AddressCell({ order }: { order: OrderSummary }) {
     return <Badge variant="outline" className="whitespace-nowrap text-muted-foreground">Sin responder</Badge>;
   }
   const meta = ADDRESS_LABELS[order.addressStatus] ?? ADDRESS_FALLBACK;
+  // Solo el estado en la tabla; la direccion nueva se ve en el drawer del pedido.
   return (
-    <div className="flex flex-col items-start gap-0.5">
-      <Badge variant={meta.variant} className="whitespace-nowrap">
-        {meta.label}
-      </Badge>
-      {order.addressStatus === 'modified' && order.confirmedAddress ? (
-        <span
-          className="max-w-[180px] truncate text-[11px] text-muted-foreground"
-          title={order.confirmedAddress}
-        >
-          {order.confirmedAddress}
-        </span>
-      ) : null}
-    </div>
+    <Badge variant={meta.variant} className="whitespace-nowrap">
+      {meta.label}
+    </Badge>
   );
 }
 
@@ -514,7 +505,7 @@ const STATUS_LABELS: Record<string, { label: string; variant: 'warning' | 'succe
   'ready-for-handling': { label: 'Listo para preparar', variant: 'warning' },
   handling: { label: 'Preparando', variant: 'success' },
   invoiced: { label: 'Facturado', variant: 'success' },
-  'window-to-cancel': { label: 'En ventana de cancelacion', variant: 'secondary' },
+  'window-to-cancel': { label: 'En ventana de cancelación', variant: 'secondary' },
   canceled: { label: 'Cancelado', variant: 'secondary' },
 };
 

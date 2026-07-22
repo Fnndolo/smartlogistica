@@ -223,7 +223,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       } catch (err) {
         // Falló: revertir la vista a como estaba y avisar.
         snapshots.forEach(([key, data]) => queryClient.setQueryData(key, data));
-        toast.error(err instanceof ApiError ? err.message : 'No se pudo completar la accion');
+        toast.error(err instanceof ApiError ? err.message : 'No se pudo completar la acción');
       } finally {
         // Reconciliar contadores/listas con el servidor (en segundo plano).
         queryClient.invalidateQueries({ queryKey: ['orders'] });
@@ -299,7 +299,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
 const SHIPPING_OPTIONS = [
   { value: '', label: 'Todos' },
   { value: 'sin_movimientos', label: 'Sin movimientos' },
-  { value: 'en_transito', label: 'En transito' },
+  { value: 'en_transito', label: 'En tránsito' },
   { value: 'novedad', label: 'Con novedad' },
   { value: 'entregado', label: 'Entregado' },
 ] as const;
@@ -345,7 +345,7 @@ function ShippingFilter() {
       >
         <Truck className="h-3.5 w-3.5" />
         <span className="text-xs">
-          Envio: <span className="font-semibold">{label}</span>
+          Envío: <span className="font-semibold">{label}</span>
         </span>
         {hasFilter ? (
           <span
@@ -435,7 +435,7 @@ function AddressFilter() {
       >
         <MapPin className="h-3.5 w-3.5" />
         <span className="text-xs">
-          Direccion: <span className="font-semibold">{label}</span>
+          Dirección: <span className="font-semibold">{label}</span>
         </span>
         {hasFilter ? (
           <span

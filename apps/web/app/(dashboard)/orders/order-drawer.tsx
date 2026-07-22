@@ -153,9 +153,9 @@ function DrawerContent({
 
   const tabs: { id: Tab; label: string; icon: typeof Info }[] = [
     { id: 'detalle', label: 'Detalle', icon: Info },
-    { id: 'conversacion', label: 'Conversacion', icon: MessageSquare },
+    { id: 'conversacion', label: 'Conversación', icon: MessageSquare },
     { id: 'facturar', label: 'Facturar', icon: ReceiptText },
-    { id: 'guia', label: 'Guia', icon: Truck },
+    { id: 'guia', label: 'Guía', icon: Truck },
     { id: 'actividad', label: 'Actividad', icon: Activity },
   ];
 
@@ -227,7 +227,7 @@ function AddressConfirmation({ order }: { order: OrderSummary }) {
     return (
       <div className="flex items-start gap-2.5 rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
         <MessageSquare className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-        El cliente aun no confirma su direccion (WhatsApp).
+        El cliente aún no confirma su dirección (WhatsApp).
       </div>
     );
   }
@@ -235,7 +235,7 @@ function AddressConfirmation({ order }: { order: OrderSummary }) {
     return (
       <div className="flex items-start gap-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
         <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-        El cliente confirmo que su direccion es correcta.
+        El cliente confirmó que su dirección es correcta.
       </div>
     );
   }
@@ -243,7 +243,7 @@ function AddressConfirmation({ order }: { order: OrderSummary }) {
     <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2.5 text-xs">
       <div className="flex items-center gap-2 font-medium text-amber-700 dark:text-amber-400">
         <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-        El cliente MODIFICO su direccion — verificala antes de generar la guia.
+        El cliente MODIFICÓ su dirección — verifícala antes de generar la guía.
       </div>
       {order.confirmedAddress ? (
         <p className="mt-1.5 whitespace-pre-wrap break-words text-foreground">
@@ -272,8 +272,8 @@ function DetalleTab({ order, detail }: { order: OrderSummary; detail: OrderDetai
       <section className="space-y-2">
         <SectionTitle>Contacto</SectionTitle>
         <InfoRow icon={Mail} value={detail?.customerEmail} placeholder="Sin email" />
-        <InfoRow icon={Phone} value={detail?.customerPhone} placeholder="Sin telefono" />
-        <InfoRow icon={MapPin} value={detail?.shippingAddress} placeholder="Sin direccion de envio" />
+        <InfoRow icon={Phone} value={detail?.customerPhone} placeholder="Sin teléfono" />
+        <InfoRow icon={MapPin} value={detail?.shippingAddress} placeholder="Sin dirección de envío" />
         <AddressConfirmation order={order} />
       </section>
 
@@ -691,7 +691,7 @@ function ConversacionTab({ orderId }: { orderId: string }) {
       <ConfirmDialog
         open={confirmDeleteId !== null}
         title="Eliminar mensaje"
-        description="Se eliminara para todos. Esta accion no se puede deshacer."
+        description="Se eliminará para todos. Esta acción no se puede deshacer."
         confirmLabel="Eliminar"
         onCancel={() => setConfirmDeleteId(null)}
         onConfirm={() => {
