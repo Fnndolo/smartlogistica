@@ -1,6 +1,6 @@
 'use client';
 
-import { useRouter, useSearchParams, usePathname } from 'next/navigation';
+import { useSearchParams, usePathname } from 'next/navigation';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Building2, Check, ChevronDown, ChevronLeft, ChevronRight, MapPin, Truck, Undo2, X } from 'lucide-react';
@@ -15,7 +15,7 @@ import type {
 
 import { Button } from '@/components/ui/button';
 import { ApiError, api } from '@/lib/api-client';
-import { cn } from '@/lib/utils';
+import { cn, replaceUrlParams } from '@/lib/utils';
 
 import { OrdersTable } from './orders-table';
 import { OrderDrawer } from './order-drawer';
@@ -45,7 +45,6 @@ const SSE_DEBOUNCE_MS = 350;
 const PAGE_SIZE = 50;
 
 export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: OrdersLiveProps) {
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
@@ -128,13 +127,13 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       } finally {
         const params = new URLSearchParams(searchParams.toString());
         params.delete('order');
-        router.replace(`${pathname}${params.toString() ? `?${params.toString()}` : ''}`);
+        replaceUrlParams(pathname, params);
       }
     })();
     return () => {
       cancelled = true;
     };
-    // Solo depende del id del parametro; router/pathname son estables.
+    // Solo depende del id del parametro; pathname/searchParams son estables aqui.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderParam]);
 
@@ -167,15 +166,15 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
     if (page > totalPages && totalPages >= 1) {
       const next = new URLSearchParams(searchParams.toString());
       next.delete('page');
-      router.replace(`${pathname}?${next.toString()}`);
+      replaceUrlParams(pathname, next);
     }
-  }, [page, totalPages, router, pathname, searchParams]);
+  }, [page, totalPages, pathname, searchParams]);
 
   const goToPage = (next: number) => {
     const params = new URLSearchParams(searchParams.toString());
     if (next <= 1) params.delete('page');
     else params.set('page', String(next));
-    router.replace(`${pathname}${params.toString() ? `?${params.toString()}` : ''}`);
+    replaceUrlParams(pathname, params);
   };
 
   const handleSort = (field: OrderSortField) => {
@@ -188,7 +187,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       params.set('dir', 'desc'); // por defecto, mayor a menor
     }
     params.delete('page');
-    router.replace(`${pathname}?${params.toString()}`);
+    replaceUrlParams(pathname, params);
   };
 
   const toggleSelect = (id: string) =>
@@ -200,11 +199,40 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const toggleSelectAll = () =>
     setSelected((prev) => (prev.size === items.length ? new Set() : new Set(items.map((o) => o.id))));
 
-  const clearSelectionAndRefresh = () => {
-    setSelected(new Set());
-    queryClient.invalidateQueries({ queryKey: ['orders'] });
-    queryClient.invalidateQueries({ queryKey: ['warehouses'] });
-  };
+  // Asignar/transferir/devolver de forma OPTIMISTA: sacamos los pedidos de la
+  // vista al instante y la llamada al API corre por detras (con rollback si
+  // falla). Asi la accion se siente inmediata aunque el backend tarde ~1-2s.
+  const handleAssign = useCallback(
+    async (orderIds: string[], warehouseId: string | null, label: string) => {
+      const ids = new Set(orderIds);
+      const snapshots = queryClient.getQueriesData<ListOrdersResponse>({ queryKey: ['orders'] });
+      queryClient.setQueriesData<ListOrdersResponse>({ queryKey: ['orders'] }, (old) => {
+        if (!old) return old;
+        const removed = old.items.filter((o) => ids.has(o.id)).length;
+        if (removed === 0) return old;
+        return {
+          ...old,
+          items: old.items.filter((o) => !ids.has(o.id)),
+          total: Math.max(0, old.total - removed),
+        };
+      });
+      setSelected(new Set());
+      toast.success(`${orderIds.length} pedido(s) ${label}`);
+      try {
+        await api.post('/v1/orders/assign', { orderIds, warehouseId });
+      } catch (err) {
+        // Falló: revertir la vista a como estaba y avisar.
+        snapshots.forEach(([key, data]) => queryClient.setQueryData(key, data));
+        toast.error(err instanceof ApiError ? err.message : 'No se pudo completar la accion');
+      } finally {
+        // Reconciliar contadores/listas con el servidor (en segundo plano).
+        queryClient.invalidateQueries({ queryKey: ['orders'] });
+        queryClient.invalidateQueries({ queryKey: ['warehouses'] });
+        queryClient.invalidateQueries({ queryKey: ['order-stats'] });
+      }
+    },
+    [queryClient],
+  );
 
   return (
     <>
@@ -259,7 +287,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
           warehouses={warehouses}
           selectedIds={[...selected]}
           onClear={() => setSelected(new Set())}
-          onDone={clearSelectionAndRefresh}
+          onAssign={handleAssign}
         />
       ) : null}
 
@@ -281,7 +309,6 @@ const SHIPPING_OPTIONS = [
  * diseno que DateRangeFilter (boton outline + popover) para que se vean iguales.
  */
 function ShippingFilter() {
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
@@ -304,7 +331,7 @@ function ShippingFilter() {
     if (value) params.set('shipping', value);
     else params.delete('shipping');
     params.delete('page');
-    router.replace(`${pathname}${params.toString() ? `?${params.toString()}` : ''}`);
+    replaceUrlParams(pathname, params);
     setOpen(false);
   };
 
@@ -372,7 +399,6 @@ const ADDRESS_OPTIONS = [
  * (?address=). Mismo diseno que ShippingFilter para que se vean iguales.
  */
 function AddressFilter() {
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
@@ -395,7 +421,7 @@ function AddressFilter() {
     if (value) params.set('address', value);
     else params.delete('address');
     params.delete('page');
-    router.replace(`${pathname}${params.toString() ? `?${params.toString()}` : ''}`);
+    replaceUrlParams(pathname, params);
     setOpen(false);
   };
 
@@ -461,35 +487,18 @@ function AssignmentBar({
   warehouses,
   selectedIds,
   onClear,
-  onDone,
+  onAssign,
 }: {
   scope: OrdersScope;
   warehouses: WarehouseSummary[];
   selectedIds: string[];
   onClear: () => void;
-  onDone: () => void;
+  onAssign: (orderIds: string[], warehouseId: string | null, label: string) => void;
 }) {
-  const [submitting, setSubmitting] = useState(false);
   const targets = useMemo(
     () => warehouses.filter((w) => !(scope.kind === 'warehouse' && w.id === scope.id)),
     [warehouses, scope],
   );
-
-  const assign = async (warehouseId: string | null, label: string) => {
-    setSubmitting(true);
-    try {
-      const res = await api.post<{ count: number }>('/v1/orders/assign', {
-        orderIds: selectedIds,
-        warehouseId,
-      });
-      toast.success(`${res.count} pedido(s) ${label}`);
-      onDone();
-    } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'No se pudo completar la accion');
-    } finally {
-      setSubmitting(false);
-    }
-  };
 
   // En movil la barra se levanta por encima de la navegacion inferior.
   return (
@@ -501,7 +510,7 @@ function AssignmentBar({
         <div className="h-5 w-px bg-border" />
 
         {scope.kind === 'warehouse' ? (
-          <Button variant="outline" size="sm" loading={submitting} onClick={() => assign(null, 'devueltos a generales')}>
+          <Button variant="outline" size="sm" onClick={() => onAssign(selectedIds, null, 'devueltos a generales')}>
             <Undo2 className="h-3.5 w-3.5" />
             Devolver a generales
           </Button>
@@ -511,8 +520,13 @@ function AssignmentBar({
           <WarehousePicker
             label={scope.kind === 'warehouse' ? 'Transferir a' : 'Asignar a sede'}
             warehouses={targets}
-            disabled={submitting}
-            onPick={(w) => assign(w.id, scope.kind === 'warehouse' ? `transferidos a ${w.name}` : `asignados a ${w.name}`)}
+            onPick={(w) =>
+              onAssign(
+                selectedIds,
+                w.id,
+                scope.kind === 'warehouse' ? `transferidos a ${w.name}` : `asignados a ${w.name}`,
+              )
+            }
           />
         ) : (
           <span className="text-xs text-muted-foreground">No hay otras sedes. Crea una en &laquo;Sedes&raquo;.</span>
@@ -534,18 +548,16 @@ function AssignmentBar({
 function WarehousePicker({
   label,
   warehouses,
-  disabled,
   onPick,
 }: {
   label: string;
   warehouses: WarehouseSummary[];
-  disabled: boolean;
   onPick: (w: WarehouseSummary) => void;
 }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="relative">
-      <Button size="sm" disabled={disabled} loading={disabled} onClick={() => setOpen((s) => !s)}>
+      <Button size="sm" onClick={() => setOpen((s) => !s)}>
         <Building2 className="h-3.5 w-3.5" />
         {label}
         <ChevronRight className={`h-3.5 w-3.5 transition-transform ${open ? '-rotate-90' : 'rotate-90'}`} />

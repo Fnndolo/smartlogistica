@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { Calendar, ChevronDown, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
+import { cn, replaceUrlParams } from '@/lib/utils';
 import {
   PRESETS,
   type PresetValue,
@@ -17,7 +17,6 @@ import {
 } from '@/lib/date-presets';
 
 export function DateRangeFilter() {
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
@@ -74,7 +73,7 @@ export function DateRangeFilter() {
     params.set('from', range.from);
     params.set('to', range.to);
     params.delete('page');
-    router.replace(`${pathname}?${params.toString()}`);
+    replaceUrlParams(pathname, params);
     setOpen(false);
   }
 
@@ -85,7 +84,7 @@ export function DateRangeFilter() {
     params.set('from', range.from);
     params.set('to', range.to);
     params.delete('page');
-    router.replace(`${pathname}?${params.toString()}`);
+    replaceUrlParams(pathname, params);
     setOpen(false);
   }
 
@@ -94,7 +93,7 @@ export function DateRangeFilter() {
     params.delete('from');
     params.delete('to');
     params.delete('page');
-    router.replace(`${pathname}${params.toString() ? `?${params.toString()}` : ''}`);
+    replaceUrlParams(pathname, params);
     setOpen(false);
   }
 

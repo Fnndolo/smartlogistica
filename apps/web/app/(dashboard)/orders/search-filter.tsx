@@ -1,10 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { Search, X } from 'lucide-react';
 
-import { cn } from '@/lib/utils';
+import { cn, replaceUrlParams } from '@/lib/utils';
 
 const DEBOUNCE_MS = 350;
 
@@ -15,7 +15,6 @@ const DEBOUNCE_MS = 350;
  * para no disparar un fetch por tecla.
  */
 export function SearchFilter() {
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const urlValue = searchParams.get('q') ?? '';
@@ -42,7 +41,7 @@ export function SearchFilter() {
     if (trimmed) params.set('q', trimmed);
     else params.delete('q');
     params.delete('page');
-    router.replace(`${pathname}${params.toString() ? `?${params.toString()}` : ''}`);
+    replaceUrlParams(pathname, params);
   };
 
   const onChange = (next: string) => {
