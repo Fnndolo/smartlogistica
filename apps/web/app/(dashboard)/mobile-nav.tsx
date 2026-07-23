@@ -2,12 +2,13 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Boxes, Building2, LayoutDashboard, Settings } from 'lucide-react';
+import { AtSign, Boxes, Building2, LayoutDashboard, Settings } from 'lucide-react';
 
 import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { cn } from '@/lib/utils';
 
-import { NotificationBell } from './notification-bell';
+import { GlobalSearch } from './global-search';
+import { useMentions } from './use-mentions';
 
 const TABS = [
   {
@@ -64,8 +65,30 @@ export function MobileTopBar() {
           </span>
         </span>
       </Link>
-      <NotificationBell align="right" />
+      <div className="flex items-center gap-1">
+        <GlobalSearch variant="icon" />
+        <MentionsLink />
+      </div>
     </header>
+  );
+}
+
+/** Acceso a Menciones en el top bar movil, con contador de sin leer. */
+function MentionsLink() {
+  const { unread } = useMentions();
+  return (
+    <Link
+      href="/mentions"
+      className="relative rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      aria-label="Menciones"
+    >
+      <AtSign className="h-[18px] w-[18px]" />
+      {unread > 0 ? (
+        <span className="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-primary px-1 text-[9px] font-bold leading-none text-primary-foreground">
+          {unread > 99 ? '99+' : unread}
+        </span>
+      ) : null}
+    </Link>
   );
 }
 

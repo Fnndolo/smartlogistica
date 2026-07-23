@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
+  AtSign,
   Boxes,
   Building2,
   LayoutDashboard,
@@ -22,15 +23,28 @@ import { api } from '@/lib/api-client';
 import { useCurrentUser } from '@/components/providers/current-user-provider';
 
 import { LogoutButton } from './_components/logout-button';
-import { NotificationBell } from './notification-bell';
+import { GlobalSearch } from './global-search';
+import { useMentions } from './use-mentions';
 
 const NAV_ITEMS = [
   { href: '/dashboard', label: 'Resumen', icon: LayoutDashboard, adminOnly: true },
   { href: '/orders', label: 'Pedidos', icon: Boxes, adminOnly: true },
+  { href: '/mentions', label: 'Menciones', icon: AtSign, adminOnly: false },
   { href: '/connections', label: 'Conexiones', icon: Link2, adminOnly: true },
   { href: '/settings/team', label: 'Equipo', icon: Users, adminOnly: true },
   { href: '/settings', label: 'Ajustes', icon: Settings, adminOnly: false },
 ] as const;
+
+/** Contador de menciones sin leer (item "Menciones" del sidebar). */
+function MentionsBadge() {
+  const { unread } = useMentions();
+  if (unread === 0) return null;
+  return (
+    <span className="ml-auto inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground">
+      {unread > 99 ? '99+' : unread}
+    </span>
+  );
+}
 
 export function Sidebar() {
   const user = useCurrentUser();
@@ -69,8 +83,9 @@ export function Sidebar() {
             </span>
           </div>
         </Link>
-        <NotificationBell />
       </div>
+
+      <GlobalSearch variant="sidebar" />
 
       <nav className="flex flex-col gap-0.5">
         {navItems.map((item) => {
@@ -97,6 +112,7 @@ export function Sidebar() {
                 )}
               />
               {item.label}
+              {item.href === '/mentions' ? <MentionsBadge /> : null}
             </Link>
           );
         })}

@@ -73,6 +73,40 @@ export const inboxSchema = z.object({
 });
 export type Inbox = z.infer<typeof inboxSchema>;
 
+// === Menciones (pagina tipo Google Chat) ===
+
+/** Una mencion a mi en el chat de un pedido. */
+export const mentionItemSchema = z.object({
+  messageId: z.string(),
+  orderId: z.string(),
+  externalId: z.string(),
+  customerName: z.string(),
+  warehouseId: z.string().nullable(),
+  warehouseName: z.string().nullable(),
+  /** 'general' (sin asignar) | 'pending' (por preparar) | 'invoiced' (facturados). */
+  stage: z.enum(['general', 'pending', 'invoiced']),
+  author: z.string(),
+  body: z.string(),
+  createdAt: z.string().datetime(),
+  unread: z.boolean(),
+});
+export type MentionItem = z.infer<typeof mentionItemSchema>;
+
+// === Busqueda global (pedidos en generales y todas las sedes) ===
+
+export const orderSearchResultSchema = z.object({
+  orderId: z.string(),
+  externalId: z.string(),
+  customerName: z.string(),
+  customerDocument: z.string().nullable(),
+  productName: z.string().nullable(),
+  warehouseId: z.string().nullable(),
+  warehouseName: z.string().nullable(),
+  stage: z.enum(['general', 'pending', 'invoiced']),
+  createdAt: z.string().datetime(),
+});
+export type OrderSearchResult = z.infer<typeof orderSearchResultSchema>;
+
 // === Actividad ===
 
 export const orderEventSchema = z.object({

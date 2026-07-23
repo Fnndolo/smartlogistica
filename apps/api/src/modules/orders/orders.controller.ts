@@ -43,6 +43,8 @@ import {
   type ListOrdersResponse,
   type OrderDetail,
   type Inbox,
+  type MentionItem,
+  type OrderSearchResult,
   type OrderEvent,
   type OrderMessage,
   type ProcessAllInput,
@@ -115,6 +117,23 @@ export class OrdersController {
   @Get('inbox')
   async inbox(@CurrentUser() user: AuthContext): Promise<Inbox> {
     return this.orders.inbox(user);
+  }
+
+  /** Menciones a mi (pagina "Menciones"). Ruta literal: antes de :id. */
+  @Get('mentions')
+  async mentions(@CurrentUser() user: AuthContext): Promise<MentionItem[]> {
+    return this.orders.mentionsFeed(user);
+  }
+
+  /** Busqueda global (generales + todas las sedes). Ruta literal: antes de :id. */
+  @Get('search')
+  async search(
+    @Query('q') q: string | undefined,
+    @CurrentUser() user: AuthContext,
+  ): Promise<OrderSearchResult[]> {
+    const query = (q ?? '').trim();
+    if (query.length < 2) return [];
+    return this.orders.globalSearch(query.slice(0, 120), user);
   }
 
   /** Asignar / transferir / devolver (warehouseId null) pedidos a una sede. */

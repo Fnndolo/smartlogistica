@@ -33,6 +33,8 @@ import type {
   ProcessAllResult,
   Inbox,
   InboxItem,
+  MentionItem,
+  OrderSearchResult,
 } from '@smartlogistica/shared';
 import type { Prisma } from '.prisma/tenant-client';
 
@@ -446,6 +448,127 @@ export class OrdersService {
     }
     items.sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt));
     return { items, totalUnread, mentions };
+  }
+
+  /**
+   * Menciones a mi (pagina "Menciones", tipo Google Chat): cada mensaje donde me
+   * mencionaron, mas reciente primero, con el pedido y si sigue sin leer.
+   */
+  async mentionsFeed(auth: AuthContext): Promise<MentionItem[]> {
+    const { prisma } = getTenantContext();
+    const scope = await this.warehouses.accessibleWarehouseIds(auth);
+
+    const messages = await prisma.orderMessage.findMany({
+      where: {
+        mentions: { has: auth.userId },
+        ...(scope ? { order: { warehouseId: { in: scope } } } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+      select: {
+        id: true,
+        orderId: true,
+        authorName: true,
+        kind: true,
+        body: true,
+        createdAt: true,
+        order: {
+          select: {
+            externalId: true,
+            customerName: true,
+            warehouseId: true,
+            warehouse: { select: { name: true } },
+          },
+        },
+      },
+    });
+    if (messages.length === 0) return [];
+
+    const orderIds = [...new Set(messages.map((m) => m.orderId))];
+    const [reads, invoicedEvents] = await Promise.all([
+      prisma.orderRead.findMany({
+        where: { userId: auth.userId, orderId: { in: orderIds } },
+        select: { orderId: true, lastReadAt: true },
+      }),
+      prisma.orderEvent.findMany({
+        where: { orderId: { in: orderIds }, type: 'vtex_invoiced' },
+        select: { orderId: true },
+        distinct: ['orderId'],
+      }),
+    ]);
+    const lastRead = new Map(reads.map((r) => [r.orderId, r.lastReadAt.getTime()]));
+    const invoiced = new Set(invoicedEvents.map((e) => e.orderId));
+
+    return messages.map((m) => ({
+      messageId: m.id,
+      orderId: m.orderId,
+      externalId: m.order.externalId,
+      customerName: m.order.customerName,
+      warehouseId: m.order.warehouseId,
+      warehouseName: m.order.warehouse?.name ?? null,
+      stage: !m.order.warehouseId ? 'general' : invoiced.has(m.orderId) ? 'invoiced' : 'pending',
+      author: m.authorName,
+      body: m.body ?? messagePreview(m.kind, m.body),
+      createdAt: m.createdAt.toISOString(),
+      unread: m.createdAt.getTime() > (lastRead.get(m.orderId) ?? 0),
+    }));
+  }
+
+  /**
+   * Busqueda GLOBAL: pedidos en generales y en TODAS las sedes (por preparar y
+   * facturados) por cliente, N.º, cedula o producto. Un operador solo busca en
+   * sus sedes. Devuelve lo minimo para abrir el pedido donde corresponde.
+   */
+  async globalSearch(q: string, auth: AuthContext): Promise<OrderSearchResult[]> {
+    const { prisma } = getTenantContext();
+    const scope = await this.warehouses.accessibleWarehouseIds(auth);
+
+    const rows = await prisma.order.findMany({
+      where: {
+        ...(scope ? { warehouseId: { in: scope } } : {}),
+        OR: [
+          { customerName: { contains: q, mode: 'insensitive' } },
+          { externalId: { contains: q, mode: 'insensitive' } },
+          { customerDocument: { contains: q, mode: 'insensitive' } },
+          { items: { some: { name: { contains: q, mode: 'insensitive' } } } },
+        ],
+      },
+      orderBy: { marketplaceCreatedAt: 'desc' },
+      take: 20,
+      select: {
+        id: true,
+        externalId: true,
+        customerName: true,
+        customerDocument: true,
+        warehouseId: true,
+        marketplaceCreatedAt: true,
+        warehouse: { select: { name: true } },
+        items: { select: { name: true }, orderBy: { name: 'asc' }, take: 1 },
+      },
+    });
+    if (rows.length === 0) return [];
+
+    const invoiced = new Set(
+      (
+        await prisma.orderEvent.findMany({
+          where: { orderId: { in: rows.map((r) => r.id) }, type: 'vtex_invoiced' },
+          select: { orderId: true },
+          distinct: ['orderId'],
+        })
+      ).map((e) => e.orderId),
+    );
+
+    return rows.map((r) => ({
+      orderId: r.id,
+      externalId: r.externalId,
+      customerName: r.customerName,
+      customerDocument: r.customerDocument,
+      productName: r.items[0]?.name ?? null,
+      warehouseId: r.warehouseId,
+      warehouseName: r.warehouse?.name ?? null,
+      stage: !r.warehouseId ? 'general' : invoiced.has(r.id) ? 'invoiced' : 'pending',
+      createdAt: r.marketplaceCreatedAt.toISOString(),
+    }));
   }
 
   /**
