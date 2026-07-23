@@ -136,7 +136,7 @@ export function OrdersTable({
                     />
                   </TableCell>
                 ) : null}
-                <TableCell className="font-mono text-xs">
+                <TableCell className="whitespace-nowrap font-mono text-xs">
                   <span className="inline-flex items-center gap-1.5">
                     {order.externalId}
                     {order.hasDevicePhoto ? (
@@ -194,8 +194,13 @@ export function OrdersTable({
                 <TableCell className="text-right font-mono tabular-nums">
                   {formatCurrency(order.totalValue, order.currency)}
                 </TableCell>
-                <TableCell className="text-muted-foreground">
-                  {format(new Date(order.marketplaceCreatedAt), "d MMM yyyy '·' HH:mm", { locale: es })}
+                <TableCell className="whitespace-nowrap text-muted-foreground">
+                  <div className="flex flex-col leading-tight">
+                    <span>{format(new Date(order.marketplaceCreatedAt), 'd MMM yyyy', { locale: es })}</span>
+                    <span className="text-[11px]">
+                      {format(new Date(order.marketplaceCreatedAt), 'HH:mm')}
+                    </span>
+                  </div>
                 </TableCell>
                 <TableCell>
                   <StatusBadge status={order.status} />

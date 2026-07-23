@@ -21,8 +21,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <div className="flex min-w-0 flex-1 flex-col">
           <MobileTopBar />
           <main className="flex-1">
-            {/* pb extra en movil: deja espacio para la barra inferior de pestañas. */}
-            <div className="mx-auto w-full max-w-6xl px-4 py-5 pb-24 sm:px-6 md:py-8 md:pb-8">
+            {/* pb extra en movil: deja espacio para la barra inferior de pestañas.
+                max-w-7xl: la tabla de pedidos (9 columnas con "Direccion") necesita
+                ~1230px; con 6xl (1152px) se desbordaba dentro de la tarjeta. */}
+            <div className="mx-auto w-full max-w-7xl px-4 py-5 pb-24 sm:px-6 md:py-8 md:pb-8">
               {children}
             </div>
           </main>

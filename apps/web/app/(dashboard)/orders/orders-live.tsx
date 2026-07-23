@@ -322,7 +322,7 @@ const SHIPPING_OPTIONS = [
 
 /**
  * Filtro por estado del envio (Facturados). Vive en la URL (?shipping=). Mismo
- * diseno que DateRangeFilter (boton outline + popover) para que se vean iguales.
+ * diseno que DateRangeFilter: boton outline + popover con filas de radio.
  */
 function ShippingFilter() {
   const pathname = usePathname();
@@ -338,8 +338,15 @@ function ShippingFilter() {
     const onDoc = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
     document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
   }, [open]);
 
   const set = (value: string) => {
@@ -382,21 +389,31 @@ function ShippingFilter() {
       </Button>
 
       {open ? (
-        <div className="absolute left-0 top-full z-20 mt-2 w-48 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-lg">
-          {SHIPPING_OPTIONS.map((o) => (
-            <button
-              key={o.value}
-              type="button"
-              onClick={() => set(o.value)}
-              className={cn(
-                'flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-muted',
-                current === o.value && 'font-medium',
-              )}
-            >
-              {o.label}
-              {current === o.value ? <Check className="h-3.5 w-3.5" /> : null}
-            </button>
-          ))}
+        <div className="absolute left-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-xl border border-border bg-popover shadow-lg">
+          <ul className="p-1.5">
+            {SHIPPING_OPTIONS.map((o) => {
+              const isActive = current === o.value;
+              return (
+                <li key={o.value}>
+                  <button
+                    type="button"
+                    onClick={() => set(o.value)}
+                    className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-muted"
+                  >
+                    <span
+                      className={cn(
+                        'flex h-4 w-4 items-center justify-center rounded-full border',
+                        isActive ? 'border-foreground' : 'border-muted-foreground/40',
+                      )}
+                    >
+                      {isActive ? <span className="h-2 w-2 rounded-full bg-foreground" /> : null}
+                    </span>
+                    {o.label}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       ) : null}
     </div>
@@ -404,41 +421,69 @@ function ShippingFilter() {
 }
 
 const ADDRESS_OPTIONS = [
-  { value: '', label: 'Todas' },
   { value: 'confirmed', label: 'Confirmada' },
   { value: 'modified', label: 'Modificada' },
   { value: 'pending', label: 'Sin responder' },
 ] as const;
 
 /**
- * Filtro por confirmacion de direccion (General + Por preparar). Vive en la URL
- * (?address=). Mismo diseno que ShippingFilter para que se vean iguales.
+ * Filtro por confirmacion de direccion (General + Por preparar). MULTISELECT:
+ * vive en la URL como lista (?address=confirmed,pending). Mismo diseno que
+ * DateRangeFilter (boton outline + popover con filas), con checkbox cuadrado
+ * porque se pueden combinar estados. El popover queda abierto entre clics.
  */
 function AddressFilter() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  const current = searchParams.get('address') ?? '';
-  const hasFilter = current !== '';
-  const label = ADDRESS_OPTIONS.find((o) => o.value === current)?.label ?? 'Todas';
+  const selected = new Set(
+    (searchParams.get('address') ?? '')
+      .split(',')
+      .filter((v) => ADDRESS_OPTIONS.some((o) => o.value === v)),
+  );
+  const hasFilter = selected.size > 0;
+  const label =
+    selected.size === 0
+      ? 'Todas'
+      : selected.size === 1
+        ? (ADDRESS_OPTIONS.find((o) => selected.has(o.value))?.label ?? 'Todas')
+        : `${selected.size} estados`;
 
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
     document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
   }, [open]);
 
-  const set = (value: string) => {
+  const commit = (values: Set<string>) => {
     const params = new URLSearchParams(searchParams.toString());
-    if (value) params.set('address', value);
-    else params.delete('address');
+    // Ordenar segun ADDRESS_OPTIONS para URLs estables/compartibles.
+    const list = ADDRESS_OPTIONS.filter((o) => values.has(o.value)).map((o) => o.value);
+    if (list.length > 0 && list.length < ADDRESS_OPTIONS.length) {
+      params.set('address', list.join(','));
+    } else {
+      // Nada o todo seleccionado = sin filtro.
+      params.delete('address');
+    }
     params.delete('page');
     replaceUrlParams(pathname, params);
-    setOpen(false);
+  };
+
+  const toggle = (value: string) => {
+    const next = new Set(selected);
+    next.has(value) ? next.delete(value) : next.add(value);
+    commit(next);
   };
 
   return (
@@ -460,7 +505,8 @@ function AddressFilter() {
             aria-label="Limpiar filtro"
             onClick={(e) => {
               e.stopPropagation();
-              set('');
+              commit(new Set());
+              setOpen(false);
             }}
             className="ml-0.5 flex h-4 w-4 items-center justify-center rounded-sm hover:bg-muted"
           >
@@ -472,21 +518,56 @@ function AddressFilter() {
       </Button>
 
       {open ? (
-        <div className="absolute left-0 top-full z-20 mt-2 w-48 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-lg">
-          {ADDRESS_OPTIONS.map((o) => (
-            <button
-              key={o.value}
-              type="button"
-              onClick={() => set(o.value)}
-              className={cn(
-                'flex w-full items-center justify-between rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-muted',
-                current === o.value && 'font-medium',
-              )}
-            >
-              {o.label}
-              {current === o.value ? <Check className="h-3.5 w-3.5" /> : null}
-            </button>
-          ))}
+        <div className="absolute left-0 top-full z-20 mt-2 w-56 overflow-hidden rounded-xl border border-border bg-popover shadow-lg">
+          <ul className="p-1.5">
+            <li>
+              <button
+                type="button"
+                onClick={() => {
+                  commit(new Set());
+                  setOpen(false);
+                }}
+                className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-muted"
+              >
+                <span
+                  className={cn(
+                    'flex h-4 w-4 items-center justify-center rounded-full border',
+                    !hasFilter ? 'border-foreground' : 'border-muted-foreground/40',
+                  )}
+                >
+                  {!hasFilter ? <span className="h-2 w-2 rounded-full bg-foreground" /> : null}
+                </span>
+                Todas
+              </button>
+            </li>
+            {ADDRESS_OPTIONS.map((o) => {
+              const isActive = selected.has(o.value);
+              return (
+                <li key={o.value}>
+                  <button
+                    type="button"
+                    onClick={() => toggle(o.value)}
+                    className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-muted"
+                  >
+                    <span
+                      className={cn(
+                        'flex h-4 w-4 items-center justify-center rounded border',
+                        isActive
+                          ? 'border-foreground bg-foreground text-background'
+                          : 'border-muted-foreground/40',
+                      )}
+                    >
+                      {isActive ? <Check className="h-3 w-3" /> : null}
+                    </span>
+                    {o.label}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+            Puedes combinar varios estados
+          </div>
         </div>
       ) : null}
     </div>

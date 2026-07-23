@@ -123,8 +123,12 @@ export const listOrdersQuerySchema = z.object({
   state: orderStateFilterSchema.optional(),
   // Filtro por estado del envio (Facturados).
   shipping: shippingStateSchema.optional(),
-  // Filtro por confirmacion de direccion (General + Por preparar).
-  address: addressFilterSchema.optional(),
+  // Filtro por confirmacion de direccion (General + Por preparar). Multiselect:
+  // lista separada por comas, ej "confirmed,pending".
+  address: z
+    .string()
+    .regex(/^(confirmed|modified|pending)(,(confirmed|modified|pending))*$/)
+    .optional(),
   // Busqueda universal: matchea por nombre de cliente, N.º de pedido (externalId),
   // cedula (customerDocument) o nombre de producto (incluye multi-producto).
   q: z.string().trim().min(1).max(120).optional(),

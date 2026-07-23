@@ -132,9 +132,18 @@ export class OrdersService {
     }
 
     // Filtro por confirmacion de direccion (WhatsApp). Aplica en General y Por
-    // preparar (no en Facturados). 'pending' = el cliente aun no responde (null).
+    // preparar (no en Facturados). Multiselect: "confirmed,pending" -> OR de
+    // estados; 'pending' = el cliente aun no responde (null). Va dentro de AND
+    // para no chocar con el OR de la busqueda (q).
     if (query.address && query.state !== 'invoiced') {
-      where.addressStatus = query.address === 'pending' ? null : query.address;
+      const parts = new Set(query.address.split(','));
+      const statuses = [...parts].filter((p) => p !== 'pending');
+      const or: Prisma.OrderWhereInput[] = [];
+      if (statuses.length > 0) or.push({ addressStatus: { in: statuses } });
+      if (parts.has('pending')) or.push({ addressStatus: null });
+      if (or.length > 0) {
+        where.AND = [...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []), { OR: or }];
+      }
     }
 
     if (query.from || query.to) {

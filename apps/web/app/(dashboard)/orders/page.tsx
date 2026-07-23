@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
 import type { ListOrdersResponse } from '@smartlogistica/shared';
 
-import { INTERNAL_API_URL } from '@/lib/server-api';
+import { INTERNAL_API_URL, sanitizeAddressList } from '@/lib/server-api';
 
 import { OrdersLive } from './orders-live';
 
@@ -10,8 +10,6 @@ export const metadata: Metadata = { title: 'Pedidos' };
 
 const SESSION_COOKIE_NAME = 'smartlog_session';
 const FALLBACK: ListOrdersResponse = { items: [], total: 0, page: 1, limit: 50, totalPages: 1 };
-
-const ADDRESS_VALUES = new Set(['confirmed', 'modified', 'pending']);
 
 interface PageProps {
   searchParams: Promise<{
@@ -46,7 +44,8 @@ async function fetchOrders(params: {
   if (params.from) url.searchParams.set('from', params.from);
   if (params.to) url.searchParams.set('to', params.to);
   if (params.q) url.searchParams.set('q', params.q);
-  if (params.address && ADDRESS_VALUES.has(params.address)) url.searchParams.set('address', params.address);
+  const address = sanitizeAddressList(params.address);
+  if (address) url.searchParams.set('address', address);
 
   try {
     const res = await fetch(url, {

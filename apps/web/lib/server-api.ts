@@ -90,6 +90,16 @@ export function ordersQueryString(
   if (sp.q) params.set('q', sp.q);
   // Solo valores validos: un valor inventado en la URL haria fallar el zod del API.
   if (sp.shipping && SHIPPING_VALUES.has(sp.shipping)) params.set('shipping', sp.shipping);
-  if (sp.address && ADDRESS_VALUES.has(sp.address)) params.set('address', sp.address);
+  const address = sanitizeAddressList(sp.address);
+  if (address) params.set('address', address);
   return params.toString();
+}
+
+/** Filtra una lista "confirmed,pending" a solo valores validos ('' si nada). */
+export function sanitizeAddressList(raw: string | undefined): string {
+  if (!raw) return '';
+  return raw
+    .split(',')
+    .filter((v) => ADDRESS_VALUES.has(v))
+    .join(',');
 }
