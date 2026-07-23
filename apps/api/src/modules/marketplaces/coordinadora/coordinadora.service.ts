@@ -314,6 +314,7 @@ export class CoordinadoraService {
         recipient: { ...recipient, div: '01' },
         package: pkg,
         reference: reference ?? undefined,
+        observations: pkg.observations,
       });
       // Rotulo: best-effort (si falla, la guia ya quedo generada). Formato = el
       // elegido al generar o el default de la sede.

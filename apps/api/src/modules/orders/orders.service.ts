@@ -837,7 +837,10 @@ export class OrdersService {
         length: 20,
         units: 1,
         content: 'CELULAR',
-        declaredValue: Number(order.totalValue) || 0,
+        // Regla del negocio: se declara LA MITAD del total de la compra
+        // (editable antes de generar si un envio necesita otro monto).
+        declaredValue: Math.round((Number(order.totalValue) || 0) / 2),
+        observations: '',
       },
     };
   }
@@ -961,11 +964,13 @@ export class OrdersService {
     }
 
     const { tenantId, prisma } = getTenantContext();
+    // referencia = null: en el portal de Coordinadora esa columna va vacia (el
+    // numero de guia ya identifica el envio; el user no quiere el MKT ahi).
     const { guide, rotulo } = await this.coordinadora.generateGuideForWarehouse(
       order.warehouseId,
       input.recipient,
       input.package,
-      order.externalId,
+      null,
       input.rotuloId,
       auth,
     );

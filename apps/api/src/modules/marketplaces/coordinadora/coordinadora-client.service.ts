@@ -253,8 +253,10 @@ export class CoordinadoraClient {
       nivel_servicio: 1, // Estandar
       contenido: input.package.content,
       referencia: input.reference ?? '',
-      // `observaciones` es NOT NULL en la BD de Coordinadora -> nunca vacio.
-      observaciones: input.observations?.trim() || 'ENTREGA EN HORARIO HABIL',
+      // `observaciones` es NOT NULL en la BD de Coordinadora. Si el usuario no
+      // escribe nada va UN ESPACIO: pasa la restriccion y en el portal se ve
+      // vacio (igual que sus guias manuales). Nada de textos inventados.
+      observaciones: input.observations?.trim() || ' ',
       estado: 'IMPRESO',
       detalle: [
         {

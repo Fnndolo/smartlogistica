@@ -43,6 +43,7 @@ interface Pkg {
   units: string;
   content: string;
   declaredValue: string;
+  observations: string;
 }
 
 export function GuidePanel({ orderId }: { orderId: string }) {
@@ -80,6 +81,7 @@ export function GuidePanel({ orderId }: { orderId: string }) {
         units: String(preview.package.units),
         content: preview.package.content,
         declaredValue: String(preview.package.declaredValue),
+        observations: preview.package.observations ?? '',
       });
       setRotuloId(preview.rotuloId);
     }
@@ -103,6 +105,7 @@ export function GuidePanel({ orderId }: { orderId: string }) {
           units: Math.max(1, Number(pkg!.units) || 1),
           content: pkg!.content.trim(),
           declaredValue: Number(pkg!.declaredValue) || 0,
+          ...(pkg!.observations.trim() ? { observations: pkg!.observations.trim() } : {}),
         },
         ...(rotuloId ? { rotuloId } : {}),
       }),
@@ -236,7 +239,7 @@ export function GuidePanel({ orderId }: { orderId: string }) {
           <Field label="Contenido">
             <Input value={pkg.content} onChange={(e) => patchP({ content: e.target.value })} />
           </Field>
-          <Field label="Valor declarado (COP)">
+          <Field label="Valor declarado (COP) — por defecto, la mitad de la compra">
             <Input
               inputMode="numeric"
               value={pkg.declaredValue}
@@ -244,6 +247,14 @@ export function GuidePanel({ orderId }: { orderId: string }) {
             />
           </Field>
         </div>
+        <Field label="Observaciones (opcional)">
+          <Input
+            value={pkg.observations}
+            placeholder="Aparece en la guía de Coordinadora; vacío = sin observaciones"
+            maxLength={300}
+            onChange={(e) => patchP({ observations: e.target.value })}
+          />
+        </Field>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Field label="Peso (kg)">
             <Input inputMode="decimal" value={pkg.weight} onChange={(e) => patchP({ weight: e.target.value.replace(/[^\d.]/g, '') })} />

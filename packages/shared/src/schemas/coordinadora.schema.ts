@@ -131,6 +131,9 @@ export const guidePackageSchema = z.object({
   units: z.number().int().min(1).max(50),
   content: z.string().trim().min(1, 'Contenido requerido').max(120),
   declaredValue: z.number().nonnegative(),
+  // Observaciones de la guia: lo que se escriba aqui es lo que aparece en
+  // Coordinadora. Vacio = la guia sale sin observaciones (como en su portal).
+  observations: z.string().trim().max(300).optional(),
 });
 export type GuidePackage = z.infer<typeof guidePackageSchema>;
 
