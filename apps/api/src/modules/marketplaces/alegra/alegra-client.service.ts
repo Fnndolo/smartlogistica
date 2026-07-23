@@ -116,6 +116,12 @@ export class AlegraClient {
     return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
   }
 
+  /** Vendedores guardados en Alegra (para elegir el vendedor de la factura). */
+  async listSellers(http: AxiosInstance): Promise<Array<{ id: number | string; name: string; status?: string }>> {
+    const res = await http.get('/sellers', { params: { limit: 30 } });
+    return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
+  }
+
   /** Lista facturas de venta, mas nuevas primero (para traer la ultima). */
   async listInvoices(
     http: AxiosInstance,

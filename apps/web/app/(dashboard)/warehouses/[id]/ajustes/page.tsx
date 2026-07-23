@@ -5,6 +5,7 @@ import type {
 
 import { getWarehouses, serverFetch } from '@/lib/server-api';
 import { AlegraConnectionCard } from '../alegra-connection-card';
+import { AlegraSellerCard } from '../alegra-seller-card';
 import { CertificateCard } from '../certificate-card';
 import { CoordinadoraConnectionCard } from '../coordinadora-connection-card';
 import { PackagePresetsCard } from '../package-presets-card';
@@ -25,6 +26,7 @@ export default async function WarehouseSettingsPage({ params }: { params: Promis
         <AlegraConnectionCard warehouseId={id} warehouseName={name} initial={alegra ?? null} />
         <CoordinadoraConnectionCard warehouseId={id} warehouseName={name} initial={coordinadora ?? null} />
       </div>
+      <AlegraSellerCard warehouseId={id} />
       <PackagePresetsCard warehouseId={id} initial={warehouse?.packagePresets ?? []} />
       <CertificateCard warehouseId={id} warehouseName={name} />
     </div>

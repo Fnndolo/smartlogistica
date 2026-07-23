@@ -6,6 +6,7 @@ import type {
   AlegraCredentialsInput,
   AlegraImeiMatch,
   AlegraItem,
+  AlegraSeller,
   AlegraSyncResult,
   AlegraTestResult,
   CreateInvoiceLine,
@@ -378,6 +379,53 @@ export class AlegraService {
     return items.map((i) => this.toItem(i));
   }
 
+  /** Vendedores guardados en la cuenta Alegra de la sede (solo activos). */
+  async listSellers(warehouseId: string, auth: AuthContext): Promise<AlegraSeller[]> {
+    await this.assertWarehouseAccess(warehouseId, auth);
+    const { tenantId } = getTenantContext();
+    const http = await this.client.forWarehouse(tenantId, warehouseId);
+    try {
+      const sellers = await this.client.listSellers(http);
+      return sellers
+        .filter((s) => (s.status ?? 'active') === 'active' && s.name)
+        .map((s) => ({ id: String(s.id), name: String(s.name) }));
+    } catch (err) {
+      throw this.alegraError(err, 'No se pudieron traer los vendedores de Alegra');
+    }
+  }
+
+  /** Vendedor elegido por el USUARIO actual para esta sede (null = sin vendedor). */
+  async getSellerPref(warehouseId: string, auth: AuthContext): Promise<AlegraSeller | null> {
+    await this.assertWarehouseAccess(warehouseId, auth);
+    const { prisma } = getTenantContext();
+    const pref = await prisma.alegraSellerPref.findUnique({
+      where: { warehouseId_userId: { warehouseId, userId: auth.userId } },
+    });
+    return pref ? { id: pref.sellerId, name: pref.sellerName } : null;
+  }
+
+  /** Guarda (o limpia, con null) el vendedor del USUARIO actual en esta sede. */
+  async saveSellerPref(
+    warehouseId: string,
+    seller: AlegraSeller | null,
+    auth: AuthContext,
+  ): Promise<AlegraSeller | null> {
+    await this.assertWarehouseAccess(warehouseId, auth);
+    const { prisma } = getTenantContext();
+    if (!seller) {
+      await prisma.alegraSellerPref
+        .delete({ where: { warehouseId_userId: { warehouseId, userId: auth.userId } } })
+        .catch(() => null);
+      return null;
+    }
+    await prisma.alegraSellerPref.upsert({
+      where: { warehouseId_userId: { warehouseId, userId: auth.userId } },
+      create: { warehouseId, userId: auth.userId, sellerId: seller.id, sellerName: seller.name },
+      update: { sellerId: seller.id, sellerName: seller.name },
+    });
+    return seller;
+  }
+
   /**
    * Una linea por GRUPO (= una foto). Los codigos de la misma foto (dual-SIM) van
    * en la misma linea/producto. Resuelve el producto por el primer codigo que
@@ -487,9 +535,14 @@ export class AlegraService {
         ).id;
       }
 
-      // 3. Total + fecha.
+      // 3. Total + fecha + vendedor del usuario (si eligio uno para esta sede).
       const total = lines.reduce((s, l) => s + l.price * l.quantity, 0);
       const today = new Date().toISOString().slice(0, 10);
+      const sellerPref = await getTenantContext()
+        .prisma.alegraSellerPref.findUnique({
+          where: { warehouseId_userId: { warehouseId, userId: auth.userId } },
+        })
+        .catch(() => null);
 
       // 4. Factura con pago -> cerrada/cobrada.
       const created = await this.client.createInvoice(http, {
@@ -497,6 +550,7 @@ export class AlegraService {
         dueDate: today,
         client: { id: clientId },
         anotation: 'ADDI', // en "anotaciones" siempre va "ADDI"
+        ...(sellerPref ? { seller: Number(sellerPref.sellerId) || sellerPref.sellerId } : {}),
         items: lines.map((l) => ({
           id: l.itemId,
           price: l.price,

@@ -53,6 +53,18 @@ CREATE TABLE "AlegraConnection" (
 );
 
 -- CreateTable
+CREATE TABLE "AlegraSellerPref" (
+    "id" TEXT NOT NULL,
+    "warehouseId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "sellerId" TEXT NOT NULL,
+    "sellerName" TEXT NOT NULL,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "AlegraSellerPref_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "WarehouseMember" (
     "id" TEXT NOT NULL,
     "warehouseId" TEXT NOT NULL,
@@ -248,6 +260,9 @@ CREATE UNIQUE INDEX "CoordinadoraConnection_warehouseId_key" ON "CoordinadoraCon
 CREATE UNIQUE INDEX "AlegraConnection_warehouseId_key" ON "AlegraConnection"("warehouseId");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "AlegraSellerPref_warehouseId_userId_key" ON "AlegraSellerPref"("warehouseId", "userId");
+
+-- CreateIndex
 CREATE INDEX "WarehouseMember_userId_idx" ON "WarehouseMember"("userId");
 
 -- CreateIndex
@@ -330,6 +345,9 @@ ALTER TABLE "CoordinadoraConnection" ADD CONSTRAINT "CoordinadoraConnection_ware
 
 -- AddForeignKey
 ALTER TABLE "AlegraConnection" ADD CONSTRAINT "AlegraConnection_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "AlegraSellerPref" ADD CONSTRAINT "AlegraSellerPref_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "WarehouseMember" ADD CONSTRAINT "WarehouseMember_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse"("id") ON DELETE CASCADE ON UPDATE CASCADE;

@@ -463,22 +463,16 @@ const SHIPPING_FALLBACK = { label: 'Sin movimientos', variant: 'outline' } as co
 
 function ShippingCell({ order }: { order: OrderSummary }) {
   if (!order.guideNumber) {
-    return <span className="text-xs text-muted-foreground">Sin guia</span>;
+    return <span className="text-xs text-muted-foreground">Sin guía</span>;
   }
+  // Solo el badge de estado: el detalle textual de Coordinadora repetia lo
+  // mismo ("ENTREGADO / Entregada") y el numero de guia ya vive en el drawer
+  // (aqui queda como tooltip).
   const meta = SHIPPING_LABELS[order.shippingState ?? 'sin_movimientos'] ?? SHIPPING_FALLBACK;
-  const detail = order.shippingStatus?.trim();
   return (
-    <div className="flex flex-col items-start gap-0.5">
-      <Badge variant={meta.variant} className="whitespace-nowrap">
-        {meta.label}
-      </Badge>
-      {detail && detail !== meta.label ? (
-        <span className="max-w-[160px] truncate text-[11px] text-muted-foreground" title={detail}>
-          {detail}
-        </span>
-      ) : null}
-      <span className="font-mono text-[10px] text-muted-foreground">{order.guideNumber}</span>
-    </div>
+    <Badge variant={meta.variant} className="whitespace-nowrap" title={order.guideNumber}>
+      {meta.label}
+    </Badge>
   );
 }
 

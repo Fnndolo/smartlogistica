@@ -1,11 +1,14 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put } from '@nestjs/common';
 import {
   alegraCredentialsSchema,
+  saveSellerPrefSchema,
   type AlegraConnectionSummary,
   type AlegraCredentialsInput,
   type AlegraImeiMatch,
+  type AlegraSeller,
   type AlegraSyncResult,
   type AlegraTestResult,
+  type SaveSellerPrefInput,
 } from '@smartlogistica/shared';
 
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
@@ -58,6 +61,34 @@ export class AlegraController {
     @CurrentUser() user: AuthContext,
   ): Promise<void> {
     await this.alegra.disconnect(warehouseId, user);
+  }
+
+  /** Vendedores guardados en la cuenta Alegra de la sede (cualquier miembro). */
+  @Get('sellers')
+  async sellers(
+    @Param('warehouseId') warehouseId: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<AlegraSeller[]> {
+    return this.alegra.listSellers(warehouseId, user);
+  }
+
+  /** Vendedor elegido por el usuario ACTUAL en esta sede (null = sin vendedor). */
+  @Get('seller')
+  async sellerPref(
+    @Param('warehouseId') warehouseId: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ seller: AlegraSeller | null }> {
+    return { seller: await this.alegra.getSellerPref(warehouseId, user) };
+  }
+
+  /** Guarda (o limpia) el vendedor del usuario ACTUAL en esta sede. */
+  @Put('seller')
+  async saveSellerPref(
+    @Param('warehouseId') warehouseId: string,
+    @Body(new ZodValidationPipe(saveSellerPrefSchema)) body: SaveSellerPrefInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ seller: AlegraSeller | null }> {
+    return { seller: await this.alegra.saveSellerPref(warehouseId, body.seller, user) };
   }
 
   /** Sincroniza las facturas de compra al indice por IMEI. Solo admin. */

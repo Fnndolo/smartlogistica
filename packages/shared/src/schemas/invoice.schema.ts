@@ -9,6 +9,20 @@ export const alegraItemSchema = z.object({
 });
 export type AlegraItem = z.infer<typeof alegraItemSchema>;
 
+/** Vendedor guardado en Alegra (catalogo /sellers de la cuenta de la sede). */
+export const alegraSellerSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+export type AlegraSeller = z.infer<typeof alegraSellerSchema>;
+
+/**
+ * Eleccion de vendedor del USUARIO actual en una sede: sus facturas salen con
+ * ese seller de Alegra. null = facturar sin vendedor.
+ */
+export const saveSellerPrefSchema = z.object({ seller: alegraSellerSchema.nullable() });
+export type SaveSellerPrefInput = z.infer<typeof saveSellerPrefSchema>;
+
 /**
  * Una linea del preview = UNA foto (un celular). Si la foto tiene varios codigos
  * (dual-SIM) van juntos en `codes` (misma linea/producto, en la descripcion).

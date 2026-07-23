@@ -39,6 +39,7 @@ model Warehouse {
   members      WarehouseMember[]
   alegra       AlegraConnection?
   coordinadora CoordinadoraConnection?
+  sellerPrefs  AlegraSellerPref[]
 
   @@index([archived])
 }
@@ -91,6 +92,22 @@ model AlegraConnection {
   updatedAt      DateTime @updatedAt
 
   warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+}
+
+/// Vendedor de Alegra elegido por CADA usuario en una sede: las facturas que ese
+/// usuario emita desde esa sede salen con ese "seller" de Alegra. El catalogo de
+/// vendedores se trae en vivo de Alegra (no se espeja).
+model AlegraSellerPref {
+  id          String   @id @default(cuid())
+  warehouseId String
+  userId      String
+  sellerId    String
+  sellerName  String
+  updatedAt   DateTime @updatedAt
+
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+
+  @@unique([warehouseId, userId])
 }
 
 // Que usuarios (operadores) pertenecen a que sede. userId referencia al User del
