@@ -7,11 +7,14 @@ import {
   Param,
   Patch,
   Post,
+  Put,
 } from '@nestjs/common';
 import {
   createWarehouseSchema,
+  savePackagePresetsSchema,
   updateWarehouseSchema,
   type CreateWarehouseInput,
+  type PackagePreset,
   type UpdateWarehouseInput,
   type WarehouseSummary,
 } from '@smartlogistica/shared';
@@ -46,6 +49,16 @@ export class WarehousesController {
     @CurrentUser() user: AuthContext,
   ): Promise<WarehouseSummary> {
     return this.warehouses.update(id, body, user);
+  }
+
+  /** Reemplaza los paquetes predefinidos de guias (Coordinadora) de la sede. */
+  @Put(':id/package-presets')
+  async savePackagePresets(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(savePackagePresetsSchema)) body: PackagePreset[],
+    @CurrentUser() user: AuthContext,
+  ): Promise<WarehouseSummary> {
+    return this.warehouses.savePackagePresets(id, body, user);
   }
 
   @Delete(':id')

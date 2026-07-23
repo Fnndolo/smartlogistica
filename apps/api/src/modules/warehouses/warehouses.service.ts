@@ -7,9 +7,11 @@ import {
 import { randomBytes } from 'node:crypto';
 import type {
   CreateWarehouseInput,
+  PackagePreset,
   UpdateWarehouseInput,
   WarehouseSummary,
 } from '@smartlogistica/shared';
+import type { Prisma } from '.prisma/tenant-client';
 
 import type { AuthContext } from '../../common/types/authenticated-request';
 import { isAdmin } from '../../common/rbac';
@@ -88,6 +90,26 @@ export class WarehousesService {
     return this.toSummary(w, count);
   }
 
+  /** Reemplaza los paquetes predefinidos de guias de la sede. */
+  async savePackagePresets(
+    id: string,
+    presets: PackagePreset[],
+    auth: AuthContext,
+  ): Promise<WarehouseSummary> {
+    if (!isAdmin(auth)) throw new ForbiddenException('Solo administradores pueden editar sedes');
+    const { prisma } = getTenantContext();
+    const existing = await prisma.warehouse.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException('Sede no encontrada');
+    const w = await prisma.warehouse.update({
+      where: { id },
+      data: { packagePresets: presets as unknown as Prisma.InputJsonValue },
+    });
+    const count = await prisma.order.count({
+      where: { warehouseId: id, events: { none: { type: 'vtex_invoiced' } } },
+    });
+    return this.toSummary(w, count);
+  }
+
   async archive(id: string, auth: AuthContext): Promise<void> {
     if (!isAdmin(auth)) throw new ForbiddenException('Solo administradores pueden archivar sedes');
     const { prisma } = getTenantContext();
@@ -123,6 +145,7 @@ export class WarehousesService {
       slug: string;
       archived: boolean;
       invoicePrefix: string | null;
+      packagePresets?: unknown;
       createdAt: Date;
     },
     orderCount: number,
@@ -133,8 +156,24 @@ export class WarehousesService {
       slug: w.slug,
       archived: w.archived,
       invoicePrefix: w.invoicePrefix,
+      packagePresets: parsePackagePresets(w.packagePresets),
       orderCount,
       createdAt: w.createdAt.toISOString(),
     };
   }
+}
+
+/** JSON de la DB -> lista tipada (tolerante: entradas invalidas se descartan). */
+export function parsePackagePresets(raw: unknown): PackagePreset[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (p): p is PackagePreset =>
+      !!p &&
+      typeof p === 'object' &&
+      typeof (p as PackagePreset).name === 'string' &&
+      typeof (p as PackagePreset).weight === 'number' &&
+      typeof (p as PackagePreset).height === 'number' &&
+      typeof (p as PackagePreset).width === 'number' &&
+      typeof (p as PackagePreset).length === 'number',
+  );
 }

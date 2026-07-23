@@ -6,6 +6,7 @@ CREATE TABLE "Warehouse" (
     "archived" BOOLEAN NOT NULL DEFAULT false,
     "invoicePrefix" TEXT,
     "certificateTemplate" JSONB,
+    "packagePresets" JSONB,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 

@@ -204,6 +204,34 @@ export function GuidePanel({ orderId }: { orderId: string }) {
       {/* Paquete */}
       <section className="space-y-3">
         <SectionTitle>Paquete</SectionTitle>
+        {preview.packagePresets.length > 0 ? (
+          <Field label="Paquete guardado">
+            {/* Igual que los "empaques" del portal de Coordinadora: elegirlo llena
+                peso y medidas (despues se pueden ajustar a mano). */}
+            <select
+              defaultValue=""
+              onChange={(e) => {
+                const p = preview.packagePresets.find((x) => x.name === e.target.value);
+                if (p) {
+                  patchP({
+                    weight: String(p.weight),
+                    height: String(p.height),
+                    width: String(p.width),
+                    length: String(p.length),
+                  });
+                }
+              }}
+              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value="">— Personalizado —</option>
+              {preview.packagePresets.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name} · {p.height}x{p.width}x{p.length} cm · {p.weight} kg
+                </option>
+              ))}
+            </select>
+          </Field>
+        ) : null}
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="Contenido">
             <Input value={pkg.content} onChange={(e) => patchP({ content: e.target.value })} />

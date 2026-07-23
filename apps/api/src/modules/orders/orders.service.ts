@@ -51,7 +51,7 @@ import { CoordinadoraService } from '../marketplaces/coordinadora/coordinadora.s
 import type { RastreoResult } from '../marketplaces/coordinadora/coordinadora-client.service';
 import { MktDocumentService } from '../marketplaces/vtex/mkt-document.service';
 import { VtexClient } from '../marketplaces/vtex/vtex-client.service';
-import { WarehousesService } from '../warehouses/warehouses.service';
+import { WarehousesService, parsePackagePresets } from '../warehouses/warehouses.service';
 
 const IMAGE_EXT: Record<ImageMime, string> = {
   'image/jpeg': 'jpg',
@@ -646,7 +646,9 @@ export class OrdersService {
     const client = extractInvoiceClient(order);
     return {
       invoice: null,
-      lines: priced,
+      // Se factura el TOTAL del pedido (envio/recargos incluidos), no solo el
+      // valor de los productos: el excedente se reparte entre las lineas.
+      lines: prorateToOrderTotal(priced, Number(order.totalValue)),
       client: {
         name: client.name,
         identification: client.identification,
@@ -799,13 +801,20 @@ export class OrdersService {
 
     const sender = await this.coordinadora.senderFor(order.warehouseId);
     const client = extractInvoiceClient(order);
-    const city = await this.coordinadora
-      .resolveCity(order.warehouseId, client.address?.city ?? null, client.address?.department ?? null)
-      .catch(() => null);
+    const [city, warehouse] = await Promise.all([
+      this.coordinadora
+        .resolveCity(order.warehouseId, client.address?.city ?? null, client.address?.department ?? null)
+        .catch(() => null),
+      getTenantContext().prisma.warehouse.findUnique({
+        where: { id: order.warehouseId },
+        select: { packagePresets: true },
+      }),
+    ]);
 
     const { rotuloId, ...senderData } = sender;
     return {
       guide: await this.existingGuide(orderId),
+      packagePresets: parsePackagePresets(warehouse?.packagePresets),
       recipient: {
         name: client.name,
         document: client.identification,
@@ -1403,6 +1412,44 @@ function pickRealEmail(...candidates: unknown[]): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Ajusta los precios sugeridos para que la factura sume el TOTAL del pedido
+ * (envio y recargos incluidos): eso es lo que pago el cliente y sobre eso se
+ * factura. La diferencia contra la suma de productos se reparte proporcional
+ * entre las lineas; cada aporte se redondea a multiplo de la cantidad (precio
+ * unitario entero) y la linea mayor absorbe el remanente. Si alguna linea no
+ * tiene precio (el usuario la va a llenar a mano) no se toca nada.
+ */
+function prorateToOrderTotal<T extends { codes: string[]; suggestedPrice: string | null }>(
+  lines: T[],
+  orderTotal: number,
+): T[] {
+  if (lines.length === 0 || !Number.isFinite(orderTotal) || orderTotal <= 0) return lines;
+  if (lines.some((l) => l.suggestedPrice == null || Number.isNaN(Number(l.suggestedPrice)))) {
+    return lines;
+  }
+  const qty = (l: T) => Math.max(1, l.codes.length);
+  const totals = lines.map((l) => Number(l.suggestedPrice) * qty(l));
+  const sum = totals.reduce((a, b) => a + b, 0);
+  const diff = Math.round(orderTotal - sum);
+  if (sum <= 0 || diff === 0) return lines;
+
+  const maxIdx = totals.indexOf(Math.max(...totals));
+  const shares = lines.map((l, i) => {
+    if (i === maxIdx) return 0;
+    const q = qty(l);
+    return Math.round((diff * (totals[i] ?? 0)) / sum / q) * q;
+  });
+  shares[maxIdx] = diff - shares.reduce((a, b) => a + b, 0);
+
+  const adjusted = lines.map((l, i) => {
+    const unit = Number(l.suggestedPrice) + (shares[i] ?? 0) / qty(l);
+    return { ...l, suggestedPrice: String(Math.round(unit * 100) / 100) };
+  });
+  // Un descuento enorme podria dejar precios negativos: mejor no sugerir nada raro.
+  return adjusted.some((l) => Number(l.suggestedPrice) < 0) ? lines : adjusted;
 }
 
 /**

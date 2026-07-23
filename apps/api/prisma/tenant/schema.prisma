@@ -28,6 +28,10 @@ model Warehouse {
   // se aplica sobre la factura de Alegra con pdf-lib. JSON editable visualmente.
   // null/vacio = se envia la factura cruda (sin transformar).
   certificateTemplate Json?
+  // Paquetes predefinidos para guias de Coordinadora: [{name, weight, height,
+  // width, length}]. Como los "empaques" del portal de Coordinadora (su API no
+  // los expone), pero configurados por sede aqui.
+  packagePresets Json?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

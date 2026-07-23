@@ -105,6 +105,23 @@ export type CoordinadoraCitySearchInput = z.infer<typeof coordinadoraCitySearchS
 
 // === Guia (generar) ===
 
+/**
+ * Paquete predefinido de la sede (equivalente a los "empaques" del portal web
+ * de Coordinadora, que su API no expone): nombre + medidas + peso. Se elige en
+ * la pestana Guia para llenar las dimensiones de un clic.
+ */
+export const packagePresetSchema = z.object({
+  name: z.string().trim().min(1, 'Nombre requerido').max(60),
+  weight: z.number().positive('Peso invalido'), // kg
+  height: z.number().positive(), // cm
+  width: z.number().positive(),
+  length: z.number().positive(),
+});
+export type PackagePreset = z.infer<typeof packagePresetSchema>;
+
+/** Reemplaza la lista completa de paquetes de la sede. */
+export const savePackagePresetsSchema = z.array(packagePresetSchema).max(30);
+
 /** Datos del paquete (VTEX no los trae; defaults editables antes de generar). */
 export const guidePackageSchema = z.object({
   weight: z.number().positive('Peso invalido'), // kg
@@ -145,6 +162,8 @@ export const guidePreviewSchema = z.object({
   }),
   package: guidePackageSchema,
   rotuloId: z.number().int(), // formato de rotulo por defecto de la sede
+  // Paquetes predefinidos de la sede (para llenar dimensiones de un clic).
+  packagePresets: z.array(packagePresetSchema),
   guide: guideSchema.nullable(), // si ya se genero
 });
 export type GuidePreview = z.infer<typeof guidePreviewSchema>;

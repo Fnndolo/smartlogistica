@@ -7,8 +7,9 @@ import { getWarehouses, serverFetch } from '@/lib/server-api';
 import { AlegraConnectionCard } from '../alegra-connection-card';
 import { CertificateCard } from '../certificate-card';
 import { CoordinadoraConnectionCard } from '../coordinadora-connection-card';
+import { PackagePresetsCard } from '../package-presets-card';
 
-/** Ajustes de la sede: conexiones (Alegra/Coordinadora) + Certificado de Garantia. */
+/** Ajustes de la sede: conexiones (Alegra/Coordinadora) + paquetes de guia + Certificado. */
 export default async function WarehouseSettingsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const warehouse = (await getWarehouses()).find((w) => w.id === id);
@@ -24,6 +25,7 @@ export default async function WarehouseSettingsPage({ params }: { params: Promis
         <AlegraConnectionCard warehouseId={id} warehouseName={name} initial={alegra ?? null} />
         <CoordinadoraConnectionCard warehouseId={id} warehouseName={name} initial={coordinadora ?? null} />
       </div>
+      <PackagePresetsCard warehouseId={id} initial={warehouse?.packagePresets ?? []} />
       <CertificateCard warehouseId={id} warehouseName={name} />
     </div>
   );

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { packagePresetSchema } from './coordinadora.schema';
+
 export const warehouseNameSchema = z.string().trim().min(2, 'Minimo 2 caracteres').max(60);
 
 /**
@@ -36,6 +38,8 @@ export const warehouseSummarySchema = z.object({
   slug: z.string(),
   archived: z.boolean(),
   invoicePrefix: z.string().nullable(),
+  // Paquetes predefinidos para las guias de Coordinadora (nombre + medidas + peso).
+  packagePresets: z.array(packagePresetSchema),
   orderCount: z.number().int(),
   createdAt: z.string().datetime(),
 });
