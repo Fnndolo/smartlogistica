@@ -40,7 +40,7 @@ export class MembersService {
 
   private assertOwner(auth: AuthContext): void {
     if (!isAdmin(auth)) {
-      throw new ForbiddenException('Solo el propietario puede gestionar el equipo');
+      throw new ForbiddenException('Solo administradores pueden gestionar el equipo');
     }
   }
 
@@ -50,12 +50,12 @@ export class MembersService {
 
     const memberships = await this.prisma.membership.findMany({
       where: { tenantId },
-      include: { user: { select: { id: true, email: true } } },
+      include: { user: { select: { id: true, email: true, name: true } } },
       orderBy: { createdAt: 'asc' },
     });
     if (memberships.length === 0) return [];
 
-    // Acceso por sede (base del tenant). Un OWNER ve todas, no necesita filas.
+    // Acceso por sede (base del tenant). OWNER/ADMIN ven todas, no necesitan filas.
     const { prisma } = getTenantContext();
     const links = await prisma.warehouseMember.findMany({
       where: { userId: { in: memberships.map((m) => m.userId) } },
@@ -71,9 +71,10 @@ export class MembersService {
     return memberships.map((m) => ({
       userId: m.userId,
       email: m.user.email,
+      name: m.user.name,
       role: m.role,
       createdAt: m.createdAt.toISOString(),
-      warehouseIds: m.role === 'OWNER' ? [] : (byUser.get(m.userId) ?? []),
+      warehouseIds: m.role !== 'OPERATOR' ? [] : (byUser.get(m.userId) ?? []),
       isYou: m.userId === auth.userId,
     }));
   }
@@ -89,21 +90,29 @@ export class MembersService {
 
     const existing = await this.prisma.user.findUnique({
       where: { email: input.email },
-      select: { id: true, email: true },
+      select: { id: true, email: true, name: true },
     });
 
     let user = existing;
     if (!user) {
       const passwordHash = await this.passwords.hash(input.password);
       user = await this.prisma.user.create({
-        data: { email: input.email, passwordHash },
-        select: { id: true, email: true },
+        data: { email: input.email, name: input.name, passwordHash },
+        select: { id: true, email: true, name: true },
       });
     } else {
       const already = await this.prisma.membership.findUnique({
         where: { userId_tenantId: { userId: user.id, tenantId } },
       });
       if (already) throw new ConflictException('Ese correo ya es parte del equipo');
+      // Cuenta existente sin nombre: aprovechar el del formulario.
+      if (!user.name) {
+        user = await this.prisma.user.update({
+          where: { id: user.id },
+          data: { name: input.name },
+          select: { id: true, email: true, name: true },
+        });
+      }
     }
 
     const membership = await this.prisma.membership.create({
@@ -115,6 +124,7 @@ export class MembersService {
     return {
       userId: user.id,
       email: user.email,
+      name: user.name,
       role: membership.role,
       createdAt: membership.createdAt.toISOString(),
       warehouseIds,
@@ -129,7 +139,7 @@ export class MembersService {
 
     const membership = await this.prisma.membership.findUnique({
       where: { userId_tenantId: { userId, tenantId } },
-      include: { user: { select: { email: true } } },
+      include: { user: { select: { email: true, name: true } } },
     });
     if (!membership) throw new NotFoundException('Ese miembro no existe en este workspace');
 
@@ -148,7 +158,14 @@ export class MembersService {
           })
         : membership;
 
-    // Las sedes solo se tocan si vinieron en el body; un OWNER las ve todas.
+    // Nombre visible (global a la cuenta del usuario).
+    let name = membership.user.name;
+    if (input.name && input.name !== name) {
+      await this.prisma.user.update({ where: { id: userId }, data: { name: input.name } });
+      name = input.name;
+    }
+
+    // Las sedes solo se tocan si vinieron en el body; OWNER/ADMIN las ven todas.
     const warehouseIds =
       input.warehouseIds || role !== membership.role
         ? await this.setWarehouses(userId, role, input.warehouseIds ?? [])
@@ -157,6 +174,7 @@ export class MembersService {
     return {
       userId,
       email: membership.user.email,
+      name,
       role: updated.role,
       createdAt: membership.createdAt.toISOString(),
       warehouseIds,
@@ -212,7 +230,7 @@ export class MembersService {
   }
 
   private async currentWarehouses(userId: string, role: string): Promise<string[]> {
-    if (role === 'OWNER') return [];
+    if (role !== 'OPERATOR') return [];
     const { prisma } = getTenantContext();
     const links = await prisma.warehouseMember.findMany({
       where: { userId },
@@ -222,14 +240,14 @@ export class MembersService {
   }
 
   /**
-   * Deja el acceso por sede EXACTAMENTE como se pide. En un OWNER se limpian
-   * las filas: ve todas las sedes por rol, y dejarlas seria confuso (al pasarlo
+   * Deja el acceso por sede EXACTAMENTE como se pide. En OWNER/ADMIN se limpian
+   * las filas: ven todas las sedes por rol, y dejarlas seria confuso (al pasarlo
    * a OPERATOR heredaria accesos viejos sin que nadie los eligiera).
    */
   private async setWarehouses(userId: string, role: string, warehouseIds: string[]): Promise<string[]> {
     const { prisma } = getTenantContext();
 
-    if (role === 'OWNER') {
+    if (role !== 'OPERATOR') {
       await prisma.warehouseMember.deleteMany({ where: { userId } });
       return [];
     }

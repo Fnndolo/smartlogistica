@@ -16,16 +16,21 @@ import { cn } from '@/lib/utils';
 
 type Role = MemberSummary['role'];
 
-const ROLE_LABEL: Record<Role, string> = { OWNER: 'Propietario', OPERATOR: 'Operador' };
+const ROLE_LABEL: Record<Role, string> = {
+  OWNER: 'Propietario',
+  ADMIN: 'Admin',
+  OPERATOR: 'Operador',
+};
 const ROLE_HELP: Record<Role, string> = {
-  OWNER: 'Ve y gestiona todo: sedes, conexiones, equipo y facturacion.',
-  OPERATOR: 'Solo ve las sedes que le asignes.',
+  OWNER: 'Ve y gestiona todo. Es el dueño del workspace (el primer usuario).',
+  ADMIN: 'Ve y gestiona todo: sedes, conexiones, equipo y facturación.',
+  OPERATOR: 'Solo ve las sedes que le asignes: detalle y conversación de sus pedidos.',
 };
 
 export function TeamList({ initial }: { initial?: MemberSummary[] }) {
   const qc = useQueryClient();
   const me = useCurrentUser();
-  const canManage = me?.role === 'OWNER';
+  const canManage = me?.role === 'OWNER' || me?.role === 'ADMIN';
   const [adding, setAdding] = useState(false);
 
   const { data, isPending, error, refetch, isFetching } = useQuery({
@@ -107,6 +112,7 @@ function MemberRow({
 }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(member.name ?? '');
   const [role, setRole] = useState<Role>(member.role);
   const [sedes, setSedes] = useState<string[]>(member.warehouseIds);
 
@@ -115,6 +121,7 @@ function MemberRow({
   const save = useMutation({
     mutationFn: () =>
       api.patch<MemberSummary>(`/v1/members/${member.userId}`, {
+        ...(name.trim().length >= 2 ? { name: name.trim() } : {}),
         role,
         warehouseIds: role === 'OPERATOR' ? sedes : [],
       }),
@@ -145,27 +152,32 @@ function MemberRow({
           <div
             className={cn(
               'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border',
-              member.role === 'OWNER'
+              member.role !== 'OPERATOR'
                 ? 'border-violet-500/20 bg-violet-500/10 text-violet-600 dark:text-violet-400'
                 : 'border-border bg-muted text-foreground',
             )}
           >
-            {member.role === 'OWNER' ? <Shield className="h-4 w-4" /> : <User className="h-4 w-4" />}
+            {member.role !== 'OPERATOR' ? <Shield className="h-4 w-4" /> : <User className="h-4 w-4" />}
           </div>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <p className="truncate text-sm font-medium">{member.email}</p>
-              <Badge variant={member.role === 'OWNER' ? 'success' : 'outline'}>
+              <p className="truncate text-sm font-medium">{member.name ?? member.email}</p>
+              <Badge
+                variant={
+                  member.role === 'OWNER' ? 'success' : member.role === 'ADMIN' ? 'secondary' : 'outline'
+                }
+              >
                 {ROLE_LABEL[member.role]}
               </Badge>
-              {member.isYou ? <Badge variant="secondary">Tu</Badge> : null}
+              {member.isYou ? <Badge variant="secondary">Tú</Badge> : null}
             </div>
+            <p className="mt-0.5 truncate text-xs text-muted-foreground">{member.email}</p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {member.role === 'OWNER'
-                ? ROLE_HELP.OWNER
+              {member.role !== 'OPERATOR'
+                ? ROLE_HELP[member.role]
                 : names.length
                   ? `Sedes: ${names.join(', ')}`
-                  : 'Sin sedes asignadas — no vera ningun pedido.'}
+                  : 'Sin sedes asignadas — no verá ningún pedido.'}
             </p>
           </div>
         </div>
@@ -200,7 +212,19 @@ function MemberRow({
 
       {editing ? (
         <div className="mt-4 space-y-4 border-t border-border pt-4">
-          <RolePicker value={role} onChange={setRole} />
+          <div className="space-y-1.5">
+            <Label htmlFor={`member-name-${member.userId}`}>Nombre</Label>
+            <Input
+              id={`member-name-${member.userId}`}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Ej. David Castro"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Con este nombre se le menciona (@{name.trim() || 'Nombre'}) y firma sus mensajes.
+            </p>
+          </div>
+          {member.role !== 'OWNER' ? <RolePicker value={role} onChange={setRole} /> : null}
           {role === 'OPERATOR' ? (
             <SedePicker warehouses={warehouses} value={sedes} onChange={setSedes} />
           ) : null}
@@ -214,6 +238,7 @@ function MemberRow({
               size="sm"
               onClick={() => {
                 setEditing(false);
+                setName(member.name ?? '');
                 setRole(member.role);
                 setSedes(member.warehouseIds);
               }}
@@ -236,6 +261,7 @@ function AddMemberForm({
   onClose: () => void;
   onDone: () => void;
 }) {
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<Role>('OPERATOR');
@@ -244,6 +270,7 @@ function AddMemberForm({
   const create = useMutation({
     mutationFn: () =>
       api.post<MemberSummary>('/v1/members', {
+        name: name.trim(),
         email,
         password,
         role,
@@ -256,7 +283,7 @@ function AddMemberForm({
     onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo agregar'),
   });
 
-  const valid = /.+@.+\..+/.test(email) && password.length >= 8;
+  const valid = name.trim().length >= 2 && /.+@.+\..+/.test(email) && password.length >= 8;
 
   return (
     <div className="space-y-4 rounded-xl border border-border bg-card p-4">
@@ -265,6 +292,21 @@ function AddMemberForm({
         <Button variant="ghost" size="sm" onClick={onClose}>
           <X className="h-3.5 w-3.5" />
         </Button>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="member-name">Nombre</Label>
+        <Input
+          id="member-name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Ej. David Castro"
+          autoComplete="off"
+        />
+        <p className="text-[11px] text-muted-foreground">
+          Con este nombre se le menciona en el chat (@{name.trim() || 'Nombre'}) y firma sus
+          mensajes.
+        </p>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
@@ -313,8 +355,9 @@ function RolePicker({ value, onChange }: { value: Role; onChange: (r: Role) => v
   return (
     <div className="space-y-1.5">
       <Label>Rol</Label>
+      {/* Propietario no se asigna aqui: es el primer usuario del workspace. */}
       <div className="grid gap-2 sm:grid-cols-2">
-        {(['OPERATOR', 'OWNER'] as const).map((r) => (
+        {(['OPERATOR', 'ADMIN'] as const).map((r) => (
           <button
             key={r}
             type="button"
@@ -325,7 +368,7 @@ function RolePicker({ value, onChange }: { value: Role; onChange: (r: Role) => v
             )}
           >
             <div className="flex items-center gap-2">
-              {r === 'OWNER' ? <Shield className="h-3.5 w-3.5" /> : <User className="h-3.5 w-3.5" />}
+              {r === 'ADMIN' ? <Shield className="h-3.5 w-3.5" /> : <User className="h-3.5 w-3.5" />}
               <span className="text-sm font-medium">{ROLE_LABEL[r]}</span>
               {value === r ? <Check className="ml-auto h-3.5 w-3.5" /> : null}
             </div>

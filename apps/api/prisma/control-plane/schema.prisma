@@ -22,12 +22,15 @@ enum TenantStatus {
 
 enum TenantRole {
   OWNER
+  ADMIN
   OPERATOR
 }
 
 model User {
   id            String       @id @default(cuid())
   email         String       @unique
+  /// Nombre visible (menciones @Nombre y autor de mensajes en el chat).
+  name          String?
   passwordHash  String
   emailVerified DateTime?
   createdAt     DateTime     @default(now())

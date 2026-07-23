@@ -61,6 +61,8 @@ export const inboxItemSchema = z.object({
   mentioned: z.boolean(), // true si alguno de los no leidos me menciona
   lastMessageAt: z.string().datetime(),
   preview: z.string(),
+  /** Quien escribio el ultimo mensaje ("Ingrid Tatiana"). */
+  lastAuthor: z.string(),
 });
 export type InboxItem = z.infer<typeof inboxItemSchema>;
 

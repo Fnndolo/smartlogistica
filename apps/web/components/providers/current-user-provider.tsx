@@ -9,6 +9,7 @@ import { ApiError, api } from '@/lib/api-client';
 export interface CurrentUser {
   id: string;
   email: string;
+  name: string | null;
   activeTenantId: string | null;
   activeTenantSlug: string | null;
   role: string | null;

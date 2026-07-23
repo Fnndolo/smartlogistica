@@ -1,11 +1,11 @@
 import type { AuthContext } from './types/authenticated-request';
 
 /**
- * Permisos de SmartLogistica. Hoy el rol OWNER = administrador (ve todo, asigna,
- * transfiere, gestiona sedes). OPERATOR = usuario de sede (scope a sus sedes).
- * Cuando se construya el flujo de invitaciones se anadira un rol ADMIN explicito
- * y, si se quiere, permisos mas finos por accion.
+ * Permisos de SmartLogistica. OWNER = el propietario (el primer usuario) y
+ * ADMIN = administrador: ambos ven y gestionan todo (pedidos generales, sedes,
+ * conexiones, equipo, facturar, guias). OPERATOR = usuario de sede: solo ve sus
+ * sedes y la conversacion/detalle de los pedidos (sube fotos, chatea).
  */
 export function isAdmin(auth: AuthContext): boolean {
-  return auth.role === 'OWNER';
+  return auth.role === 'OWNER' || auth.role === 'ADMIN';
 }

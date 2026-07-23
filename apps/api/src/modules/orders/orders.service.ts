@@ -64,12 +64,18 @@ type OrderWithItems = Prisma.OrderGetPayload<{ include: { items: true } }>;
 type OrderMessageRow = Prisma.OrderMessageGetPayload<Record<string, never>>;
 type OrderEventRow = Prisma.OrderEventGetPayload<Record<string, never>>;
 
+/** Nombre visible del usuario para chat/actividad (cae al correo si no tiene). */
+function displayName(auth: AuthContext): string {
+  return auth.name?.trim() || auth.email;
+}
+
 /** No leidos de un pedido: total + si me mencionan + ultimo mensaje (preview). */
 interface UnreadInfo {
   count: number;
   mentioned: boolean;
   lastAt: Date;
   preview: string;
+  lastAuthor: string;
 }
 
 @Injectable()
@@ -246,7 +252,7 @@ export class OrdersService {
         orderId: o.id,
         type: to === null ? 'returned' : o.warehouseId === null ? 'assigned' : 'transferred',
         actorId: auth.userId,
-        actorName: auth.email,
+        actorName: displayName(auth),
         data: { from: o.warehouseId, to } as Prisma.InputJsonValue,
       })),
     });
@@ -288,7 +294,7 @@ export class OrdersService {
       data: {
         orderId,
         authorId: auth.userId,
-        authorName: auth.email,
+        authorName: displayName(auth),
         kind: 'text',
         body: input.body,
         mentions,
@@ -363,7 +369,14 @@ export class OrdersService {
       }),
       prisma.orderMessage.findMany({
         where: messageWhere,
-        select: { orderId: true, createdAt: true, mentions: true, kind: true, body: true },
+        select: {
+          orderId: true,
+          createdAt: true,
+          mentions: true,
+          kind: true,
+          body: true,
+          authorName: true,
+        },
         orderBy: { createdAt: 'asc' },
         take: 5000, // guardarril; a escala de PyME no se alcanza
       }),
@@ -380,12 +393,14 @@ export class OrdersService {
         prev.mentioned = prev.mentioned || mentioned;
         prev.lastAt = m.createdAt;
         prev.preview = messagePreview(m.kind, m.body);
+        prev.lastAuthor = m.authorName;
       } else {
         result.set(m.orderId, {
           count: 1,
           mentioned,
           lastAt: m.createdAt,
           preview: messagePreview(m.kind, m.body),
+          lastAuthor: m.authorName,
         });
       }
     }
@@ -426,6 +441,7 @@ export class OrdersService {
         mentioned: info.mentioned,
         lastMessageAt: info.lastAt.toISOString(),
         preview: info.preview,
+        lastAuthor: info.lastAuthor,
       });
     }
     items.sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt));
@@ -512,7 +528,7 @@ export class OrdersService {
       data: {
         orderId,
         authorId: auth.userId,
-        authorName: auth.email,
+        authorName: displayName(auth),
         kind: kind === 'imei' ? 'imei_photo' : 'serial_photo',
         body: null,
         attachmentKey: key,
@@ -559,7 +575,7 @@ export class OrdersService {
       data: {
         orderId,
         authorId: auth.userId,
-        authorName: auth.email,
+        authorName: displayName(auth),
         kind: 'file',
         body: originalName,
         attachmentKey: key,
@@ -700,7 +716,7 @@ export class OrdersService {
       data: {
         orderId,
         authorId: auth.userId,
-        authorName: auth.email,
+        authorName: displayName(auth),
         kind: 'system',
         body: `Factura ${result.number} emitida en Alegra (${result.status}).`,
         imeis: [],
@@ -739,7 +755,7 @@ export class OrdersService {
           data: {
             orderId,
             authorId: auth.userId,
-            authorName: auth.email,
+            authorName: displayName(auth),
             kind: 'document',
             body: fileName,
             attachmentKey: key,
@@ -756,7 +772,7 @@ export class OrdersService {
         orderId,
         type: 'invoiced',
         actorId: auth.userId,
-        actorName: auth.email,
+        actorName: displayName(auth),
         data: {
           number: result.number,
           id: result.id,
@@ -983,7 +999,7 @@ export class OrdersService {
         data: {
           orderId,
           authorId: auth.userId,
-          authorName: auth.email,
+          authorName: displayName(auth),
           kind: 'system',
           body: `Guia ${guide.number} generada en Coordinadora.`,
           imeis: [],
@@ -994,7 +1010,7 @@ export class OrdersService {
           orderId,
           type: 'guide_generated',
           actorId: auth.userId,
-          actorName: auth.email,
+          actorName: displayName(auth),
           data: { number: guide.number, id: guide.id, url: guide.url } as Prisma.InputJsonValue,
         },
       }),
@@ -1042,7 +1058,7 @@ export class OrdersService {
         data: {
           orderId,
           authorId: auth.userId,
-          authorName: auth.email,
+          authorName: displayName(auth),
           kind: 'document',
           body: fileName,
           attachmentKey: key,
@@ -1120,7 +1136,7 @@ export class OrdersService {
         orderId: order.id,
         type: 'vtex_invoiced',
         actorId: auth.userId,
-        actorName: auth.email,
+        actorName: displayName(auth),
         data: { invoiceNumber, tracking: guide.number } as Prisma.InputJsonValue,
       },
     });
@@ -1136,7 +1152,7 @@ export class OrdersService {
           data: {
             orderId: order.id,
             authorId: auth.userId,
-            authorName: auth.email,
+            authorName: displayName(auth),
             kind: 'document',
             body: fileName,
             attachmentKey: key,
@@ -1154,7 +1170,7 @@ export class OrdersService {
   private async systemMessage(orderId: string, auth: AuthContext, body: string): Promise<void> {
     const { prisma } = getTenantContext();
     await prisma.orderMessage.create({
-      data: { orderId, authorId: auth.userId, authorName: auth.email, kind: 'system', body, imeis: [] },
+      data: { orderId, authorId: auth.userId, authorName: displayName(auth), kind: 'system', body, imeis: [] },
     });
   }
 

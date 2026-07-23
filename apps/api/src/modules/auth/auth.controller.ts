@@ -81,6 +81,7 @@ export class AuthController {
   async me(@CurrentUser() user: AuthContext): Promise<{
     id: string;
     email: string;
+    name: string | null;
     activeTenantId: string | null;
     activeTenantSlug: string | null;
     role: string | null;
@@ -88,6 +89,7 @@ export class AuthController {
     return {
       id: user.userId,
       email: user.email,
+      name: user.name,
       activeTenantId: user.activeTenantId,
       activeTenantSlug: user.activeTenantSlug,
       role: user.role,

@@ -50,7 +50,14 @@ import { cn } from '@/lib/utils';
 
 import { GuidePanel } from './guide-panel';
 import { InvoicePanel } from './invoice-panel';
-import { activeMention, handleOf, mentionsInText } from './mention-utils';
+import {
+  activeMention,
+  initialsOf,
+  matchMembers,
+  mentionName,
+  mentionsInText,
+  splitMentions,
+} from './mention-utils';
 import { orderDetailQuery, orderMessagesQuery } from './order-queries';
 import { useOrdersStream } from './use-orders-stream';
 
@@ -148,15 +155,23 @@ function DrawerContent({
   initialTab: Tab;
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
+  const me = useCurrentUser();
+  // El OPERADOR solo trabaja el pedido: detalle + conversacion (sube fotos,
+  // chatea). Facturar, guia y actividad son de administradores.
+  const canManage = me?.role === 'OWNER' || me?.role === 'ADMIN';
 
   const { data: detail } = useQuery(orderDetailQuery(order.id));
 
   const tabs: { id: Tab; label: string; icon: typeof Info }[] = [
     { id: 'detalle', label: 'Detalle', icon: Info },
     { id: 'conversacion', label: 'Conversación', icon: MessageSquare },
-    { id: 'facturar', label: 'Facturar', icon: ReceiptText },
-    { id: 'guia', label: 'Guía', icon: Truck },
-    { id: 'actividad', label: 'Actividad', icon: Activity },
+    ...(canManage
+      ? ([
+          { id: 'facturar', label: 'Facturar', icon: ReceiptText },
+          { id: 'guia', label: 'Guía', icon: Truck },
+          { id: 'actividad', label: 'Actividad', icon: Activity },
+        ] as { id: Tab; label: string; icon: typeof Info }[])
+      : []),
   ];
 
   return (
@@ -395,7 +410,7 @@ function ConversacionTab({ orderId }: { orderId: string }) {
         id: tempId,
         orderId,
         authorId: me?.id ?? 'me',
-        authorName: me?.email ?? 'Yo',
+        authorName: me?.name ?? me?.email ?? 'Yo',
         kind: 'text',
         body,
         attachmentUrl: null,
@@ -437,12 +452,12 @@ function ConversacionTab({ orderId }: { orderId: string }) {
     setMention(activeMention(el.value, el.selectionStart ?? el.value.length));
   };
 
-  // Inserta el handle del miembro elegido en lugar del token `@...` en curso.
+  // Inserta el NOMBRE del miembro elegido en lugar del token `@...` en curso.
   const pickMention = (member: MemberSummary) => {
     if (!mention) return;
     const before = text.slice(0, mention.start);
     const after = text.slice(mention.start + 1 + mention.query.length);
-    const inserted = `@${handleOf(member.email)} `;
+    const inserted = `@${mentionName(member)} `;
     const next = `${before}${inserted}${after}`;
     setText(next);
     setMention(null);
@@ -457,11 +472,7 @@ function ConversacionTab({ orderId }: { orderId: string }) {
     });
   };
 
-  const mentionMatches = mention
-    ? members
-        .filter((m) => handleOf(m.email).toLowerCase().includes(mention.query.toLowerCase()))
-        .slice(0, 6)
-    : [];
+  const mentionMatches = mention ? matchMembers(mention.query, members) : [];
 
   // Eliminar un mensaje (incluidas las fotos). Optimista: desaparece al instante.
   const del = useMutation({
@@ -481,7 +492,7 @@ function ConversacionTab({ orderId }: { orderId: string }) {
     onSettled: () => qc.invalidateQueries({ queryKey: ['order-messages', orderId] }),
   });
 
-  const isOwner = me?.role === 'OWNER';
+  const isOwner = me?.role === 'OWNER' || me?.role === 'ADMIN';
 
   const pickPhoto = (kind: DevicePhotoKind) => {
     pendingKind.current = kind;
@@ -559,6 +570,7 @@ function ConversacionTab({ orderId }: { orderId: string }) {
               message={m}
               mine={m.authorId === me?.id}
               matchByCode={matchByCode}
+              members={members}
               canDelete={m.kind !== 'system' && (m.authorId === me?.id || isOwner)}
               onDelete={() => setConfirmDeleteId(m.id)}
             />
@@ -641,10 +653,10 @@ function ConversacionTab({ orderId }: { orderId: string }) {
                     className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
                   >
                     <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
-                      {handleOf(m.email).slice(0, 2).toUpperCase()}
+                      {initialsOf(mentionName(m))}
                     </span>
                     <span className="min-w-0">
-                      <span className="block truncate font-medium">@{handleOf(m.email)}</span>
+                      <span className="block truncate font-medium">{mentionName(m)}</span>
                       <span className="block truncate text-[11px] text-muted-foreground">{m.email}</span>
                     </span>
                   </button>
@@ -778,24 +790,38 @@ function AttachOption({
   );
 }
 
-/** Pinta el cuerpo del mensaje resaltando los tokens de mencion (@usuario). */
-function MentionText({ text, mine }: { text: string; mine: boolean }) {
-  const parts = text.split(/(@[\w.-]+)/g);
+/**
+ * Pinta el cuerpo del mensaje resaltando las menciones (@David Castro) como
+ * chips, estilo Google Chat. Reconoce nombres CON espacios (y handles legacy)
+ * de los miembros del equipo.
+ */
+function MentionText({
+  text,
+  mine,
+  members,
+}: {
+  text: string;
+  mine: boolean;
+  members: MemberSummary[];
+}) {
+  const parts = splitMentions(text, members);
   return (
     <>
       {parts.map((part, i) =>
-        /^@[\w.-]+$/.test(part) ? (
+        part.kind === 'mention' ? (
           <span
             key={i}
             className={cn(
-              'rounded px-0.5 font-medium',
-              mine ? 'bg-primary-foreground/20' : 'text-primary',
+              'rounded-md px-1 py-0.5 font-medium',
+              mine
+                ? 'bg-primary-foreground/25 text-primary-foreground'
+                : 'bg-primary/10 text-primary',
             )}
           >
-            {part}
+            {part.value}
           </span>
         ) : (
-          <span key={i}>{part}</span>
+          <span key={i}>{part.value}</span>
         ),
       )}
     </>
@@ -806,12 +832,14 @@ function MessageBubble({
   message,
   mine,
   matchByCode,
+  members = [],
   canDelete = false,
   onDelete,
 }: {
   message: OrderMessage;
   mine: boolean;
   matchByCode?: Map<string, CatalogMatch>;
+  members?: MemberSummary[];
   canDelete?: boolean;
   onDelete?: () => void;
 }) {
@@ -844,15 +872,18 @@ function MessageBubble({
       )}
     >
       <p className="whitespace-pre-wrap break-words">
-        <MentionText text={message.body ?? ''} mine={mine} />
+        <MentionText text={message.body ?? ''} mine={mine} members={members} />
       </p>
     </div>
   );
 
+  // Autor: el NOMBRE del miembro (los mensajes viejos guardaron el correo).
+  const author = members.find((m) => m.userId === message.authorId)?.name ?? message.authorName;
+
   return (
     <div className={cn('group flex flex-col gap-0.5', mine ? 'items-end' : 'items-start')}>
       {!mine ? (
-        <span className="px-1 text-[11px] font-medium text-muted-foreground">{message.authorName}</span>
+        <span className="px-1 text-[11px] font-medium text-muted-foreground">{author}</span>
       ) : null}
       <div className={cn('flex items-center gap-1.5', mine ? 'flex-row' : 'flex-row-reverse')}>
         {canDelete && onDelete ? (

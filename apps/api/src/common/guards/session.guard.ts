@@ -46,6 +46,7 @@ export class SessionGuard implements CanActivate {
     request.auth = {
       userId: result.session.userId,
       email: result.user.email,
+      name: result.user.name ?? null,
       sessionId: result.session.id,
       activeTenantId: result.activeTenantId,
       activeTenantSlug: result.activeTenantSlug,

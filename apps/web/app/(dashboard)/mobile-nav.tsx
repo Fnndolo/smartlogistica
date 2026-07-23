@@ -10,19 +10,33 @@ import { cn } from '@/lib/utils';
 import { NotificationBell } from './notification-bell';
 
 const TABS = [
-  { href: '/dashboard', label: 'Resumen', icon: LayoutDashboard, match: (p: string) => p === '/dashboard' },
-  { href: '/orders', label: 'Pedidos', icon: Boxes, match: (p: string) => p.startsWith('/orders') },
+  {
+    href: '/dashboard',
+    label: 'Resumen',
+    icon: LayoutDashboard,
+    match: (p: string) => p === '/dashboard',
+    adminOnly: true,
+  },
+  {
+    href: '/orders',
+    label: 'Pedidos',
+    icon: Boxes,
+    match: (p: string) => p.startsWith('/orders'),
+    adminOnly: true,
+  },
   {
     href: '/warehouses',
     label: 'Sedes',
     icon: Building2,
     match: (p: string) => p.startsWith('/warehouses'),
+    adminOnly: false,
   },
   {
     href: '/settings',
     label: 'Ajustes',
     icon: Settings,
     match: (p: string) => p.startsWith('/settings') || p.startsWith('/connections'),
+    adminOnly: false,
   },
 ] as const;
 
@@ -58,12 +72,19 @@ export function MobileTopBar() {
 /** Barra inferior de pestañas (solo movil), estilo app nativa. */
 export function MobileBottomNav() {
   const pathname = usePathname();
+  const user = useCurrentUser();
+  // El operador solo ve Sedes y Ajustes (no pedidos generales ni resumen).
+  const isAdminUser = user?.role === 'OWNER' || user?.role === 'ADMIN';
+  const tabs = TABS.filter((t) => isAdminUser || !t.adminOnly);
   return (
     <nav
-      className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t border-border bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+      className={cn(
+        'fixed inset-x-0 bottom-0 z-30 grid border-t border-border bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden',
+        tabs.length === 4 ? 'grid-cols-4' : 'grid-cols-2',
+      )}
       aria-label="Navegacion principal"
     >
-      {TABS.map((tab) => {
+      {tabs.map((tab) => {
         const Icon = tab.icon;
         const active = tab.match(pathname);
         return (

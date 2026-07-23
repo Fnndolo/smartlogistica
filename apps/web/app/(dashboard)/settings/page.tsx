@@ -18,10 +18,16 @@ interface Me {
   role: string | null;
 }
 
+const ROLE_LABEL: Record<string, string> = {
+  OWNER: 'Propietario',
+  ADMIN: 'Admin',
+  OPERATOR: 'Operador',
+};
+
 export default async function SettingsPage() {
   const res = await serverFetchResult<Me>('/v1/auth/me');
   const me = res.ok ? res.data : null;
-  const isOwner = me?.role === 'OWNER';
+  const isOwner = me?.role === 'OWNER' || me?.role === 'ADMIN';
 
   return (
     <div className="space-y-8">
@@ -45,7 +51,7 @@ export default async function SettingsPage() {
                 <h3 className="truncate text-sm font-semibold">{me?.email ?? 'No disponible'}</h3>
                 {me?.role ? (
                   <Badge variant={isOwner ? 'success' : 'outline'}>
-                    {isOwner ? 'Propietario' : 'Operador'}
+                    {ROLE_LABEL[me.role] ?? me.role}
                   </Badge>
                 ) : null}
               </div>
@@ -79,18 +85,22 @@ export default async function SettingsPage() {
           </div>
         </div>
 
-        <SettingsLink
-          href="/settings/team"
-          icon={<Users className="h-4 w-4" />}
-          title="Equipo"
-          description="Agrega personas y decide que sedes ve cada quien."
-        />
-        <SettingsLink
-          href="/connections"
-          icon={<Link2 className="h-4 w-4" />}
-          title="Conexiones"
-          description="VTEX/Addi e inteligencia artificial. Alegra, Coordinadora y el certificado se configuran dentro de cada sede."
-        />
+        {isOwner ? (
+          <>
+            <SettingsLink
+              href="/settings/team"
+              icon={<Users className="h-4 w-4" />}
+              title="Equipo"
+              description="Agrega personas y decide que sedes ve cada quien."
+            />
+            <SettingsLink
+              href="/connections"
+              icon={<Link2 className="h-4 w-4" />}
+              title="Conexiones"
+              description="VTEX/Addi e inteligencia artificial. Alegra, Coordinadora y el certificado se configuran dentro de cada sede."
+            />
+          </>
+        ) : null}
       </section>
 
       {isOwner ? (

@@ -25,16 +25,20 @@ import { LogoutButton } from './_components/logout-button';
 import { NotificationBell } from './notification-bell';
 
 const NAV_ITEMS = [
-  { href: '/dashboard', label: 'Resumen', icon: LayoutDashboard },
-  { href: '/orders', label: 'Pedidos', icon: Boxes },
-  { href: '/connections', label: 'Conexiones', icon: Link2 },
-  { href: '/settings/team', label: 'Equipo', icon: Users },
-  { href: '/settings', label: 'Ajustes', icon: Settings },
+  { href: '/dashboard', label: 'Resumen', icon: LayoutDashboard, adminOnly: true },
+  { href: '/orders', label: 'Pedidos', icon: Boxes, adminOnly: true },
+  { href: '/connections', label: 'Conexiones', icon: Link2, adminOnly: true },
+  { href: '/settings/team', label: 'Equipo', icon: Users, adminOnly: true },
+  { href: '/settings', label: 'Ajustes', icon: Settings, adminOnly: false },
 ] as const;
 
 export function Sidebar() {
   const user = useCurrentUser();
   const pathname = usePathname();
+  // El operador solo trabaja sus sedes: nada de pedidos generales, conexiones,
+  // equipo ni resumen (cosas que no puede tocar). Ve sus sedes + Ajustes.
+  const isAdminUser = user?.role === 'OWNER' || user?.role === 'ADMIN';
+  const navItems = NAV_ITEMS.filter((i) => isAdminUser || !i.adminOnly);
   const { data: warehouses = [] } = useQuery({
     queryKey: ['warehouses'],
     queryFn: () => api.get<WarehouseSummary[]>('/v1/warehouses'),
@@ -69,7 +73,7 @@ export function Sidebar() {
       </div>
 
       <nav className="flex flex-col gap-0.5">
-        {NAV_ITEMS.map((item) => {
+        {navItems.map((item) => {
           const Icon = item.icon;
           const isActive =
             pathname === item.href ||
@@ -104,15 +108,17 @@ export function Sidebar() {
           <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Sedes
           </span>
-          <Link
-            href="/warehouses"
-            prefetch
-            className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-            aria-label="Gestionar sedes"
-            title="Gestionar sedes"
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </Link>
+          {isAdminUser ? (
+            <Link
+              href="/warehouses"
+              prefetch
+              className="rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Gestionar sedes"
+              title="Gestionar sedes"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Link>
+          ) : null}
         </div>
         <nav className="flex flex-col gap-0.5">
           {warehouses.length === 0 ? (
@@ -130,7 +136,10 @@ export function Sidebar() {
               const subItems = [
                 { href: base, label: 'Por preparar', icon: ListChecks },
                 { href: `${base}/facturados`, label: 'Facturados', icon: PackageCheck },
-                { href: `${base}/ajustes`, label: 'Ajustes', icon: Settings2 },
+                // Ajustes de la sede = conexiones/config: solo administradores.
+                ...(isAdminUser
+                  ? [{ href: `${base}/ajustes`, label: 'Ajustes', icon: Settings2 }]
+                  : []),
               ];
               return (
                 <div key={w.id}>
@@ -189,8 +198,16 @@ export function Sidebar() {
         <div className="mb-2 px-2">
           {user ? (
             <>
-              <p className="truncate text-xs font-medium">{user.email}</p>
-              <p className="text-[11px] text-muted-foreground">{user.role ?? 'Sin rol'}</p>
+              <p className="truncate text-xs font-medium">{user.name ?? user.email}</p>
+              <p className="text-[11px] text-muted-foreground">
+                {user.role === 'OWNER'
+                  ? 'Propietario'
+                  : user.role === 'ADMIN'
+                    ? 'Admin'
+                    : user.role === 'OPERATOR'
+                      ? 'Operador'
+                      : 'Sin rol'}
+              </p>
             </>
           ) : (
             <>

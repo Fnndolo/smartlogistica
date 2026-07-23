@@ -7,11 +7,12 @@ import { formatDistanceToNow } from 'date-fns/formatDistanceToNow';
 import { es } from 'date-fns/locale/es';
 import { AtSign, Bell } from 'lucide-react';
 import { toast } from 'sonner';
-import type { Inbox } from '@smartlogistica/shared';
+import type { Inbox, MemberSummary } from '@smartlogistica/shared';
 
 import { api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 
+import { initialsOf, splitMentions } from './orders/mention-utils';
 import { useOrdersStream } from './orders/use-orders-stream';
 
 /**
@@ -30,6 +31,15 @@ export function NotificationBell({ align = 'left' }: { align?: 'left' | 'right' 
     queryFn: () => api.get<Inbox>('/v1/orders/inbox'),
     staleTime: 10_000,
   });
+
+  // Miembros: para pintar menciones como chips y mostrar nombres (no correos).
+  const { data: members = [] } = useQuery({
+    queryKey: ['members'],
+    queryFn: () => api.get<MemberSummary[]>('/v1/members'),
+    staleTime: 5 * 60_000,
+  });
+  const nameOf = (raw: string): string =>
+    members.find((m) => m.email === raw)?.name ?? raw;
 
   // Refrescar la bandeja con cada evento de tiempo real (sin polling propio).
   useOrdersStream(
@@ -107,37 +117,55 @@ export function NotificationBell({ align = 'left' }: { align?: 'left' | 'right' 
                   Estas al dia. No hay mensajes sin leer.
                 </div>
               ) : (
-                items.map((it) => (
-                  <button
-                    key={it.orderId}
-                    type="button"
-                    onClick={() => goto(it.orderId, it.warehouseId)}
-                    className="flex w-full items-start gap-2.5 border-b border-border px-3 py-2.5 text-left transition-colors last:border-0 hover:bg-muted/60"
-                  >
-                    <span
-                      className={cn(
-                        'mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px]',
-                        it.mentioned
-                          ? 'bg-red-500/10 text-red-600 dark:text-red-400'
-                          : 'bg-primary/10 text-primary',
-                      )}
+                items.map((it) => {
+                  const author = nameOf(it.lastAuthor);
+                  const parts = splitMentions(it.preview, members);
+                  return (
+                    <button
+                      key={it.orderId}
+                      type="button"
+                      onClick={() => goto(it.orderId, it.warehouseId)}
+                      className="flex w-full items-start gap-2.5 border-b border-border px-3 py-2.5 text-left transition-colors last:border-0 hover:bg-muted/60"
                     >
-                      {it.mentioned ? <AtSign className="h-3.5 w-3.5" /> : it.unreadCount}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center justify-between gap-2">
-                        <span className="truncate text-sm font-medium">{it.customerName}</span>
-                        <span className="shrink-0 text-[10px] text-muted-foreground">
-                          {formatDistanceToNow(new Date(it.lastMessageAt), { locale: es, addSuffix: false })}
+                      {/* Avatar con iniciales de quien escribio (estilo Google Chat). */}
+                      <span className="relative mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
+                        {initialsOf(author)}
+                        {it.mentioned ? (
+                          <span className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-white ring-2 ring-popover">
+                            <AtSign className="h-2.5 w-2.5" />
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center justify-between gap-2">
+                          <span className="truncate text-sm font-medium">{it.customerName}</span>
+                          <span className="shrink-0 text-[10px] text-muted-foreground">
+                            {formatDistanceToNow(new Date(it.lastMessageAt), { locale: es, addSuffix: false })}
+                          </span>
+                        </span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          <span className="font-medium text-foreground/80">{author}: </span>
+                          {parts.map((p, i) =>
+                            p.kind === 'mention' ? (
+                              <span
+                                key={i}
+                                className="rounded bg-primary/10 px-1 font-medium text-primary"
+                              >
+                                {p.value}
+                              </span>
+                            ) : (
+                              <span key={i}>{p.value}</span>
+                            ),
+                          )}
+                        </span>
+                        <span className="mt-0.5 block text-[10px] text-muted-foreground/70">
+                          {it.externalId}
+                          {it.unreadCount > 1 ? ` · ${it.unreadCount} sin leer` : ''}
                         </span>
                       </span>
-                      <span className="block truncate text-[11px] text-muted-foreground">
-                        {it.mentioned ? 'Te mencionaron · ' : ''}
-                        {it.preview}
-                      </span>
-                    </span>
-                  </button>
-                ))
+                    </button>
+                  );
+                })
               )}
             </div>
           </div>
