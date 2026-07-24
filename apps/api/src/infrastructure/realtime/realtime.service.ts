@@ -9,9 +9,12 @@ import Redis from 'ioredis';
  * evolucionar a updates granulares mas adelante.
  */
 export interface OrderRealtimeEvent {
-  kind: 'order.upserted' | 'order.removed' | 'orders.refresh';
+  kind: 'order.upserted' | 'order.removed' | 'orders.refresh' | 'chat.message' | 'chat.reaction';
   externalId?: string;
   at: number;
+  // Campos extra de los eventos de chat (chat.message / chat.reaction): el
+  // cliente decide con ellos si el evento le concierne (sonido/notificacion).
+  [key: string]: unknown;
 }
 
 const CHANNEL_PREFIX = 'rt:tenant:';
@@ -65,9 +68,12 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
     this.logger.log('RealtimeService listening on Redis pub/sub');
   }
 
-  async publish(tenantId: string, event: Omit<OrderRealtimeEvent, 'at'>): Promise<void> {
+  async publish(
+    tenantId: string,
+    event: { kind: OrderRealtimeEvent['kind'] } & Record<string, unknown>,
+  ): Promise<void> {
     if (!this.publisher) return;
-    const payload: OrderRealtimeEvent = { ...event, at: Date.now() };
+    const payload = { ...event, at: Date.now() } as OrderRealtimeEvent;
     await this.publisher
       .publish(this.channel(tenantId), JSON.stringify(payload))
       .catch((err) => this.logger.warn({ err, tenantId }, 'Failed to publish realtime event'));

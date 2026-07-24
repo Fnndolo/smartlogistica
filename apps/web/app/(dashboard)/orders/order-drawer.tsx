@@ -53,6 +53,7 @@ import { cn } from '@/lib/utils';
 import { GuidePanel } from './guide-panel';
 import { InvoicePanel } from './invoice-panel';
 import { EmojiPicker } from './emoji-picker';
+import { bumpReaction, topReactions } from './reaction-frequents';
 import {
   activeMention,
   initialsOf,
@@ -459,18 +460,53 @@ function ConversacionTab({ orderId }: { orderId: string }) {
     send.mutate({ body, mentions: mentionsInText(body, members), replyToId: replyTo?.id });
   };
 
-  // Alternar una reaccion; el server responde el mensaje actualizado y se
-  // reemplaza en su sitio (sin refetch de toda la lista).
+  // Alternar una reaccion. OPTIMISTA: el chip cambia AL INSTANTE (como en
+  // Google Chat); el server confirma por detras y, si falla, se revierte.
   const react = useMutation({
     mutationFn: ({ messageId, emoji }: { messageId: string; emoji: string }) =>
       api.post<OrderMessage>(`/v1/orders/${orderId}/messages/${messageId}/reactions`, { emoji }),
+    onMutate: async ({ messageId, emoji }) => {
+      await qc.cancelQueries({ queryKey: ['order-messages', orderId] });
+      const prev = qc.getQueryData<OrderMessage[]>(['order-messages', orderId]);
+      const myName = me?.name ?? me?.email ?? 'Yo';
+      qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) =>
+        old.map((m) => {
+          if (m.id !== messageId) return m;
+          const existing = m.reactions.find((r) => r.emoji === emoji);
+          let reactions: OrderMessage['reactions'];
+          if (existing?.mine) {
+            // Quitar la mia.
+            reactions = m.reactions
+              .map((r) =>
+                r.emoji === emoji
+                  ? { ...r, count: r.count - 1, mine: false, users: r.users.filter((u) => u !== myName) }
+                  : r,
+              )
+              .filter((r) => r.count > 0);
+          } else if (existing) {
+            reactions = m.reactions.map((r) =>
+              r.emoji === emoji
+                ? { ...r, count: r.count + 1, mine: true, users: [...r.users, myName] }
+                : r,
+            );
+          } else {
+            reactions = [...m.reactions, { emoji, count: 1, mine: true, users: [myName] }];
+          }
+          if (!existing?.mine) bumpReaction(emoji);
+          return { ...m, reactions };
+        }),
+      );
+      return { prev };
+    },
     onSuccess: (updated) => {
       qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) =>
         old.map((m) => (m.id === updated.id ? updated : m)),
       );
     },
-    onError: (err) =>
-      toast.error(err instanceof ApiError ? err.message : 'No se pudo reaccionar'),
+    onError: (err, _vars, ctx) => {
+      if (ctx?.prev) qc.setQueryData(['order-messages', orderId], ctx.prev);
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo reaccionar');
+    },
   });
 
   // Recalcula si el cursor esta escribiendo una mencion (para el dropdown).
@@ -593,21 +629,24 @@ function ConversacionTab({ orderId }: { orderId: string }) {
           </div>
         ) : (
           messages.map((m, i) => {
-            const prev = messages[i - 1];
             // Mensajes seguidos del mismo autor (en <5 min) se ven como un
             // conjunto: nombre y hora solo en el primero (estilo Google Chat).
-            const grouped =
-              !!prev &&
-              prev.kind !== 'system' &&
-              m.kind !== 'system' &&
-              prev.authorId === m.authorId &&
-              new Date(m.createdAt).getTime() - new Date(prev.createdAt).getTime() < 5 * 60_000;
+            const joins = (a?: OrderMessage, b?: OrderMessage) =>
+              !!a &&
+              !!b &&
+              a.kind !== 'system' &&
+              b.kind !== 'system' &&
+              a.authorId === b.authorId &&
+              new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() < 5 * 60_000;
+            const grouped = joins(messages[i - 1], m);
+            const groupedWithNext = joins(m, messages[i + 1]);
             return (
               <MessageBubble
                 key={m.id}
                 message={m}
                 mine={m.authorId === me?.id}
                 grouped={grouped}
+                groupedWithNext={groupedWithNext}
                 quoted={
                   m.replyToId ? (messages.find((x) => x.id === m.replyToId) ?? null) : undefined
                 }
@@ -762,7 +801,9 @@ function ConversacionTab({ orderId }: { orderId: string }) {
               }}
               rows={1}
               placeholder="Escribe un mensaje... (@ para mencionar)"
-              className="max-h-32 min-h-[2.25rem] w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              // py-[7px]: 7+20+7+2 de borde = 36px exactos, la misma altura de
+              // los botones (h-9) -> clip, campo y enviar quedan al ras.
+              className="max-h-32 min-h-9 w-full resize-none rounded-md border border-input bg-background px-3 py-[7px] text-sm leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
           <Button size="icon" onClick={submit} disabled={!text.trim()} className="h-9 w-9">
@@ -917,6 +958,7 @@ function MessageBubble({
   message,
   mine,
   grouped = false,
+  groupedWithNext = false,
   quoted,
   matchByCode,
   members = [],
@@ -930,6 +972,8 @@ function MessageBubble({
   mine: boolean;
   /** Sigue a otro mensaje del mismo autor (<5 min): sin nombre/hora, pegado. */
   grouped?: boolean;
+  /** El siguiente mensaje continua este grupo (afecta los bordes). */
+  groupedWithNext?: boolean;
   /** Mensaje citado: undefined = no es respuesta; null = el original se borro. */
   quoted?: OrderMessage | null;
   matchByCode?: Map<string, CatalogMatch>;
@@ -957,6 +1001,16 @@ function MessageBubble({
   const nameOf = (userId: string, fallback: string) =>
     members.find((m) => m.userId === userId)?.name ?? fallback;
   const author = nameOf(message.authorId, message.authorName);
+
+  // Bordes estilo Google Chat: dentro de un conjunto, las esquinas que "tocan"
+  // al vecino del mismo autor van menos redondeadas; primera y ultima quedan
+  // bien redondas hacia afuera.
+  const radius = cn(
+    'rounded-2xl',
+    mine
+      ? cn(grouped && 'rounded-tr-md', groupedWithNext && 'rounded-br-md')
+      : cn(grouped && 'rounded-tl-md', groupedWithNext && 'rounded-bl-md'),
+  );
 
   // Bloque de cita (respuesta): autor + fragmento del mensaje original.
   const quote =
@@ -991,10 +1045,9 @@ function MessageBubble({
   ) : (
     <div
       className={cn(
-        'max-w-[85%] rounded-2xl px-3.5 py-2 text-sm',
-        mine
-          ? 'rounded-br-sm bg-primary text-primary-foreground'
-          : 'rounded-bl-sm bg-muted text-foreground',
+        'max-w-[85%] px-3.5 py-2 text-sm',
+        radius,
+        mine ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground',
       )}
     >
       {quote}
@@ -1008,62 +1061,83 @@ function MessageBubble({
     <div
       className={cn(
         'group flex flex-col first:mt-0',
-        grouped ? 'mt-1' : 'mt-4',
+        grouped ? 'mt-0.5' : 'mt-4',
         mine ? 'items-end' : 'items-start',
       )}
     >
       {/* Cabecera del grupo: nombre (otros) + hora, UNA vez por conjunto. */}
       {!grouped ? (
-        <span className="mb-0.5 px-1 text-[11px] text-muted-foreground">
+        <span className="mb-1 px-1 text-[11px] text-muted-foreground">
           {!mine ? <span className="font-semibold text-foreground/80">{author}</span> : null}
           {!mine ? ' · ' : ''}
           {format(new Date(message.createdAt), 'd MMM, HH:mm', { locale: es })}
         </span>
       ) : null}
 
-      <div className={cn('flex max-w-full items-center gap-1', mine ? 'flex-row' : 'flex-row-reverse')}>
-        {/* Acciones (aparecen al pasar el mouse): responder, reaccionar, eliminar. */}
-        <div
-          className={cn(
-            'flex shrink-0 items-center gap-0.5 opacity-0 transition focus-within:opacity-100 group-hover:opacity-100',
-            mine ? 'flex-row' : 'flex-row-reverse',
-          )}
-        >
-          {onReply ? (
-            <button
-              type="button"
-              onClick={onReply}
-              className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-              aria-label="Responder"
-              title="Responder"
-            >
-              <Reply className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
-          {onReact ? (
-            <button
-              type="button"
-              onClick={(e) => onReact({ clientX: e.clientX, clientY: e.clientY })}
-              className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-              aria-label="Reaccionar"
-              title="Reaccionar"
-            >
-              <SmilePlus className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
-          {canDelete && onDelete ? (
-            <button
-              type="button"
-              onClick={onDelete}
-              className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-red-600 dark:hover:text-red-400"
-              aria-label="Eliminar mensaje"
-              title="Eliminar mensaje"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
-          ) : null}
-        </div>
+      {/* La burbuja va sola (sin gutter de botones): TODAS quedan al ras.
+          Las acciones flotan encima al pasar el mouse, estilo Google Chat. */}
+      <div className="relative max-w-full">
         {bubble}
+
+        {(onReply || onReact || (canDelete && onDelete)) ? (
+          <div
+            className={cn(
+              'pointer-events-none absolute -top-4 z-10 flex items-center gap-0.5 rounded-lg border border-border bg-popover px-1 py-0.5 opacity-0 shadow-md transition-opacity duration-100',
+              'group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
+              mine ? 'right-1' : 'left-1',
+            )}
+          >
+            {onToggleReaction
+              ? topReactions(3).map((e) => (
+                  <button
+                    key={e}
+                    type="button"
+                    onClick={() => onToggleReaction(e)}
+                    className="rounded-md px-1 py-0.5 text-base leading-none transition-transform hover:scale-125 hover:bg-muted"
+                    title={`Reaccionar ${e}`}
+                  >
+                    {e}
+                  </button>
+                ))
+              : null}
+            {onReact ? (
+              <>
+                <span className="mx-0.5 h-4 w-px bg-border" />
+                <button
+                  type="button"
+                  onClick={(e) => onReact({ clientX: e.clientX, clientY: e.clientY })}
+                  className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  aria-label="Mas emojis"
+                  title="Más emojis"
+                >
+                  <SmilePlus className="h-3.5 w-3.5" />
+                </button>
+              </>
+            ) : null}
+            {onReply ? (
+              <button
+                type="button"
+                onClick={onReply}
+                className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                aria-label="Responder"
+                title="Responder"
+              >
+                <Reply className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+            {canDelete && onDelete ? (
+              <button
+                type="button"
+                onClick={onDelete}
+                className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-red-600 dark:hover:text-red-400"
+                aria-label="Eliminar mensaje"
+                title="Eliminar mensaje"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       {/* Reacciones: chips bajo la burbuja (click = alternar la mia). */}

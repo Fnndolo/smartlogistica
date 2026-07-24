@@ -308,15 +308,15 @@ export class OrdersService {
     input: CreateOrderMessageInput,
     auth: AuthContext,
   ): Promise<OrderMessageDto> {
-    await this.loadAccessibleOrder(orderId, auth);
+    const order = await this.loadAccessibleOrder(orderId, auth);
     const { tenantId, prisma } = getTenantContext();
     const mentions = await this.validMentions(tenantId, input.mentions);
     // La cita solo vale si el mensaje citado es de ESTE pedido.
-    const replyToId = input.replyToId
-      ? ((await prisma.orderMessage.findFirst({
+    const replyTo = input.replyToId
+      ? await prisma.orderMessage.findFirst({
           where: { id: input.replyToId, orderId },
-          select: { id: true },
-        }))?.id ?? null)
+          select: { id: true, authorId: true },
+        })
       : null;
     const msg = await prisma.orderMessage.create({
       data: {
@@ -326,12 +326,33 @@ export class OrdersService {
         kind: 'text',
         body: input.body,
         mentions,
-        replyToId,
+        replyToId: replyTo?.id ?? null,
       },
     });
     // Quien escribe obviamente ya "leyo" el hilo -> marcar leido para no contarse a si mismo.
     await this.touchRead(orderId, auth.userId);
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+    // Evento detallado para notificaciones (sonido/notif del navegador): el
+    // cliente decide si le concierne (mencionado, le respondieron, o participa
+    // en la conversacion).
+    const participants = await prisma.orderMessage.findMany({
+      where: { orderId, kind: { not: 'system' } },
+      select: { authorId: true },
+      distinct: ['authorId'],
+    });
+    await this.realtime.publish(tenantId, {
+      kind: 'chat.message',
+      orderId,
+      externalId: order.externalId,
+      warehouseId: order.warehouseId,
+      messageId: msg.id,
+      authorId: auth.userId,
+      authorName: displayName(auth),
+      body: (input.body ?? '').slice(0, 140),
+      mentions,
+      replyToAuthorId: replyTo?.authorId ?? null,
+      participantIds: participants.map((p) => p.authorId),
+    });
     return this.toMessage(msg, auth.userId);
   }
 
@@ -342,7 +363,7 @@ export class OrdersService {
     emoji: string,
     auth: AuthContext,
   ): Promise<OrderMessageDto> {
-    await this.loadAccessibleOrder(orderId, auth);
+    const order = await this.loadAccessibleOrder(orderId, auth);
     const { tenantId, prisma } = getTenantContext();
     const msg = await prisma.orderMessage.findUnique({ where: { id: messageId } });
     if (!msg || msg.orderId !== orderId) throw new NotFoundException('Mensaje no encontrado');
@@ -357,6 +378,19 @@ export class OrdersService {
     } else {
       await prisma.messageReaction.create({
         data: { messageId, userId: auth.userId, userName: displayName(auth), emoji },
+      });
+      // Notificar SOLO al reaccionar (no al quitar): el autor del mensaje
+      // recibe sonido/notificacion en su cliente.
+      await this.realtime.publish(tenantId, {
+        kind: 'chat.reaction',
+        orderId,
+        externalId: order.externalId,
+        warehouseId: order.warehouseId,
+        messageId,
+        emoji,
+        reactorId: auth.userId,
+        reactorName: displayName(auth),
+        messageAuthorId: msg.authorId,
       });
     }
 

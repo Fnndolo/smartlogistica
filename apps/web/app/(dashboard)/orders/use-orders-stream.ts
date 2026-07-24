@@ -17,7 +17,13 @@ import { useEffect, useRef, useState } from 'react';
  */
 const STALE_MS = 60_000;
 
-export function useOrdersStream(onChange: () => void): boolean {
+/** Evento de tiempo real tal como llega del server (kind + campos extra). */
+export interface RealtimeEvent {
+  kind: string;
+  [key: string]: unknown;
+}
+
+export function useOrdersStream(onChange: (event?: RealtimeEvent) => void): boolean {
   const [connected, setConnected] = useState(false);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
@@ -47,11 +53,18 @@ export function useOrdersStream(onChange: () => void): boolean {
         setConnected(true);
         armWatchdog();
       };
-      // Eventos de datos (sin type) -> refrescar tabla.
-      es.onmessage = () => {
+      // Eventos de datos (sin type) -> refrescar tabla. El payload se entrega
+      // al caller (para notificaciones de chat); si no parsea, va undefined.
+      es.onmessage = (ev) => {
         setConnected(true);
         armWatchdog();
-        onChangeRef.current();
+        let data: RealtimeEvent | undefined;
+        try {
+          data = JSON.parse(ev.data as string) as RealtimeEvent;
+        } catch {
+          data = undefined;
+        }
+        onChangeRef.current(data);
       };
       // Heartbeat tipado: NO refresca, solo confirma que el server vive.
       es.addEventListener('ping', () => {
