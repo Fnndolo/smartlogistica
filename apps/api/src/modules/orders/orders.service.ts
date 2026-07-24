@@ -346,6 +346,7 @@ export class OrdersService {
       kind: 'chat.message',
       orderId,
       externalId: order.externalId,
+      customerName: order.customerName,
       warehouseId: order.warehouseId,
       messageId: msg.id,
       authorId: auth.userId,
@@ -357,7 +358,8 @@ export class OrdersService {
     });
 
     // WEB PUSH (app CERRADA): mencionados con titulo especial; respondido y
-    // demas participantes con el generico. Nunca al propio autor.
+    // demas participantes con el generico. Nunca al propio autor. El titulo
+    // lleva el NOMBRE DEL CLIENTE del pedido (no el MKT).
     const url = order.warehouseId
       ? `/warehouses/${order.warehouseId}?order=${orderId}`
       : `/orders?order=${orderId}`;
@@ -370,12 +372,12 @@ export class OrdersService {
     );
     void Promise.all([
       this.push.sendToUsers([...mentioned], {
-        title: `${displayName(auth)} te mencionó · ${order.externalId}`,
+        title: `${displayName(auth)} te mencionó · ${order.customerName}`,
         body: preview,
         url,
       }),
       this.push.sendToUsers([...others], {
-        title: `${displayName(auth)} · ${order.externalId}`,
+        title: `${displayName(auth)} · ${order.customerName}`,
         body: preview,
         url,
       }),
@@ -413,6 +415,7 @@ export class OrdersService {
         kind: 'chat.reaction',
         orderId,
         externalId: order.externalId,
+        customerName: order.customerName,
         warehouseId: order.warehouseId,
         messageId,
         emoji,
@@ -424,7 +427,7 @@ export class OrdersService {
         // WEB PUSH al autor del mensaje (aunque tenga la app cerrada).
         void this.push
           .sendToUsers([msg.authorId], {
-            title: `${displayName(auth)} reaccionó ${emoji} · ${order.externalId}`,
+            title: `${displayName(auth)} reaccionó ${emoji} · ${order.customerName}`,
             body: msg.body ? `A: "${msg.body.slice(0, 100)}"` : 'A tu mensaje',
             url: order.warehouseId
               ? `/warehouses/${order.warehouseId}?order=${orderId}`

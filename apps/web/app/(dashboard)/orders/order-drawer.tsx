@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns/format';
@@ -229,7 +229,9 @@ function DrawerContent({
       {/* Content */}
       <div className="min-h-0 flex-1 overflow-y-auto">
         {tab === 'detalle' ? <DetalleTab order={order} detail={detail} /> : null}
-        {tab === 'conversacion' ? <ConversacionTab orderId={order.id} /> : null}
+        {tab === 'conversacion' ? (
+          <ConversacionTab orderId={order.id} initialUnread={order.unreadCount ?? 0} />
+        ) : null}
         {tab === 'facturar' ? <InvoicePanel orderId={order.id} /> : null}
         {tab === 'guia' ? <GuidePanel orderId={order.id} /> : null}
         {tab === 'actividad' ? <ActividadTab orderId={order.id} /> : null}
@@ -331,9 +333,20 @@ function DetalleTab({ order, detail }: { order: OrderSummary; detail: OrderDetai
 
 // === Tab: Conversacion ===
 
-function ConversacionTab({ orderId }: { orderId: string }) {
+function ConversacionTab({
+  orderId,
+  initialUnread = 0,
+}: {
+  orderId: string;
+  initialUnread?: number;
+}) {
   const qc = useQueryClient();
   const me = useCurrentUser();
+  // Cuantos mensajes tenia SIN leer al abrir (congelado: markRead lo pone en 0
+  // al instante, pero el separador "No leidos" debe quedarse donde estaba).
+  const [unreadAtOpen] = useState(initialUnread);
+  const [unreadBoundaryId, setUnreadBoundaryId] = useState<string | null>(null);
+  const didInitialScroll = useRef(false);
   const [text, setText] = useState('');
   const [uploading, setUploading] = useState(false);
   const [uploadLabel, setUploadLabel] = useState('Subiendo...');
@@ -401,7 +414,36 @@ function ConversacionTab({ orderId }: { orderId: string }) {
   });
   const matchByCode = new Map(matchList.map((m) => [m.code, m]));
 
+  // Primera carga: fijar el separador "No leidos" (el N-esimo mensaje ajeno
+  // contando desde el final) y llevar el scroll AHI (como Google Chat); si no
+  // hay nada sin leer, al fondo. Las llegadas posteriores van al fondo normal.
   useEffect(() => {
+    if (didInitialScroll.current || !me || messages.length === 0) return;
+    didInitialScroll.current = true;
+    let boundary: string | null = null;
+    if (unreadAtOpen > 0) {
+      let count = 0;
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i]!;
+        if (m.authorId !== me.id && m.kind !== 'system') {
+          count += 1;
+          if (count === unreadAtOpen) {
+            boundary = m.id;
+            break;
+          }
+        }
+      }
+    }
+    setUnreadBoundaryId(boundary);
+    requestAnimationFrame(() => {
+      const el = boundary ? document.getElementById('chat-unread-divider') : null;
+      if (el) el.scrollIntoView({ block: 'center' });
+      else scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    });
+  }, [messages, me, unreadAtOpen]);
+
+  useEffect(() => {
+    if (!didInitialScroll.current) return;
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [messages.length, uploading]);
 
@@ -638,11 +680,23 @@ function ConversacionTab({ orderId }: { orderId: string }) {
               b.kind !== 'system' &&
               a.authorId === b.authorId &&
               new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() < 5 * 60_000;
-            const grouped = joins(messages[i - 1], m);
+            const isUnreadBoundary = m.id === unreadBoundaryId;
+            // El separador "No leidos" rompe el conjunto: ese mensaje muestra
+            // su cabecera (nombre/hora) aunque viniera agrupado.
+            const grouped = !isUnreadBoundary && joins(messages[i - 1], m);
             const groupedWithNext = joins(m, messages[i + 1]);
             return (
+              <Fragment key={m.id}>
+                {isUnreadBoundary ? (
+                  <div id="chat-unread-divider" className="mt-4 flex items-center gap-3">
+                    <span className="h-px flex-1 rounded bg-primary/50" />
+                    <span className="text-[11px] font-semibold tracking-wide text-primary">
+                      No leídos
+                    </span>
+                    <span className="h-px flex-1 rounded bg-primary/50" />
+                  </div>
+                ) : null}
               <MessageBubble
-                key={m.id}
                 message={m}
                 mine={m.authorId === me?.id}
                 grouped={grouped}
@@ -662,6 +716,7 @@ function ConversacionTab({ orderId }: { orderId: string }) {
                 }
                 onToggleReaction={(emoji) => react.mutate({ messageId: m.id, emoji })}
               />
+              </Fragment>
             );
           })
         )}

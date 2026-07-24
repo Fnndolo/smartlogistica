@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 
@@ -32,6 +32,10 @@ function urlBase64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
 export function ChatNotifications() {
   const me = useCurrentUser();
   const router = useRouter();
+  // true = este dispositivo recibe WEB PUSH del servidor -> las notificaciones
+  // del sistema llegan por ahi (app abierta o cerrada) y el cliente NO crea
+  // otras (evita duplicados y el reemplazo silencioso por tag).
+  const pushActiveRef = useRef(false);
 
   useEffect(() => {
     ensureAudioReady();
@@ -55,6 +59,7 @@ export function ChatNotifications() {
           }));
         // Registrar/refrescar en el server (liga el dispositivo al usuario actual).
         await api.post('/v1/push/subscriptions', sub.toJSON());
+        pushActiveRef.current = true;
       } catch {
         /* sin soporte o rechazado: el resto de notificaciones sigue andando */
       }
@@ -82,21 +87,21 @@ export function ChatNotifications() {
     };
   }, []);
 
+  // Notificacion del sistema SOLO como respaldo cuando el push no quedo
+  // activo en este dispositivo (p. ej. VAPID sin configurar). Con push activo,
+  // el servidor ya manda la notificacion (y se apilan como WhatsApp).
   const notifyBrowser = useCallback(
     (title: string, body: string, target: string) => {
+      if (pushActiveRef.current) return;
       if (typeof window === 'undefined' || !('Notification' in window)) return;
       if (Notification.permission !== 'granted') return;
       const options: NotificationOptions & { data: { url: string } } = {
         body,
         icon: '/icons/icon-192.png',
         badge: '/icons/icon-192.png',
-        tag: target, // agrupa notifs del mismo pedido
+        // SIN tag: que se apilen, nunca reemplazarse en silencio.
         data: { url: target },
       };
-      // NATIVA de verdad: en Android `new Notification()` NO existe (lanza
-      // error y solo se veia el toast in-app). La via correcta —movil Y
-      // escritorio— es el Service Worker: sale como notificacion del SISTEMA
-      // y el click lo maneja el SW (abre el pedido en su conversacion).
       const viaSw = async (): Promise<boolean> => {
         if (!('serviceWorker' in navigator)) return false;
         const reg = await navigator.serviceWorker.getRegistration();
@@ -141,7 +146,8 @@ export function ChatNotifications() {
         if (!mentioned && !replied && !participating) return;
 
         const author = String(event.authorName ?? 'Alguien');
-        const externalId = String(event.externalId ?? '');
+        // En notificaciones va el NOMBRE DEL CLIENTE del pedido, no el MKT.
+        const customer = String(event.customerName ?? event.externalId ?? '');
         const body = String(event.body ?? '');
         const target = event.warehouseId
           ? `/warehouses/${String(event.warehouseId)}?order=${String(event.orderId)}`
@@ -149,14 +155,14 @@ export function ChatNotifications() {
 
         playNotificationSound();
         notifyBrowser(
-          mentioned ? `${author} te mencionó · ${externalId}` : `${author} · ${externalId}`,
+          mentioned ? `${author} te mencionó · ${customer}` : `${author} · ${customer}`,
           body,
           target,
         );
         // El toast de menciones ya lo da la pagina de Menciones; aqui solo
         // respuestas y mensajes de conversaciones donde participo.
         if (!mentioned && document.visibilityState === 'visible') {
-          toast(replied ? `${author} respondió tu mensaje` : `${author} · ${externalId}`, {
+          toast(replied ? `${author} respondió tu mensaje` : `${author} · ${customer}`, {
             description: body,
           });
         }
@@ -168,15 +174,15 @@ export function ChatNotifications() {
         if (String(event.reactorId ?? '') === me.id) return; // reaccione yo
         const reactor = String(event.reactorName ?? 'Alguien');
         const emoji = String(event.emoji ?? '');
-        const externalId = String(event.externalId ?? '');
+        const customer = String(event.customerName ?? event.externalId ?? '');
         const target = event.warehouseId
           ? `/warehouses/${String(event.warehouseId)}?order=${String(event.orderId)}`
           : `/orders?order=${String(event.orderId)}`;
 
         playNotificationSound();
-        notifyBrowser(`${reactor} reaccionó ${emoji}`, `A tu mensaje · ${externalId}`, target);
+        notifyBrowser(`${reactor} reaccionó ${emoji} · ${customer}`, 'A tu mensaje', target);
         if (document.visibilityState === 'visible') {
-          toast(`${reactor} reaccionó ${emoji} a tu mensaje`, { description: externalId });
+          toast(`${reactor} reaccionó ${emoji} a tu mensaje`, { description: customer });
         }
       }
     },

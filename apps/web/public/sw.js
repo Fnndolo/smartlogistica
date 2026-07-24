@@ -14,7 +14,7 @@
  * Version del cache: subirla PURGA el cache viejo en `activate` (recupera a los
  * usuarios que quedaron con un cache envenenado de una version anterior).
  */
-const CACHE = 'smartlog-static-v4';
+const CACHE = 'smartlog-static-v5';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -52,7 +52,9 @@ self.addEventListener('push', (event) => {
       body: data.body || '',
       icon: '/icons/icon-192.png',
       badge: '/icons/icon-192.png',
-      tag: data.url || 'smartlogistica',
+      // SIN tag: cada notificacion se APILA (como WhatsApp/Google Chat).
+      // Con tag, Android REEMPLAZABA la anterior EN SILENCIO -> parecia que
+      // "no llegaba" la noti del segundo mensaje.
       data: { url: data.url || '/' },
     }),
   );
