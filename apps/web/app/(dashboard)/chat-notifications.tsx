@@ -44,21 +44,40 @@ export function ChatNotifications() {
     (title: string, body: string, target: string) => {
       if (typeof window === 'undefined' || !('Notification' in window)) return;
       if (Notification.permission !== 'granted') return;
-      try {
-        const n = new Notification(title, {
-          body,
-          icon: '/icons/icon-192.png',
-          badge: '/icons/icon-192.png',
-          tag: target, // agrupa notifs del mismo pedido
+      const options: NotificationOptions & { data: { url: string } } = {
+        body,
+        icon: '/icons/icon-192.png',
+        badge: '/icons/icon-192.png',
+        tag: target, // agrupa notifs del mismo pedido
+        data: { url: target },
+      };
+      // NATIVA de verdad: en Android `new Notification()` NO existe (lanza
+      // error y solo se veia el toast in-app). La via correcta —movil Y
+      // escritorio— es el Service Worker: sale como notificacion del SISTEMA
+      // y el click lo maneja el SW (abre el pedido en su conversacion).
+      const viaSw = async (): Promise<boolean> => {
+        if (!('serviceWorker' in navigator)) return false;
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (!reg) return false;
+        await reg.showNotification(title, options);
+        return true;
+      };
+      void viaSw()
+        .catch(() => false)
+        .then((shown) => {
+          if (shown) return;
+          // Fallback escritorio sin SW activo.
+          try {
+            const n = new Notification(title, options);
+            n.onclick = () => {
+              window.focus();
+              router.push(target);
+              n.close();
+            };
+          } catch {
+            /* sin soporte: el sonido + toast ya avisaron */
+          }
         });
-        n.onclick = () => {
-          window.focus();
-          router.push(target);
-          n.close();
-        };
-      } catch {
-        /* algunos navegadores moviles exigen SW para Notification: se ignora */
-      }
     },
     [router],
   );

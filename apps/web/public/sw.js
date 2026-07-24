@@ -14,7 +14,7 @@
  * Version del cache: subirla PURGA el cache viejo en `activate` (recupera a los
  * usuarios que quedaron con un cache envenenado de una version anterior).
  */
-const CACHE = 'smartlog-static-v2';
+const CACHE = 'smartlog-static-v3';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -31,6 +31,25 @@ self.addEventListener('activate', (event) => {
       .keys()
       .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
+  );
+});
+
+/**
+ * Click en una notificacion NATIVA (mostrada via registration.showNotification):
+ * enfoca una pestana/ventana de la app si existe y navega al pedido; si no,
+ * abre una nueva. `data.url` viene del cliente al crear la notificacion.
+ */
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || '/';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      const existing = list.find((c) => 'focus' in c);
+      if (existing) {
+        return existing.focus().then((c) => ('navigate' in c ? c.navigate(url) : undefined));
+      }
+      return self.clients.openWindow(url);
+    }),
   );
 });
 

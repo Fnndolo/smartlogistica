@@ -694,9 +694,10 @@ function ConversacionTab({ orderId }: { orderId: string }) {
             </button>
           </div>
         ) : null}
-        <div className="flex items-end gap-2">
+        {/* items-center + h-9 FIJO en los tres: imposible que queden dispares. */}
+        <div className="flex items-center gap-2">
           {/* Adjuntar foto (IMEI / serial) */}
-          <div className="relative">
+          <div className="relative h-9">
             <Button
               size="icon"
               variant="ghost"
@@ -801,9 +802,9 @@ function ConversacionTab({ orderId }: { orderId: string }) {
               }}
               rows={1}
               placeholder="Escribe un mensaje... (@ para mencionar)"
-              // py-[7px]: 7+20+7+2 de borde = 36px exactos, la misma altura de
-              // los botones (h-9) -> clip, campo y enviar quedan al ras.
-              className="max-h-32 min-h-9 w-full resize-none rounded-md border border-input bg-background px-3 py-[7px] text-sm leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              // h-9 EXACTO (igual que los botones) + block (los textarea son
+              // inline por defecto y el baseline los descuadra unos pixeles).
+              className="block h-9 w-full resize-none rounded-md border border-input bg-background px-3 py-[7px] text-sm leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
           <Button size="icon" onClick={submit} disabled={!text.trim()} className="h-9 w-9">
@@ -1045,7 +1046,7 @@ function MessageBubble({
   ) : (
     <div
       className={cn(
-        'max-w-[85%] px-3.5 py-2 text-sm',
+        'px-3.5 py-2 text-sm',
         radius,
         mine ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground',
       )}
@@ -1075,8 +1076,11 @@ function MessageBubble({
       ) : null}
 
       {/* La burbuja va sola (sin gutter de botones): TODAS quedan al ras.
-          Las acciones flotan encima al pasar el mouse, estilo Google Chat. */}
-      <div className="relative max-w-full">
+          Las acciones flotan encima al pasar el mouse, estilo Google Chat.
+          OJO: el tope de ancho (85%) vive AQUI, en el wrapper — si viviera en
+          la burbuja seria 85% del propio wrapper (que encoge al contenido) y
+          los mensajes se estrechaban en cascada hasta cortarse. */}
+      <div className="relative max-w-[85%]">
         {bubble}
 
         {(onReply || onReact || (canDelete && onDelete)) ? (
