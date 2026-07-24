@@ -42,6 +42,7 @@ import { isAdmin } from '../../common/rbac';
 import type { AuthContext } from '../../common/types/authenticated-request';
 import { getTenantContext } from '../../infrastructure/tenant-context';
 import { ControlPlaneService } from '../../infrastructure/prisma/control-plane.service';
+import { PushService } from '../../infrastructure/push/push.service';
 import { RealtimeService } from '../../infrastructure/realtime/realtime.service';
 import { CatalogService } from '../../infrastructure/catalog/catalog.service';
 import { StorageService } from '../../infrastructure/storage/storage.service';
@@ -102,6 +103,7 @@ interface UnreadInfo {
 export class OrdersService {
   constructor(
     private readonly realtime: RealtimeService,
+    private readonly push: PushService,
     private readonly warehouses: WarehousesService,
     private readonly storage: StorageService,
     private readonly ai: AiConnectionService,
@@ -353,6 +355,32 @@ export class OrdersService {
       replyToAuthorId: replyTo?.authorId ?? null,
       participantIds: participants.map((p) => p.authorId),
     });
+
+    // WEB PUSH (app CERRADA): mencionados con titulo especial; respondido y
+    // demas participantes con el generico. Nunca al propio autor.
+    const url = order.warehouseId
+      ? `/warehouses/${order.warehouseId}?order=${orderId}`
+      : `/orders?order=${orderId}`;
+    const preview = (input.body ?? '').slice(0, 120);
+    const mentioned = new Set(mentions.filter((id) => id !== auth.userId));
+    const others = new Set(
+      [...participants.map((p) => p.authorId), replyTo?.authorId ?? '']
+        .filter(Boolean)
+        .filter((id) => id !== auth.userId && !mentioned.has(id)),
+    );
+    void Promise.all([
+      this.push.sendToUsers([...mentioned], {
+        title: `${displayName(auth)} te mencionó · ${order.externalId}`,
+        body: preview,
+        url,
+      }),
+      this.push.sendToUsers([...others], {
+        title: `${displayName(auth)} · ${order.externalId}`,
+        body: preview,
+        url,
+      }),
+    ]).catch(() => undefined);
+
     return this.toMessage(msg, auth.userId);
   }
 
@@ -392,6 +420,18 @@ export class OrdersService {
         reactorName: displayName(auth),
         messageAuthorId: msg.authorId,
       });
+      if (msg.authorId !== auth.userId) {
+        // WEB PUSH al autor del mensaje (aunque tenga la app cerrada).
+        void this.push
+          .sendToUsers([msg.authorId], {
+            title: `${displayName(auth)} reaccionó ${emoji} · ${order.externalId}`,
+            body: msg.body ? `A: "${msg.body.slice(0, 100)}"` : 'A tu mensaje',
+            url: order.warehouseId
+              ? `/warehouses/${order.warehouseId}?order=${orderId}`
+              : `/orders?order=${orderId}`,
+          })
+          .catch(() => undefined);
+      }
     }
 
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });

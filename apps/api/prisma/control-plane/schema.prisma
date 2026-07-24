@@ -37,8 +37,25 @@ model User {
   updatedAt     DateTime     @updatedAt
   memberships   Membership[]
   sessions      Session[]
+  pushSubs      PushSubscription[]
 
   @@index([createdAt])
+}
+
+/// Suscripcion Web Push de un dispositivo/navegador del usuario: permite
+/// notificar (menciones, respuestas, reacciones) con la app CERRADA.
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model Tenant {

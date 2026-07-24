@@ -14,7 +14,7 @@
  * Version del cache: subirla PURGA el cache viejo en `activate` (recupera a los
  * usuarios que quedaron con un cache envenenado de una version anterior).
  */
-const CACHE = 'smartlog-static-v3';
+const CACHE = 'smartlog-static-v4';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -31,6 +31,30 @@ self.addEventListener('activate', (event) => {
       .keys()
       .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
+  );
+});
+
+/**
+ * WEB PUSH: el servidor manda la notificacion aunque la app este CERRADA —
+ * el sistema despierta a este service worker y aqui se muestra como
+ * notificacion NATIVA. Payload: {title, body, url}.
+ */
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = { title: 'SmartLogistica', body: event.data ? event.data.text() : '' };
+  }
+  const title = data.title || 'SmartLogistica';
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: data.body || '',
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      tag: data.url || 'smartlogistica',
+      data: { url: data.url || '/' },
+    }),
   );
 });
 

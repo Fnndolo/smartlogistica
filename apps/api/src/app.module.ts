@@ -9,6 +9,7 @@ import { TenantInterceptor } from './common/interceptors/tenant.interceptor';
 import { CryptoModule } from './infrastructure/crypto/crypto.module';
 import { PrismaModule } from './infrastructure/prisma/prisma.module';
 import { QueueModule } from './infrastructure/queue/queue.module';
+import { PushModule } from './infrastructure/push/push.module';
 import { RealtimeModule } from './infrastructure/realtime/realtime.module';
 import { StorageModule } from './infrastructure/storage/storage.module';
 import { CatalogModule } from './infrastructure/catalog/catalog.module';
@@ -63,6 +64,7 @@ import { WebhooksModule } from './modules/webhooks/webhooks.module';
     PrismaModule,
     QueueModule,
     RealtimeModule,
+    PushModule,
     StorageModule,
     CatalogModule,
     HealthModule,

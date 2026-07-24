@@ -5,9 +5,21 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 
 import { useCurrentUser } from '@/components/providers/current-user-provider';
+import { api } from '@/lib/api-client';
 import { ensureAudioReady, playNotificationSound } from '@/lib/notification-sound';
 
 import { useOrdersStream, type RealtimeEvent } from './orders/use-orders-stream';
+
+/** La llave publica VAPID (base64url) al formato que pide pushManager.subscribe. */
+function urlBase64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
+  const padding = '='.repeat((4 - (base64.length % 4)) % 4);
+  const b64 = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = window.atob(b64);
+  // ArrayBuffer explicito: BufferSource no admite SharedArrayBuffer en TS.
+  const out = new Uint8Array(new ArrayBuffer(raw.length));
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
 
 /**
  * Notificaciones de chat estilo Google Chat (montado UNA vez en el layout):
@@ -23,12 +35,42 @@ export function ChatNotifications() {
 
   useEffect(() => {
     ensureAudioReady();
+    if (typeof window === 'undefined' || !('Notification' in window)) return;
+
+    // Suscribirse a WEB PUSH: asi el servidor puede notificar con la app
+    // CERRADA (el push despierta al service worker del dispositivo).
+    const subscribePush = async () => {
+      try {
+        if (Notification.permission !== 'granted') return;
+        if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+        const { key } = await api.get<{ key: string }>('/v1/push/vapid-key');
+        if (!key) return; // push apagado en el servidor
+        const reg = await navigator.serviceWorker.ready;
+        const existing = await reg.pushManager.getSubscription();
+        const sub =
+          existing ??
+          (await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(key),
+          }));
+        // Registrar/refrescar en el server (liga el dispositivo al usuario actual).
+        await api.post('/v1/push/subscriptions', sub.toJSON());
+      } catch {
+        /* sin soporte o rechazado: el resto de notificaciones sigue andando */
+      }
+    };
+
+    if (Notification.permission === 'granted') {
+      void subscribePush();
+      return;
+    }
+    if (Notification.permission !== 'default') return;
     // Pedir permiso de notificaciones con el primer gesto (los navegadores
     // exigen interaccion; pedirlo "en frio" lo bloquea en silencio).
-    if (typeof window === 'undefined' || !('Notification' in window)) return;
-    if (Notification.permission !== 'default') return;
     const ask = () => {
-      void Notification.requestPermission();
+      void Notification.requestPermission().then((p) => {
+        if (p === 'granted') void subscribePush();
+      });
       window.removeEventListener('pointerdown', ask);
       window.removeEventListener('keydown', ask);
     };

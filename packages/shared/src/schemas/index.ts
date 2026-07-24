@@ -2,6 +2,7 @@ export * from './auth.schema';
 export * from './vtex-connection.schema';
 export * from './order.schema';
 export * from './order-thread.schema';
+export * from './push.schema';
 export * from './warehouse.schema';
 export * from './alegra.schema';
 export * from './ai-connection.schema';
