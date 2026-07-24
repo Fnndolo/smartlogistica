@@ -23,8 +23,10 @@ import {
   Phone,
   PlusCircle,
   ReceiptText,
+  Reply,
   ScanLine,
   Send,
+  SmilePlus,
   Trash2,
   Truck,
   Undo2,
@@ -50,6 +52,7 @@ import { cn } from '@/lib/utils';
 
 import { GuidePanel } from './guide-panel';
 import { InvoicePanel } from './invoice-panel';
+import { EmojiPicker } from './emoji-picker';
 import {
   activeMention,
   initialsOf,
@@ -335,6 +338,10 @@ function ConversacionTab({ orderId }: { orderId: string }) {
   const [uploadLabel, setUploadLabel] = useState('Subiendo...');
   const [attachOpen, setAttachOpen] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // Responder/citar: el mensaje al que voy a responder (barra sobre el composer).
+  const [replyTo, setReplyTo] = useState<OrderMessage | null>(null);
+  // Picker de emojis abierto para un mensaje (con el punto donde se abrio).
+  const [pickerFor, setPickerFor] = useState<{ messageId: string; x: number; y: number } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pendingKind = useRef<DevicePhotoKind>('imei');
@@ -398,12 +405,16 @@ function ConversacionTab({ orderId }: { orderId: string }) {
   }, [messages.length, uploading]);
 
   const send = useMutation({
-    mutationFn: ({ body, mentions }: { body: string; mentions: string[] }) =>
-      api.post<OrderMessage>(`/v1/orders/${orderId}/messages`, { body, mentions }),
+    mutationFn: ({ body, mentions, replyToId }: { body: string; mentions: string[]; replyToId?: string }) =>
+      api.post<OrderMessage>(`/v1/orders/${orderId}/messages`, {
+        body,
+        mentions,
+        ...(replyToId ? { replyToId } : {}),
+      }),
     // Envio estilo WhatsApp: el mensaje aparece de inmediato (optimista) y NO se
     // refetchea al terminar (se reemplaza el temporal por el real en su sitio, sin
     // parpadeo). Asi se pueden mandar mensajes seguidos sin esperar "carga".
-    onMutate: async ({ body, mentions }) => {
+    onMutate: async ({ body, mentions, replyToId }) => {
       await qc.cancelQueries({ queryKey: ['order-messages', orderId] });
       const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
       const temp: OrderMessage = {
@@ -417,11 +428,14 @@ function ConversacionTab({ orderId }: { orderId: string }) {
         attachmentMime: null,
         imeis: [],
         mentions,
+        replyToId: replyToId ?? null,
+        reactions: [],
         createdAt: new Date().toISOString(),
       };
       qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) => [...old, temp]);
       setText('');
       setMention(null);
+      setReplyTo(null);
       return { tempId };
     },
     onSuccess: (real, _vars, ctx) => {
@@ -442,8 +456,22 @@ function ConversacionTab({ orderId }: { orderId: string }) {
   const submit = () => {
     const body = text.trim();
     if (!body) return;
-    send.mutate({ body, mentions: mentionsInText(body, members) });
+    send.mutate({ body, mentions: mentionsInText(body, members), replyToId: replyTo?.id });
   };
+
+  // Alternar una reaccion; el server responde el mensaje actualizado y se
+  // reemplaza en su sitio (sin refetch de toda la lista).
+  const react = useMutation({
+    mutationFn: ({ messageId, emoji }: { messageId: string; emoji: string }) =>
+      api.post<OrderMessage>(`/v1/orders/${orderId}/messages/${messageId}/reactions`, { emoji }),
+    onSuccess: (updated) => {
+      qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) =>
+        old.map((m) => (m.id === updated.id ? updated : m)),
+      );
+    },
+    onError: (err) =>
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo reaccionar'),
+  });
 
   // Recalcula si el cursor esta escribiendo una mencion (para el dropdown).
   const syncMention = () => {
@@ -550,7 +578,7 @@ function ConversacionTab({ orderId }: { orderId: string }) {
 
   return (
     <div className="flex h-full flex-col">
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto p-5">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-5">
         {isLoading ? (
           <div className="flex justify-center py-8">
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -564,17 +592,39 @@ function ConversacionTab({ orderId }: { orderId: string }) {
             </p>
           </div>
         ) : (
-          messages.map((m) => (
-            <MessageBubble
-              key={m.id}
-              message={m}
-              mine={m.authorId === me?.id}
-              matchByCode={matchByCode}
-              members={members}
-              canDelete={m.kind !== 'system' && (m.authorId === me?.id || isOwner)}
-              onDelete={() => setConfirmDeleteId(m.id)}
-            />
-          ))
+          messages.map((m, i) => {
+            const prev = messages[i - 1];
+            // Mensajes seguidos del mismo autor (en <5 min) se ven como un
+            // conjunto: nombre y hora solo en el primero (estilo Google Chat).
+            const grouped =
+              !!prev &&
+              prev.kind !== 'system' &&
+              m.kind !== 'system' &&
+              prev.authorId === m.authorId &&
+              new Date(m.createdAt).getTime() - new Date(prev.createdAt).getTime() < 5 * 60_000;
+            return (
+              <MessageBubble
+                key={m.id}
+                message={m}
+                mine={m.authorId === me?.id}
+                grouped={grouped}
+                quoted={
+                  m.replyToId ? (messages.find((x) => x.id === m.replyToId) ?? null) : undefined
+                }
+                matchByCode={matchByCode}
+                members={members}
+                canDelete={m.kind !== 'system' && (m.authorId === me?.id || isOwner)}
+                onDelete={() => setConfirmDeleteId(m.id)}
+                onReply={m.kind !== 'system' ? () => setReplyTo(m) : undefined}
+                onReact={
+                  m.kind !== 'system'
+                    ? (e) => setPickerFor({ messageId: m.id, x: e.clientX, y: e.clientY })
+                    : undefined
+                }
+                onToggleReaction={(emoji) => react.mutate({ messageId: m.id, emoji })}
+              />
+            );
+          })
         )}
         {uploading ? (
           <div className="flex items-center gap-2 rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
@@ -585,6 +635,26 @@ function ConversacionTab({ orderId }: { orderId: string }) {
       </div>
 
       <div className="border-t border-border p-3">
+        {/* Barra de respuesta (citar): a quien respondo + fragmento + cancelar. */}
+        {replyTo ? (
+          <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-primary bg-muted/50 px-3 py-1.5">
+            <Reply className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+            <div className="min-w-0 flex-1 text-xs">
+              <span className="block font-semibold">
+                {members.find((m) => m.userId === replyTo.authorId)?.name ?? replyTo.authorName}
+              </span>
+              <span className="line-clamp-1 text-muted-foreground">{quotePreview(replyTo)}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setReplyTo(null)}
+              className="rounded-md p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Cancelar respuesta"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : null}
         <div className="flex items-end gap-2">
           {/* Adjuntar foto (IMEI / serial) */}
           <div className="relative">
@@ -594,6 +664,7 @@ function ConversacionTab({ orderId }: { orderId: string }) {
               onClick={() => setAttachOpen((o) => !o)}
               disabled={uploading}
               aria-label="Adjuntar foto"
+              className="h-9 w-9"
             >
               {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
             </Button>
@@ -694,11 +765,23 @@ function ConversacionTab({ orderId }: { orderId: string }) {
               className="max-h-32 min-h-[2.25rem] w-full resize-none rounded-md border border-input bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
-          <Button size="icon" onClick={submit} disabled={!text.trim()}>
+          <Button size="icon" onClick={submit} disabled={!text.trim()} className="h-9 w-9">
             <Send className="h-4 w-4" />
           </Button>
         </div>
       </div>
+
+      {/* Picker de emojis (reacciones) */}
+      {pickerFor ? (
+        <EmojiPicker
+          anchor={pickerFor}
+          onClose={() => setPickerFor(null)}
+          onPick={(emoji) => {
+            react.mutate({ messageId: pickerFor.messageId, emoji });
+            setPickerFor(null);
+          }}
+        />
+      ) : null}
 
       <ConfirmDialog
         open={confirmDeleteId !== null}
@@ -811,8 +894,10 @@ function MentionText({
         part.kind === 'mention' ? (
           <span
             key={i}
+            // inline-block + nowrap: el chip salta de linea COMPLETO (como en
+            // Google Chat), nunca se parte a mitad del nombre.
             className={cn(
-              'rounded-md px-1 py-0.5 font-medium',
+              'inline-block max-w-full truncate rounded-md px-1 py-0.5 align-bottom font-medium',
               mine
                 ? 'bg-primary-foreground/25 text-primary-foreground'
                 : 'bg-primary/10 text-primary',
@@ -831,30 +916,71 @@ function MentionText({
 function MessageBubble({
   message,
   mine,
+  grouped = false,
+  quoted,
   matchByCode,
   members = [],
   canDelete = false,
   onDelete,
+  onReply,
+  onReact,
+  onToggleReaction,
 }: {
   message: OrderMessage;
   mine: boolean;
+  /** Sigue a otro mensaje del mismo autor (<5 min): sin nombre/hora, pegado. */
+  grouped?: boolean;
+  /** Mensaje citado: undefined = no es respuesta; null = el original se borro. */
+  quoted?: OrderMessage | null;
   matchByCode?: Map<string, CatalogMatch>;
   members?: MemberSummary[];
   canDelete?: boolean;
   onDelete?: () => void;
+  onReply?: () => void;
+  onReact?: (e: { clientX: number; clientY: number }) => void;
+  onToggleReaction?: (emoji: string) => void;
 }) {
   const isPhoto = message.kind === 'imei_photo' || message.kind === 'serial_photo';
   const isDoc = message.kind === 'document';
   const isFile = message.kind === 'file';
   if (message.kind === 'system') {
     return (
-      <div className="flex justify-center py-1">
+      <div className="mt-3 flex justify-center py-1 first:mt-0">
         <span className="rounded-full bg-muted px-3 py-1 text-center text-[11px] text-muted-foreground">
           {message.body}
         </span>
       </div>
     );
   }
+
+  // Autor: el NOMBRE del miembro (los mensajes viejos guardaron el correo).
+  const nameOf = (userId: string, fallback: string) =>
+    members.find((m) => m.userId === userId)?.name ?? fallback;
+  const author = nameOf(message.authorId, message.authorName);
+
+  // Bloque de cita (respuesta): autor + fragmento del mensaje original.
+  const quote =
+    quoted !== undefined ? (
+      <div
+        className={cn(
+          'mb-1 rounded-lg border-l-2 px-2.5 py-1.5 text-xs',
+          mine
+            ? 'border-primary-foreground/50 bg-primary-foreground/10 text-primary-foreground/90'
+            : 'border-primary/60 bg-background/60 text-muted-foreground',
+        )}
+      >
+        {quoted === null ? (
+          <span className="italic">Mensaje eliminado</span>
+        ) : (
+          <>
+            <span className="block font-semibold">
+              {nameOf(quoted.authorId, quoted.authorName)}
+            </span>
+            <span className="line-clamp-2">{quotePreview(quoted)}</span>
+          </>
+        )}
+      </div>
+    ) : null;
 
   const bubble = isPhoto ? (
     <PhotoCard message={message} mine={mine} matchByCode={matchByCode} />
@@ -865,45 +991,113 @@ function MessageBubble({
   ) : (
     <div
       className={cn(
-        'max-w-[80%] rounded-2xl px-3.5 py-2 text-sm',
+        'max-w-[85%] rounded-2xl px-3.5 py-2 text-sm',
         mine
           ? 'rounded-br-sm bg-primary text-primary-foreground'
           : 'rounded-bl-sm bg-muted text-foreground',
       )}
     >
+      {quote}
       <p className="whitespace-pre-wrap break-words">
         <MentionText text={message.body ?? ''} mine={mine} members={members} />
       </p>
     </div>
   );
 
-  // Autor: el NOMBRE del miembro (los mensajes viejos guardaron el correo).
-  const author = members.find((m) => m.userId === message.authorId)?.name ?? message.authorName;
-
   return (
-    <div className={cn('group flex flex-col gap-0.5', mine ? 'items-end' : 'items-start')}>
-      {!mine ? (
-        <span className="px-1 text-[11px] font-medium text-muted-foreground">{author}</span>
+    <div
+      className={cn(
+        'group flex flex-col first:mt-0',
+        grouped ? 'mt-1' : 'mt-4',
+        mine ? 'items-end' : 'items-start',
+      )}
+    >
+      {/* Cabecera del grupo: nombre (otros) + hora, UNA vez por conjunto. */}
+      {!grouped ? (
+        <span className="mb-0.5 px-1 text-[11px] text-muted-foreground">
+          {!mine ? <span className="font-semibold text-foreground/80">{author}</span> : null}
+          {!mine ? ' · ' : ''}
+          {format(new Date(message.createdAt), 'd MMM, HH:mm', { locale: es })}
+        </span>
       ) : null}
-      <div className={cn('flex items-center gap-1.5', mine ? 'flex-row' : 'flex-row-reverse')}>
-        {canDelete && onDelete ? (
-          <button
-            type="button"
-            onClick={onDelete}
-            className="shrink-0 rounded-md p-1 text-muted-foreground opacity-0 transition hover:bg-muted hover:text-red-600 focus-visible:opacity-100 group-hover:opacity-100 dark:hover:text-red-400"
-            aria-label="Eliminar mensaje"
-            title="Eliminar mensaje"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-        ) : null}
+
+      <div className={cn('flex max-w-full items-center gap-1', mine ? 'flex-row' : 'flex-row-reverse')}>
+        {/* Acciones (aparecen al pasar el mouse): responder, reaccionar, eliminar. */}
+        <div
+          className={cn(
+            'flex shrink-0 items-center gap-0.5 opacity-0 transition focus-within:opacity-100 group-hover:opacity-100',
+            mine ? 'flex-row' : 'flex-row-reverse',
+          )}
+        >
+          {onReply ? (
+            <button
+              type="button"
+              onClick={onReply}
+              className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Responder"
+              title="Responder"
+            >
+              <Reply className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+          {onReact ? (
+            <button
+              type="button"
+              onClick={(e) => onReact({ clientX: e.clientX, clientY: e.clientY })}
+              className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Reaccionar"
+              title="Reaccionar"
+            >
+              <SmilePlus className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+          {canDelete && onDelete ? (
+            <button
+              type="button"
+              onClick={onDelete}
+              className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-red-600 dark:hover:text-red-400"
+              aria-label="Eliminar mensaje"
+              title="Eliminar mensaje"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+        </div>
         {bubble}
       </div>
-      <span className="px-1 text-[10px] text-muted-foreground">
-        {format(new Date(message.createdAt), 'd MMM HH:mm', { locale: es })}
-      </span>
+
+      {/* Reacciones: chips bajo la burbuja (click = alternar la mia). */}
+      {message.reactions.length > 0 ? (
+        <div className={cn('mt-1 flex flex-wrap gap-1', mine ? 'justify-end' : 'justify-start')}>
+          {message.reactions.map((r) => (
+            <button
+              key={r.emoji}
+              type="button"
+              onClick={() => onToggleReaction?.(r.emoji)}
+              title={r.users.join(', ')}
+              className={cn(
+                'flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs transition-colors',
+                r.mine
+                  ? 'border-primary/40 bg-primary/10 text-primary'
+                  : 'border-border bg-card hover:bg-muted',
+              )}
+            >
+              <span className="text-sm leading-none">{r.emoji}</span>
+              <span className="tabular-nums">{r.count}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
+}
+
+/** Fragmento con que se cita un mensaje (texto o tipo de adjunto). */
+function quotePreview(m: OrderMessage): string {
+  if (m.kind === 'imei_photo' || m.kind === 'serial_photo') return '📷 Foto';
+  if (m.kind === 'document') return `📄 ${m.body ?? 'Documento'}`;
+  if (m.kind === 'file') return `📎 ${m.body ?? 'Archivo'}`;
+  return m.body ?? '';
 }
 
 /**

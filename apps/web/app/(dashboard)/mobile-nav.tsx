@@ -33,6 +33,13 @@ const TABS = [
     adminOnly: false,
   },
   {
+    href: '/mentions',
+    label: 'Menciones',
+    icon: AtSign,
+    match: (p: string) => p.startsWith('/mentions'),
+    adminOnly: false,
+  },
+  {
     href: '/settings',
     label: 'Ajustes',
     icon: Settings,
@@ -65,30 +72,9 @@ export function MobileTopBar() {
           </span>
         </span>
       </Link>
-      <div className="flex items-center gap-1">
-        <GlobalSearch variant="icon" />
-        <MentionsLink />
-      </div>
+      {/* Menciones vive en la barra INFERIOR; aqui solo la busqueda global. */}
+      <GlobalSearch variant="icon" />
     </header>
-  );
-}
-
-/** Acceso a Menciones en el top bar movil, con contador de sin leer. */
-function MentionsLink() {
-  const { unread } = useMentions();
-  return (
-    <Link
-      href="/mentions"
-      className="relative rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-      aria-label="Menciones"
-    >
-      <AtSign className="h-[18px] w-[18px]" />
-      {unread > 0 ? (
-        <span className="absolute -right-0.5 -top-0.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-primary px-1 text-[9px] font-bold leading-none text-primary-foreground">
-          {unread > 99 ? '99+' : unread}
-        </span>
-      ) : null}
-    </Link>
   );
 }
 
@@ -99,11 +85,12 @@ export function MobileBottomNav() {
   // El operador solo ve Sedes y Ajustes (no pedidos generales ni resumen).
   const isAdminUser = user?.role === 'OWNER' || user?.role === 'ADMIN';
   const tabs = TABS.filter((t) => isAdminUser || !t.adminOnly);
+  const { unread } = useMentions();
   return (
     <nav
       className={cn(
         'fixed inset-x-0 bottom-0 z-30 grid border-t border-border bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden',
-        tabs.length === 4 ? 'grid-cols-4' : 'grid-cols-2',
+        tabs.length === 5 ? 'grid-cols-5' : 'grid-cols-3',
       )}
       aria-label="Navegacion principal"
     >
@@ -120,7 +107,14 @@ export function MobileBottomNav() {
               active ? 'text-foreground' : 'text-muted-foreground',
             )}
           >
-            <Icon className={cn('h-5 w-5', active ? 'text-foreground' : 'text-muted-foreground')} />
+            <span className="relative">
+              <Icon className={cn('h-5 w-5', active ? 'text-foreground' : 'text-muted-foreground')} />
+              {tab.href === '/mentions' && unread > 0 ? (
+                <span className="absolute -right-2 -top-1.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-primary px-1 text-[9px] font-bold leading-none text-primary-foreground">
+                  {unread > 99 ? '99+' : unread}
+                </span>
+              ) : null}
+            </span>
             {tab.label}
           </Link>
         );

@@ -65,10 +65,28 @@ const IMAGE_EXT: Record<ImageMime, string> = {
 type OrderWithItems = Prisma.OrderGetPayload<{ include: { items: true } }>;
 type OrderMessageRow = Prisma.OrderMessageGetPayload<Record<string, never>>;
 type OrderEventRow = Prisma.OrderEventGetPayload<Record<string, never>>;
+type MessageReactionRow = Prisma.MessageReactionGetPayload<Record<string, never>>;
 
 /** Nombre visible del usuario para chat/actividad (cae al correo si no tiene). */
 function displayName(auth: AuthContext): string {
   return auth.name?.trim() || auth.email;
+}
+
+/** Filas de reaccion -> resumen por emoji (conteo, si el viewer reacciono, quienes). */
+function groupReactions(
+  rows: MessageReactionRow[],
+  viewerId: string | undefined,
+): OrderMessageDto['reactions'] {
+  if (rows.length === 0) return [];
+  const byEmoji = new Map<string, { count: number; mine: boolean; users: string[] }>();
+  for (const r of rows) {
+    const g = byEmoji.get(r.emoji) ?? { count: 0, mine: false, users: [] };
+    g.count += 1;
+    if (r.userId === viewerId) g.mine = true;
+    if (g.users.length < 12) g.users.push(r.userName);
+    byEmoji.set(r.emoji, g);
+  }
+  return [...byEmoji.entries()].map(([emoji, g]) => ({ emoji, ...g }));
 }
 
 /** No leidos de un pedido: total + si me mencionan + ultimo mensaje (preview). */
@@ -280,8 +298,9 @@ export class OrdersService {
     const rows = await prisma.orderMessage.findMany({
       where: { orderId },
       orderBy: { createdAt: 'asc' },
+      include: { reactions: true },
     });
-    return Promise.all(rows.map((m) => this.toMessage(m)));
+    return Promise.all(rows.map((m) => this.toMessage(m, auth.userId)));
   }
 
   async postMessage(
@@ -292,6 +311,13 @@ export class OrdersService {
     await this.loadAccessibleOrder(orderId, auth);
     const { tenantId, prisma } = getTenantContext();
     const mentions = await this.validMentions(tenantId, input.mentions);
+    // La cita solo vale si el mensaje citado es de ESTE pedido.
+    const replyToId = input.replyToId
+      ? ((await prisma.orderMessage.findFirst({
+          where: { id: input.replyToId, orderId },
+          select: { id: true },
+        }))?.id ?? null)
+      : null;
     const msg = await prisma.orderMessage.create({
       data: {
         orderId,
@@ -300,12 +326,46 @@ export class OrdersService {
         kind: 'text',
         body: input.body,
         mentions,
+        replyToId,
       },
     });
     // Quien escribe obviamente ya "leyo" el hilo -> marcar leido para no contarse a si mismo.
     await this.touchRead(orderId, auth.userId);
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
-    return this.toMessage(msg);
+    return this.toMessage(msg, auth.userId);
+  }
+
+  /** Alterna MI reaccion con un emoji sobre un mensaje. Devuelve el mensaje actualizado. */
+  async toggleReaction(
+    orderId: string,
+    messageId: string,
+    emoji: string,
+    auth: AuthContext,
+  ): Promise<OrderMessageDto> {
+    await this.loadAccessibleOrder(orderId, auth);
+    const { tenantId, prisma } = getTenantContext();
+    const msg = await prisma.orderMessage.findUnique({ where: { id: messageId } });
+    if (!msg || msg.orderId !== orderId) throw new NotFoundException('Mensaje no encontrado');
+    if (msg.kind === 'system') {
+      throw new ForbiddenException('Los mensajes de sistema no admiten reacciones.');
+    }
+
+    const key = { messageId_userId_emoji: { messageId, userId: auth.userId, emoji } };
+    const existing = await prisma.messageReaction.findUnique({ where: key });
+    if (existing) {
+      await prisma.messageReaction.delete({ where: key });
+    } else {
+      await prisma.messageReaction.create({
+        data: { messageId, userId: auth.userId, userName: displayName(auth), emoji },
+      });
+    }
+
+    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+    const fresh = await prisma.orderMessage.findUniqueOrThrow({
+      where: { id: messageId },
+      include: { reactions: true },
+    });
+    return this.toMessage(fresh, auth.userId);
   }
 
   /** Filtra las menciones a userIds que de verdad son miembros del workspace. */
@@ -1390,7 +1450,10 @@ export class OrdersService {
     };
   }
 
-  private async toMessage(m: OrderMessageRow): Promise<OrderMessageDto> {
+  private async toMessage(
+    m: OrderMessageRow & { reactions?: MessageReactionRow[] },
+    viewerId?: string,
+  ): Promise<OrderMessageDto> {
     // La URL del adjunto se firma al vuelo (nunca se persiste una URL que expira).
     const attachmentUrl =
       m.attachmentKey && this.storage.isConfigured()
@@ -1407,6 +1470,8 @@ export class OrdersService {
       attachmentMime: m.attachmentMime,
       imeis: m.imeis,
       mentions: m.mentions,
+      replyToId: m.replyToId ?? null,
+      reactions: groupReactions(m.reactions ?? [], viewerId),
       createdAt: m.createdAt.toISOString(),
     };
   }

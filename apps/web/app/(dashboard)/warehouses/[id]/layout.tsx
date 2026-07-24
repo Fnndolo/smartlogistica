@@ -4,6 +4,8 @@ import { ArrowLeft } from 'lucide-react';
 
 import { getWarehouses, hasSession } from '@/lib/server-api';
 
+import { SedeTabs } from './sede-tabs';
+
 /**
  * Layout de una sede: cabecera con el nombre. Las 3 sub-secciones (por preparar /
  * facturados / ajustes) se navegan desde el menu lateral y se renderizan aqui.
@@ -33,6 +35,7 @@ export default async function WarehouseLayout({
         </Link>
         <h1 className="mt-2 text-2xl font-semibold tracking-tight">{warehouse.name}</h1>
       </header>
+      <SedeTabs warehouseId={id} />
       {children}
     </div>
   );

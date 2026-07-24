@@ -22,6 +22,7 @@ import {
   createGuideSchema,
   createInvoiceSchema,
   createOrderMessageSchema,
+  toggleReactionSchema,
   devicePhotoKindSchema,
   listOrdersQuerySchema,
   processAllSchema,
@@ -33,6 +34,7 @@ import {
   type CreateGuideInput,
   type CreateInvoiceInput,
   type CreateOrderMessageInput,
+  type ToggleReactionInput,
   type DevicePhotoResponse,
   type Guide,
   type GuidePreview,
@@ -221,6 +223,18 @@ export class OrdersController {
     @CurrentUser() user: AuthContext,
   ): Promise<OrderMessage> {
     return this.orders.postMessage(id, body, user);
+  }
+
+  /** Alterna MI reaccion con un emoji sobre un mensaje del chat. */
+  @Post(':id/messages/:messageId/reactions')
+  @HttpCode(200)
+  async toggleReaction(
+    @Param('id') id: string,
+    @Param('messageId') messageId: string,
+    @Body(new ZodValidationPipe(toggleReactionSchema)) body: ToggleReactionInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<OrderMessage> {
+    return this.orders.toggleReaction(id, messageId, body.emoji, user);
   }
 
   /** Elimina un mensaje del chat (incluidas las fotos). Autor o admin. */

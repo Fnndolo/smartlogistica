@@ -26,6 +26,17 @@ export const orderMessageKindSchema = z.enum([
 ]);
 export type OrderMessageKind = z.infer<typeof orderMessageKindSchema>;
 
+/** Resumen de reacciones a un mensaje, agrupadas por emoji. */
+export const messageReactionSchema = z.object({
+  emoji: z.string(),
+  count: z.number().int(),
+  /** Si YO reaccione con este emoji (para pintar el chip activo y togglear). */
+  mine: z.boolean(),
+  /** Nombres de quienes reaccionaron (tooltip). */
+  users: z.array(z.string()),
+});
+export type MessageReaction = z.infer<typeof messageReactionSchema>;
+
 export const orderMessageSchema = z.object({
   id: z.string(),
   orderId: z.string(),
@@ -38,6 +49,9 @@ export const orderMessageSchema = z.object({
   imeis: z.array(z.string()),
   // userIds mencionados con @ (para resaltar y notificar).
   mentions: z.array(z.string()),
+  // Id del mensaje citado (responder); el front lo resuelve en la lista cargada.
+  replyToId: z.string().nullable(),
+  reactions: z.array(messageReactionSchema),
   createdAt: z.string().datetime(),
 });
 export type OrderMessage = z.infer<typeof orderMessageSchema>;
@@ -46,8 +60,16 @@ export const createOrderMessageSchema = z.object({
   body: z.string().trim().min(1, 'Escribe un mensaje').max(2000),
   // userIds mencionados; el server los valida contra el equipo del workspace.
   mentions: z.array(z.string()).max(20).optional(),
+  // Mensaje al que se responde (debe ser del mismo pedido).
+  replyToId: z.string().optional(),
 });
 export type CreateOrderMessageInput = z.infer<typeof createOrderMessageSchema>;
+
+/** Alternar una reaccion (si ya existe la mia con ese emoji, se quita). */
+export const toggleReactionSchema = z.object({
+  emoji: z.string().trim().min(1).max(16),
+});
+export type ToggleReactionInput = z.infer<typeof toggleReactionSchema>;
 
 // === Bandeja de no leidos (la campana de notificaciones) ===
 

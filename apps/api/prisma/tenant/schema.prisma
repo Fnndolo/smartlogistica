@@ -264,11 +264,30 @@ model OrderMessage {
   imeis          String[]
   // userIds mencionados en el mensaje (@usuario) -> alimenta notificaciones.
   mentions       String[]
+  // Respuesta/cita: id del mensaje citado (mismo pedido). El front lo resuelve
+  // contra la lista cargada; si el original se borro, muestra "eliminado".
+  replyToId      String?
   createdAt      DateTime @default(now())
 
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order     Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  reactions MessageReaction[]
 
   @@index([orderId, createdAt])
+}
+
+/// Reaccion con emoji a un mensaje del chat (una por usuario+emoji+mensaje).
+model MessageReaction {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  userName  String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  message OrderMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
 }
 
 // Estado de lectura del chat de un pedido por usuario: hasta cuando ley el hilo.
