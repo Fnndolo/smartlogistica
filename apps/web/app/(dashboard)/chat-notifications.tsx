@@ -8,6 +8,7 @@ import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { api } from '@/lib/api-client';
 import { ensureAudioReady, playNotificationSound } from '@/lib/notification-sound';
 
+import { getActiveChat } from './orders/active-chat';
 import { useOrdersStream, type RealtimeEvent } from './orders/use-orders-stream';
 
 /** La llave publica VAPID (base64url) al formato que pide pushManager.subscribe. */
@@ -95,11 +96,14 @@ export function ChatNotifications() {
       if (pushActiveRef.current) return;
       if (typeof window === 'undefined' || !('Notification' in window)) return;
       if (Notification.permission !== 'granted') return;
-      const options: NotificationOptions & { data: { url: string } } = {
+      const options: NotificationOptions & { data: { url: string }; renotify?: boolean } = {
         body,
         icon: '/icons/icon-192.png',
         badge: '/icons/icon-192.png',
-        // SIN tag: que se apilen, nunca reemplazarse en silencio.
+        // tag por pedido + renotify: colapsa mensajes del mismo pedido en una
+        // notificacion que se actualiza Y suena; pedidos distintos se apilan.
+        tag: target,
+        renotify: true,
         data: { url: target },
       };
       const viaSw = async (): Promise<boolean> => {
@@ -132,6 +136,13 @@ export function ChatNotifications() {
   const onEvent = useCallback(
     (event?: RealtimeEvent) => {
       if (!event || !me) return;
+
+      // Si estoy MIRANDO ese chat ahora mismo, no hay nada que avisar (el
+      // mensaje aparece en pantalla): sin sonido, sin toast, sin notificacion.
+      const viewingThisChat =
+        document.visibilityState === 'visible' &&
+        getActiveChat() === String(event.orderId ?? '');
+      if (viewingThisChat) return;
 
       if (event.kind === 'chat.message') {
         const authorId = String(event.authorId ?? '');

@@ -288,10 +288,15 @@ export class OrdersService {
   async getDetail(orderId: string, auth: AuthContext): Promise<OrderDetail> {
     const order = await this.loadAccessibleOrder(orderId, auth);
     const { prisma } = getTenantContext();
-    const photoCount = await prisma.orderMessage.count({
-      where: { orderId, kind: { in: ['imei_photo', 'serial_photo'] } },
-    });
-    return this.toDetail(order, photoCount > 0);
+    // unreadMap REAL para este usuario: el separador "No leidos" del chat lo
+    // necesita tambien al entrar por notificacion/deep-link (antes iba en 0).
+    const [photoCount, unread] = await Promise.all([
+      prisma.orderMessage.count({
+        where: { orderId, kind: { in: ['imei_photo', 'serial_photo'] } },
+      }),
+      this.unreadMap(auth.userId, { orderIds: [orderId] }),
+    ]);
+    return this.toDetail(order, photoCount > 0, unread.get(orderId)?.count ?? 0);
   }
 
   async listMessages(orderId: string, auth: AuthContext): Promise<OrderMessageDto[]> {
@@ -1516,9 +1521,9 @@ export class OrdersService {
     };
   }
 
-  private toDetail(o: OrderWithItems, hasDevicePhoto = false): OrderDetail {
+  private toDetail(o: OrderWithItems, hasDevicePhoto = false, unreadCount = 0): OrderDetail {
     return {
-      ...this.toSummary(o, hasDevicePhoto),
+      ...this.toSummary(o, hasDevicePhoto, unreadCount),
       // El correo REAL (el de facturar), nunca el enmascarado @ct.vtex.com.br.
       customerEmail: extractRealEmail(o.rawPayload) ?? pickRealEmail(o.customerEmail),
       customerPhone: o.customerPhone,

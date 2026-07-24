@@ -88,7 +88,9 @@ export class PushService {
           await webpush.sendNotification(
             { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
             body,
-            { TTL: 60 * 60 },
+            // urgency high: pide entrega inmediata (Android agrupa/retrasa los
+            // push "normales" para ahorrar bateria).
+            { TTL: 60 * 60, urgency: 'high' },
           );
         } catch (err) {
           const status = (err as { statusCode?: number }).statusCode;

@@ -11,6 +11,7 @@ import {
   ArrowRightLeft,
   Camera,
   Check,
+  ChevronDown,
   Download,
   Image as ImageIcon,
   Info,
@@ -37,6 +38,8 @@ import type {
   CatalogMatch,
   DevicePhotoKind,
   DevicePhotoResponse,
+  Inbox,
+  ListOrdersResponse,
   MemberSummary,
   OrderDetail,
   OrderEvent,
@@ -50,6 +53,7 @@ import { Button } from '@/components/ui/button';
 import { ApiError, api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 
+import { setActiveChat } from './active-chat';
 import { GuidePanel } from './guide-panel';
 import { InvoicePanel } from './invoice-panel';
 import { EmojiPicker } from './emoji-picker';
@@ -344,9 +348,35 @@ function ConversacionTab({
   const me = useCurrentUser();
   // Cuantos mensajes tenia SIN leer al abrir (congelado: markRead lo pone en 0
   // al instante, pero el separador "No leidos" debe quedarse donde estaba).
-  const [unreadAtOpen] = useState(initialUnread);
+  // El prop puede venir VIEJO (el drawer se abrio hace rato y el mensaje llego
+  // despues): se toma el maximo contra las caches frescas (lista e inbox).
+  const [unreadAtOpen] = useState(() => {
+    let max = initialUnread;
+    for (const [, data] of qc.getQueriesData<ListOrdersResponse>({ queryKey: ['orders'] })) {
+      const found = data?.items?.find((o) => o.id === orderId);
+      if (found && found.unreadCount > max) max = found.unreadCount;
+    }
+    const inbox = qc.getQueryData<Inbox>(['inbox']);
+    const item = inbox?.items.find((i) => i.orderId === orderId);
+    if (item && item.unreadCount > max) max = item.unreadCount;
+    return max;
+  });
   const [unreadBoundaryId, setUnreadBoundaryId] = useState<string | null>(null);
   const didInitialScroll = useRef(false);
+  // Scroll inteligente (WhatsApp + Google Chat): si estoy leyendo ARRIBA, un
+  // mensaje nuevo NO me arrastra al fondo; aparece el boton "ir al final" con
+  // contador. El boton tambien sale al scrollear (y se esconde tras quietud).
+  const atBottomRef = useRef(true);
+  const prevLenRef = useRef(0);
+  const [pendingCount, setPendingCount] = useState(0);
+  const [showJump, setShowJump] = useState(false);
+  const jumpIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Registrar que este chat esta EN PANTALLA (silencia sonido/toast globales).
+  useEffect(() => {
+    setActiveChat(orderId);
+    return () => setActiveChat(null);
+  }, [orderId]);
   const [text, setText] = useState('');
   const [uploading, setUploading] = useState(false);
   const [uploadLabel, setUploadLabel] = useState('Subiendo...');
@@ -435,6 +465,7 @@ function ConversacionTab({
       }
     }
     setUnreadBoundaryId(boundary);
+    prevLenRef.current = messages.length; // base para detectar llegadas nuevas
     requestAnimationFrame(() => {
       const el = boundary ? document.getElementById('chat-unread-divider') : null;
       if (el) el.scrollIntoView({ block: 'center' });
@@ -442,10 +473,67 @@ function ConversacionTab({
     });
   }, [messages, me, unreadAtOpen]);
 
+  const scrollToBottom = useCallback(() => {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+    setPendingCount(0);
+    setShowJump(false);
+  }, []);
+
+  // Seguimiento del scroll: al llegar al fondo se limpia el contador; lejos
+  // del fondo aparece "ir al final" (se esconde tras 2.5s de quietud, salvo
+  // que haya mensajes pendientes).
+  const onChatScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+    atBottomRef.current = atBottom;
+    if (atBottom) {
+      setPendingCount(0);
+      setShowJump(false);
+      return;
+    }
+    setShowJump(true);
+    if (jumpIdleTimer.current) clearTimeout(jumpIdleTimer.current);
+    jumpIdleTimer.current = setTimeout(() => {
+      // Con mensajes sin ver, el boton se queda (es el aviso).
+      setPendingCount((p) => {
+        if (p === 0) setShowJump(false);
+        return p;
+      });
+    }, 2500);
+  }, []);
+  useEffect(() => () => {
+    if (jumpIdleTimer.current) clearTimeout(jumpIdleTimer.current);
+  }, []);
+
+  // Mensajes nuevos: si los mande YO o estoy en el fondo -> bajar; si estoy
+  // leyendo arriba -> NO moverse: sumar al contador del boton y fijar el
+  // separador "No leidos" en el primero que no he visto.
   useEffect(() => {
     if (!didInitialScroll.current) return;
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messages.length, uploading]);
+    const prevLen = prevLenRef.current;
+    prevLenRef.current = messages.length;
+    if (messages.length <= prevLen) return;
+
+    const fresh = messages.slice(prevLen);
+    const mine = fresh.every((m) => m.authorId === me?.id);
+    if (mine || atBottomRef.current) {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+      return;
+    }
+    const incoming = fresh.filter((m) => m.authorId !== me?.id && m.kind !== 'system');
+    if (incoming.length === 0) return;
+    setPendingCount((p) => p + incoming.length);
+    setShowJump(true);
+    setUnreadBoundaryId((prev) => prev ?? incoming[0]!.id);
+  }, [messages, me]);
+
+  useEffect(() => {
+    if (!didInitialScroll.current || !uploading) return;
+    if (atBottomRef.current) {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    }
+  }, [uploading]);
 
   const send = useMutation({
     mutationFn: ({ body, mentions, replyToId }: { body: string; mentions: string[]; replyToId?: string }) =>
@@ -655,8 +743,8 @@ function ConversacionTab({
   };
 
   return (
-    <div className="flex h-full flex-col">
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-5">
+    <div className="relative flex h-full flex-col">
+      <div ref={scrollRef} onScroll={onChatScroll} className="min-h-0 flex-1 overflow-y-auto p-5">
         {isLoading ? (
           <div className="flex justify-center py-8">
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
@@ -727,6 +815,24 @@ function ConversacionTab({
           </div>
         ) : null}
       </div>
+
+      {/* "Ir al final" (WhatsApp + Google Chat): flota sobre el chat cuando
+          estas arriba; con mensajes nuevos muestra el contador y se queda. */}
+      {showJump ? (
+        <button
+          type="button"
+          onClick={scrollToBottom}
+          className="absolute bottom-24 right-5 z-20 flex h-11 w-11 items-center justify-center rounded-full border border-border bg-popover shadow-lg transition-transform hover:scale-105"
+          aria-label="Ir al final"
+        >
+          <ChevronDown className="h-5 w-5 text-foreground" />
+          {pendingCount > 0 ? (
+            <span className="absolute -right-1 -top-1 inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-emerald-500 px-1 text-[11px] font-bold leading-none text-white">
+              {pendingCount > 99 ? '99+' : pendingCount}
+            </span>
+          ) : null}
+        </button>
+      ) : null}
 
       <div className="border-t border-border p-3">
         {/* Barra de respuesta (citar): a quien respondo + fragmento + cancelar. */}
