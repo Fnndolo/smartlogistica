@@ -14,7 +14,7 @@
  * Version del cache: subirla PURGA el cache viejo en `activate` (recupera a los
  * usuarios que quedaron con un cache envenenado de una version anterior).
  */
-const CACHE = 'smartlog-static-v7';
+const CACHE = 'smartlog-static-v8';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -40,15 +40,13 @@ self.addEventListener('activate', (event) => {
  * notificacion NATIVA. Payload: {title, body, url}.
  */
 /**
- * WEB PUSH con notificacion UNICA acumulada (estilo WhatsApp/Google Chat):
- * siempre hay UNA notificacion de SmartLogistica que se actualiza con la
- * lista de los ultimos mensajes y el contador — venga del pedido que venga —
- * y VUELVE a sonar (renotify). Al tocarla: si todo es del mismo pedido abre
- * ese chat; si hay varios, abre Menciones. El cliente la limpia al enfocar
- * la app (como WhatsApp al leer).
+ * WEB PUSH acumulado POR PEDIDO (estilo WhatsApp): cada pedido tiene UNA
+ * notificacion que se actualiza con sus mensajes — el NOMBRE de quien escribe
+ * aparece una sola vez y debajo van sus mensajes; si escriben varias personas,
+ * cada bloque lleva su nombre. Vuelve a sonar con cada mensaje (renotify).
+ * Pedidos distintos = notificaciones separadas. El cliente las limpia al
+ * enfocar la app (como WhatsApp al leer).
  */
-const CHAT_TAG = 'smartlog-chat';
-
 self.addEventListener('push', (event) => {
   let data = {};
   try {
@@ -58,38 +56,43 @@ self.addEventListener('push', (event) => {
   }
   event.waitUntil(
     (async () => {
-      // Acumular sobre la notificacion existente (si el usuario no la ha tocado).
-      const existing = await self.registration.getNotifications({ tag: CHAT_TAG });
+      const tag = 'smartlog-order-' + (data.url || 'general');
+      const existing = await self.registration.getNotifications({ tag });
       const prev = (existing[0] && existing[0].data) || {};
-      const line = data.line || data.title || 'Mensaje nuevo';
-      const lines = (Array.isArray(prev.lines) ? prev.lines : []).concat(line).slice(-6);
-      const urls = Array.isArray(prev.urls) ? prev.urls.slice() : [];
-      if (data.url && urls.indexOf(data.url) === -1) urls.push(data.url);
-      const count = (prev.count || 0) + 1;
-      const single = urls.length <= 1;
 
-      const title =
-        count === 1
-          ? data.title || 'SmartLogistica'
-          : single
-            ? (data.title || '').split(' · ')[1]
-              ? `${count} mensajes · ${(data.title || '').split(' · ')[1]}`
-              : `${count} mensajes nuevos`
-            : `${count} mensajes en ${urls.length} pedidos`;
-      const body = count === 1 ? data.body || '' : lines.join('\n');
+      // Entradas estructuradas {a: autor, m: mensaje} (ultimas 8).
+      const entries = (Array.isArray(prev.entries) ? prev.entries : [])
+        .concat([{ a: data.author || '', m: data.msg || data.body || '' }])
+        .slice(-8);
+      const count = (prev.count || 0) + 1;
+
+      let title;
+      let body;
+      if (count === 1) {
+        title = data.title || 'SmartLogistica';
+        body = data.body || '';
+      } else {
+        title = `${count} mensajes · ${data.customer || 'SmartLogistica'}`;
+        // Nombre UNA vez y debajo sus mensajes; nuevo bloque al cambiar de autor.
+        const parts = [];
+        let lastAuthor = null;
+        for (const e of entries) {
+          if (e.a && e.a !== lastAuthor) {
+            parts.push(e.a);
+            lastAuthor = e.a;
+          }
+          if (e.m) parts.push('  ' + e.m);
+        }
+        body = parts.join('\n');
+      }
 
       await self.registration.showNotification(title, {
         body,
         icon: '/icons/icon-192.png',
         badge: '/icons/icon-192.png',
-        tag: CHAT_TAG,
+        tag,
         renotify: true,
-        data: {
-          url: single ? urls[0] || '/mentions' : '/mentions',
-          lines,
-          urls,
-          count,
-        },
+        data: { url: data.url || '/mentions', entries, count },
       });
     })(),
   );

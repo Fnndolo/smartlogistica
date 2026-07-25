@@ -98,8 +98,10 @@ export function ChatNotifications() {
     const clear = () => {
       if (document.visibilityState !== 'visible') return;
       void navigator.serviceWorker.getRegistration().then(async (reg) => {
-        const shown = await reg?.getNotifications({ tag: 'smartlog-chat' });
-        shown?.forEach((n) => n.close());
+        const shown = await reg?.getNotifications();
+        shown?.forEach((n) => {
+          if (n.tag?.startsWith('smartlog-order-') || n.tag === 'smartlog-chat') n.close();
+        });
       });
     };
     clear();

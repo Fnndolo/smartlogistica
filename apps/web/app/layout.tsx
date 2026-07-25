@@ -58,6 +58,10 @@ export const viewport: Viewport = {
   maximumScale: 5,
   // Pinta bajo el notch/isla en pantalla completa (usar con safe-area-inset).
   viewportFit: 'cover',
+  // Teclado del celular: REDIMENSIONA el contenido en vez de empujar toda la
+  // pagina -> en el chat, la cabecera (cliente/tabs) queda fija y el area de
+  // mensajes se encoge dinamicamente (como WhatsApp/Google Chat).
+  interactiveWidget: 'resizes-content',
   themeColor: [
     { media: '(prefers-color-scheme: light)', color: '#ffffff' },
     { media: '(prefers-color-scheme: dark)', color: '#0B0F17' },

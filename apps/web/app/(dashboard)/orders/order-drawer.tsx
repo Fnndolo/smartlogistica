@@ -506,6 +506,22 @@ function ConversacionTab({
     if (jumpIdleTimer.current) clearTimeout(jumpIdleTimer.current);
   }, []);
 
+  // Teclado del celular: cuando el viewport visual cambia (se abre/cierra el
+  // teclado) y estaba en el fondo, mantener el ultimo mensaje a la vista.
+  useEffect(() => {
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    if (!vv) return;
+    const onResize = () => {
+      if (atBottomRef.current) {
+        requestAnimationFrame(() => {
+          scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+        });
+      }
+    };
+    vv.addEventListener('resize', onResize);
+    return () => vv.removeEventListener('resize', onResize);
+  }, []);
+
   // Mensajes nuevos: si los mande YO o estoy en el fondo -> bajar; si estoy
   // leyendo arriba -> NO moverse: sumar al contador del boton y fijar el
   // separador "No leidos" en el primero que no he visto.
@@ -744,7 +760,10 @@ function ConversacionTab({
 
   return (
     <div className="relative flex h-full flex-col">
-      <div ref={scrollRef} onScroll={onChatScroll} className="min-h-0 flex-1 overflow-y-auto p-5">
+      {/* flex-col + spacer mt-auto: con pocos mensajes el chat NACE DESDE
+          ABAJO (como WhatsApp) y va subiendo; con muchos, scrollea normal. */}
+      <div ref={scrollRef} onScroll={onChatScroll} className="flex min-h-0 flex-1 flex-col overflow-y-auto p-5">
+        <div className="mt-auto" aria-hidden />
         {isLoading ? (
           <div className="flex justify-center py-8">
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />

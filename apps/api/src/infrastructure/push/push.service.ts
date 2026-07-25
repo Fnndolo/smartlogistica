@@ -10,8 +10,10 @@ export interface PushPayload {
   body: string;
   /** Ruta interna a abrir al tocar la notificacion (tambien agrupa por tag). */
   url: string;
-  /** Linea corta ("Marlon: hola") para la notificacion ACUMULADA estilo WhatsApp. */
-  line?: string;
+  /** Para la notificacion ACUMULADA por pedido (estilo WhatsApp): */
+  author?: string; // quien escribio ("Marlon Cruz")
+  msg?: string; // el texto ("hola") o la accion ("reacciono 👍")
+  customer?: string; // cliente del pedido ("SANDRA MENESES")
 }
 
 /**
