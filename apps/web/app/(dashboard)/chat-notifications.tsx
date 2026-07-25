@@ -91,6 +91,26 @@ export function ChatNotifications() {
   // Notificacion del sistema SOLO como respaldo cuando el push no quedo
   // activo en este dispositivo (p. ej. VAPID sin configurar). Con push activo,
   // el servidor ya manda la notificacion (y se apilan como WhatsApp).
+  // Al volver a la app, limpiar la notificacion acumulada del sistema (como
+  // WhatsApp cuando entras: la bandeja queda al dia).
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return;
+    const clear = () => {
+      if (document.visibilityState !== 'visible') return;
+      void navigator.serviceWorker.getRegistration().then(async (reg) => {
+        const shown = await reg?.getNotifications({ tag: 'smartlog-chat' });
+        shown?.forEach((n) => n.close());
+      });
+    };
+    clear();
+    document.addEventListener('visibilitychange', clear);
+    window.addEventListener('focus', clear);
+    return () => {
+      document.removeEventListener('visibilitychange', clear);
+      window.removeEventListener('focus', clear);
+    };
+  }, []);
+
   const notifyBrowser = useCallback(
     (title: string, body: string, target: string) => {
       if (pushActiveRef.current) return;

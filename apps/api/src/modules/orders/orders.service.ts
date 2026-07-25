@@ -380,11 +380,13 @@ export class OrdersService {
         title: `${displayName(auth)} te mencionó · ${order.customerName}`,
         body: preview,
         url,
+        line: `${displayName(auth)}: ${preview}`,
       }),
       this.push.sendToUsers([...others], {
         title: `${displayName(auth)} · ${order.customerName}`,
         body: preview,
         url,
+        line: `${displayName(auth)}: ${preview}`,
       }),
     ]).catch(() => undefined);
 
@@ -437,6 +439,7 @@ export class OrdersService {
             url: order.warehouseId
               ? `/warehouses/${order.warehouseId}?order=${orderId}`
               : `/orders?order=${orderId}`,
+            line: `${displayName(auth)} reaccionó ${emoji}`,
           })
           .catch(() => undefined);
       }

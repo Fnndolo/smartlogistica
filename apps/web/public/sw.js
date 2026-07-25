@@ -14,7 +14,7 @@
  * Version del cache: subirla PURGA el cache viejo en `activate` (recupera a los
  * usuarios que quedaron con un cache envenenado de una version anterior).
  */
-const CACHE = 'smartlog-static-v6';
+const CACHE = 'smartlog-static-v7';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -39,6 +39,16 @@ self.addEventListener('activate', (event) => {
  * el sistema despierta a este service worker y aqui se muestra como
  * notificacion NATIVA. Payload: {title, body, url}.
  */
+/**
+ * WEB PUSH con notificacion UNICA acumulada (estilo WhatsApp/Google Chat):
+ * siempre hay UNA notificacion de SmartLogistica que se actualiza con la
+ * lista de los ultimos mensajes y el contador — venga del pedido que venga —
+ * y VUELVE a sonar (renotify). Al tocarla: si todo es del mismo pedido abre
+ * ese chat; si hay varios, abre Menciones. El cliente la limpia al enfocar
+ * la app (como WhatsApp al leer).
+ */
+const CHAT_TAG = 'smartlog-chat';
+
 self.addEventListener('push', (event) => {
   let data = {};
   try {
@@ -46,20 +56,42 @@ self.addEventListener('push', (event) => {
   } catch {
     data = { title: 'SmartLogistica', body: event.data ? event.data.text() : '' };
   }
-  const title = data.title || 'SmartLogistica';
   event.waitUntil(
-    self.registration.showNotification(title, {
-      body: data.body || '',
-      icon: '/icons/icon-192.png',
-      badge: '/icons/icon-192.png',
-      // tag por PEDIDO (la url lo identifica) + renotify: los mensajes del
-      // mismo pedido se COLAPSAN en una sola notificacion que se actualiza y
-      // VUELVE A SONAR (renotify evita el reemplazo silencioso de antes);
-      // pedidos distintos se apilan por separado.
-      tag: data.url || 'smartlogistica',
-      renotify: true,
-      data: { url: data.url || '/' },
-    }),
+    (async () => {
+      // Acumular sobre la notificacion existente (si el usuario no la ha tocado).
+      const existing = await self.registration.getNotifications({ tag: CHAT_TAG });
+      const prev = (existing[0] && existing[0].data) || {};
+      const line = data.line || data.title || 'Mensaje nuevo';
+      const lines = (Array.isArray(prev.lines) ? prev.lines : []).concat(line).slice(-6);
+      const urls = Array.isArray(prev.urls) ? prev.urls.slice() : [];
+      if (data.url && urls.indexOf(data.url) === -1) urls.push(data.url);
+      const count = (prev.count || 0) + 1;
+      const single = urls.length <= 1;
+
+      const title =
+        count === 1
+          ? data.title || 'SmartLogistica'
+          : single
+            ? (data.title || '').split(' · ')[1]
+              ? `${count} mensajes · ${(data.title || '').split(' · ')[1]}`
+              : `${count} mensajes nuevos`
+            : `${count} mensajes en ${urls.length} pedidos`;
+      const body = count === 1 ? data.body || '' : lines.join('\n');
+
+      await self.registration.showNotification(title, {
+        body,
+        icon: '/icons/icon-192.png',
+        badge: '/icons/icon-192.png',
+        tag: CHAT_TAG,
+        renotify: true,
+        data: {
+          url: single ? urls[0] || '/mentions' : '/mentions',
+          lines,
+          urls,
+          count,
+        },
+      });
+    })(),
   );
 });
 
