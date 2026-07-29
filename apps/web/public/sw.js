@@ -14,7 +14,7 @@
  * Version del cache: subirla PURGA el cache viejo en `activate` (recupera a los
  * usuarios que quedaron con un cache envenenado de una version anterior).
  */
-const CACHE = 'smartlog-static-v11';
+const CACHE = 'smartlog-static-v12';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -47,6 +47,42 @@ self.addEventListener('activate', (event) => {
  * Pedidos distintos = notificaciones separadas. El cliente las limpia al
  * enfocar la app (como WhatsApp al leer).
  */
+/**
+ * El navegador/Android puede ROTAR la suscripcion push (expira, se renueva,
+ * limpieza del sistema). Sin este handler, el server queda apuntando a un
+ * endpoint muerto y las notificaciones DEJAN de llegar hasta que el usuario
+ * vuelve a abrir la app. Aqui el SW se re-suscribe solo y registra el nuevo
+ * endpoint en el server (la cookie de sesion viaja same-origin).
+ */
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil(
+    (async () => {
+      try {
+        let key = event.oldSubscription && event.oldSubscription.options
+          ? event.oldSubscription.options.applicationServerKey
+          : null;
+        if (!key) {
+          const res = await fetch('/v1/push/vapid-key');
+          const json = await res.json();
+          if (!json.key) return;
+          key = json.key;
+        }
+        const sub = await self.registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: key,
+        });
+        await fetch('/v1/push/subscriptions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(sub.toJSON()),
+        });
+      } catch {
+        /* al proximo foco de la app, el cliente re-suscribe igual */
+      }
+    })(),
+  );
+});
+
 /**
  * "Negrilla" en texto plano (las notificaciones no admiten markup): mapea
  * letras/numeros a sus equivalentes Unicode sans-serif bold (𝗔𝗮𝟬). Los

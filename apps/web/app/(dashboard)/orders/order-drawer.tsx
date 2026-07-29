@@ -420,12 +420,97 @@ function ConversacionTab({
       .catch(() => {});
   }, [orderId, messages.length, qc]);
 
-  // Realtime: cualquier evento SSE -> refrescar los mensajes de este pedido al
-  // instante (asi el otro usuario ve el mensaje/foto en ~medio segundo).
+  // Realtime AL PESTAÑEO: los eventos de chat traen el contenido completo y se
+  // INYECTAN directo a la cache (cero refetch en el camino critico). Un
+  // refetch DEBOUNCED reconcilia por detras (orden, adjuntos, carreras).
+  const reconcileTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconcile = useCallback(() => {
+    if (reconcileTimer.current) clearTimeout(reconcileTimer.current);
+    // 600ms: coalesce rafagas sin retrasar fotos/documentos (que no viajan
+    // completos en el evento y si dependen del refetch).
+    reconcileTimer.current = setTimeout(() => {
+      void qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
+    }, 600);
+  }, [qc, orderId]);
+  useEffect(() => () => {
+    if (reconcileTimer.current) clearTimeout(reconcileTimer.current);
+  }, []);
+
   useOrdersStream(
-    useCallback(() => {
-      qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
-    }, [qc, orderId]),
+    useCallback(
+      (event) => {
+        if (!event || String(event.orderId ?? '') !== orderId) {
+          // Eventos de otros pedidos o genericos (fotos, sistema): refetch suave.
+          if (event?.kind === 'orders.refresh') reconcile();
+          return;
+        }
+
+        if (event.kind === 'chat.message') {
+          const authorId = String(event.authorId ?? '');
+          if (authorId && authorId !== me?.id) {
+            const injected: OrderMessage = {
+              id: String(event.messageId ?? `evt-${Date.now()}`),
+              orderId,
+              authorId,
+              authorName: String(event.authorName ?? ''),
+              kind: 'text',
+              body: String(event.body ?? ''),
+              attachmentUrl: null,
+              attachmentMime: null,
+              imeis: [],
+              mentions: Array.isArray(event.mentions) ? (event.mentions as string[]) : [],
+              replyToId: typeof event.replyToId === 'string' ? event.replyToId : null,
+              reactions: [],
+              createdAt:
+                typeof event.createdAt === 'string' ? event.createdAt : new Date().toISOString(),
+            };
+            qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) =>
+              old.some((m) => m.id === injected.id) ? old : [...old, injected],
+            );
+          }
+          reconcile();
+          return;
+        }
+
+        if (event.kind === 'chat.reaction') {
+          const reactorId = String(event.reactorId ?? '');
+          if (reactorId === me?.id) return; // la mia ya fue optimista
+          const emoji = String(event.emoji ?? '');
+          const name = String(event.reactorName ?? '');
+          const messageId = String(event.messageId ?? '');
+          const removed = Boolean(event.removed);
+          qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) =>
+            old.map((m) => {
+              if (m.id !== messageId) return m;
+              const existing = m.reactions.find((r) => r.emoji === emoji);
+              if (removed) {
+                if (!existing) return m;
+                const reactions = m.reactions
+                  .map((r) =>
+                    r.emoji === emoji
+                      ? { ...r, count: r.count - 1, users: r.users.filter((u) => u !== name) }
+                      : r,
+                  )
+                  .filter((r) => r.count > 0);
+                return { ...m, reactions };
+              }
+              const reactions = existing
+                ? m.reactions.map((r) =>
+                    r.emoji === emoji ? { ...r, count: r.count + 1, users: [...r.users, name] } : r,
+                  )
+                : [...m.reactions, { emoji, count: 1, mine: false, users: [name] }];
+              return { ...m, reactions };
+            }),
+          );
+          reconcile();
+          return;
+        }
+
+        // Otros eventos del pedido (fotos, documentos, sistema): refetch suave.
+        reconcile();
+      },
+      [qc, orderId, me, reconcile],
+    ),
   );
 
   // Match de los codigos de las fotos contra el catalogo de compras.

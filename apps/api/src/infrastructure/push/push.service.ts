@@ -87,27 +87,41 @@ export class PushService {
     if (subs.length === 0) return;
 
     const body = JSON.stringify(payload);
+    const sendOnce = (s: { endpoint: string; p256dh: string; auth: string }) =>
+      webpush.sendNotification(
+        { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
+        body,
+        // urgency high: pide entrega inmediata (Android agrupa/retrasa los
+        // push "normales" para ahorrar bateria).
+        { TTL: 60 * 60, urgency: 'high' },
+      );
+
     await Promise.all(
       subs.map(async (s) => {
-        try {
-          await webpush.sendNotification(
-            { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
-            body,
-            // urgency high: pide entrega inmediata (Android agrupa/retrasa los
-            // push "normales" para ahorrar bateria).
-            { TTL: 60 * 60, urgency: 'high' },
-          );
-        } catch (err) {
-          const status = (err as { statusCode?: number }).statusCode;
-          if (status === 404 || status === 410) {
-            // El dispositivo revoco la suscripcion: fuera de la lista.
-            await this.control.pushSubscription
-              .delete({ where: { endpoint: s.endpoint } })
-              .catch(() => null);
-          } else {
+        // Una notificacion de celular NO puede perderse: los errores
+        // transitorios (5xx/red del servicio de push) se reintentan.
+        for (let attempt = 0; ; attempt++) {
+          try {
+            await sendOnce(s);
+            return;
+          } catch (err) {
+            const status = (err as { statusCode?: number }).statusCode;
+            if (status === 404 || status === 410) {
+              // El dispositivo revoco la suscripcion: fuera de la lista.
+              await this.control.pushSubscription
+                .delete({ where: { endpoint: s.endpoint } })
+                .catch(() => null);
+              return;
+            }
+            const transient = status === undefined || status >= 500 || status === 429;
+            if (transient && attempt < 2) {
+              await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+              continue;
+            }
             this.logger.warn(
-              `Push fallo (${status ?? '?'}) para ${s.endpoint.slice(0, 60)}...`,
+              `Push fallo (${status ?? 'red'}, ${attempt + 1} intento(s)) para ${s.endpoint.slice(0, 60)}...`,
             );
+            return;
           }
         }
       }),

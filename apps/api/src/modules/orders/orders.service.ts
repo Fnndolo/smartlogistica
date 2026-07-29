@@ -356,10 +356,14 @@ export class OrdersService {
       messageId: msg.id,
       authorId: auth.userId,
       authorName: displayName(auth),
-      body: (input.body ?? '').slice(0, 140),
+      // Cuerpo COMPLETO: el chat abierto del receptor lo inyecta directo a su
+      // cache (aparece al instante, sin refetch).
+      body: input.body ?? '',
       mentions,
+      replyToId: replyTo?.id ?? null,
       replyToAuthorId: replyTo?.authorId ?? null,
       participantIds: participants.map((p) => p.authorId),
+      createdAt: msg.createdAt.toISOString(),
     });
 
     // WEB PUSH (app CERRADA): mencionados con titulo especial; respondido y
@@ -426,6 +430,21 @@ export class OrdersService {
     const existing = await prisma.messageReaction.findUnique({ where: key });
     if (existing) {
       await prisma.messageReaction.delete({ where: key });
+      // Evento tambien al QUITAR (removed: true): los chats abiertos actualizan
+      // el chip al instante. No genera sonido/notificacion en el cliente.
+      await this.realtime.publish(tenantId, {
+        kind: 'chat.reaction',
+        removed: true,
+        orderId,
+        externalId: order.externalId,
+        customerName: order.customerName,
+        warehouseId: order.warehouseId,
+        messageId,
+        emoji,
+        reactorId: auth.userId,
+        reactorName: displayName(auth),
+        messageAuthorId: msg.authorId,
+      });
     } else {
       await prisma.messageReaction.create({
         data: { messageId, userId: auth.userId, userName: displayName(auth), emoji },
@@ -434,6 +453,7 @@ export class OrdersService {
       // recibe sonido/notificacion en su cliente.
       await this.realtime.publish(tenantId, {
         kind: 'chat.reaction',
+        removed: false,
         orderId,
         externalId: order.externalId,
         customerName: order.customerName,

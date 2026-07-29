@@ -203,6 +203,7 @@ export function ChatNotifications() {
       }
 
       if (event.kind === 'chat.reaction') {
+        if (event.removed) return; // quitar una reaccion no avisa
         if (String(event.messageAuthorId ?? '') !== me.id) return; // no es mi mensaje
         if (String(event.reactorId ?? '') === me.id) return; // reaccione yo
         const reactor = String(event.reactorName ?? 'Alguien');
