@@ -397,6 +397,11 @@ function ConversacionTab({
     new Map(),
   );
   const lastTypingSent = useRef(0);
+  // Solo los dispositivos con puntero real (mouse) muestran acciones al hover:
+  // en tactil un TAP simula hover y abria las reacciones con solo tocar.
+  const [hoverCapable] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(hover: hover)').matches,
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pendingKind = useRef<DevicePhotoKind>('imei');
@@ -843,13 +848,28 @@ function ConversacionTab({
     setMobileActionsFor(m.id);
   }, []);
 
-  // "Esta escribiendo": señal throttled al server desde la PRIMERA letra.
-  const signalTyping = useCallback(() => {
-    const now = Date.now();
-    if (now - lastTypingSent.current < 2500) return;
-    lastTypingSent.current = now;
-    void api.post(`/v1/orders/${orderId}/typing`).catch(() => undefined);
-  }, [orderId]);
+  // "Esta escribiendo": señal al server desde la PRIMERA letra. `force` salta
+  // el throttle cuando se EMPIEZA a escribir (campo vacio -> primer caracter),
+  // para que al otro lado aparezca de inmediato.
+  const signalTyping = useCallback(
+    (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastTypingSent.current < 2000) return;
+      lastTypingSent.current = now;
+      void api.post(`/v1/orders/${orderId}/typing`).catch(() => undefined);
+    },
+    [orderId],
+  );
+
+  // El globito de "escribiendo" aparece al fondo: si estaba en el fondo,
+  // mantenerlo a la vista.
+  useEffect(() => {
+    if (typingUsers.size > 0 && atBottomRef.current) {
+      requestAnimationFrame(() => {
+        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+      });
+    }
+  }, [typingUsers.size]);
 
   // Expirar señales de escritura viejas (4s sin refresco).
   useEffect(() => {
@@ -1042,11 +1062,31 @@ function ConversacionTab({
                 onToggleSelect={() => toggleSelectMsg(m.id)}
                 onLongPress={m.kind !== 'system' ? () => onBubbleLongPress(m) : undefined}
                 actionsOpen={mobileActionsFor === m.id && selectedMsgIds.size <= 1}
+                hoverActions={hoverCapable}
+                onDoubleTap={
+                  m.kind === 'text'
+                    ? () => react.mutate({ messageId: m.id, emoji: '👍' })
+                    : undefined
+                }
               />
               </Fragment>
             );
           })
         )}
+        {/* Globito "esta escribiendo" estilo WhatsApp: burbuja con 3 puntos
+            rebotando, como un mensaje entrante en camino. */}
+        {typingUsers.size > 0 ? (
+          <div className="mt-3 flex flex-col items-start px-1">
+            <span className="mb-1 px-1 text-[11px] font-semibold text-foreground/70">
+              {[...typingUsers.values()].map((t) => t.name).join(', ')}
+            </span>
+            <div className="flex items-center gap-1.5 rounded-2xl rounded-bl-md bg-muted px-4 py-3.5">
+              <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:-300ms]" />
+              <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:-150ms]" />
+              <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground/60" />
+            </div>
+          </div>
+        ) : null}
         {uploading ? (
           <div className="flex items-center gap-2 rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1071,15 +1111,6 @@ function ConversacionTab({
             </span>
           ) : null}
         </button>
-      ) : null}
-
-      {/* "Fulano esta escribiendo..." (en vivo, desde la primera letra). */}
-      {typingUsers.size > 0 ? (
-        <div className="px-5 pb-0.5 text-xs italic text-primary">
-          {[...typingUsers.values()].map((t) => t.name).join(', ')}{' '}
-          {typingUsers.size > 1 ? 'están escribiendo' : 'está escribiendo'}
-          <span className="animate-pulse">...</span>
-        </div>
       ) : null}
 
       <div className="border-t border-border p-3">
@@ -1187,8 +1218,10 @@ function ConversacionTab({
               ref={textareaRef}
               value={text}
               onChange={(e) => {
-                setText(e.target.value);
-                if (e.target.value.trim()) signalTyping();
+                const value = e.target.value;
+                // Primer caracter tras campo vacio -> señal INMEDIATA.
+                if (value.trim()) signalTyping(!text.trim());
+                setText(value);
                 syncMention();
               }}
               onKeyUp={syncMention}
@@ -1393,6 +1426,8 @@ function MessageBubble({
   onToggleSelect,
   onLongPress,
   actionsOpen = false,
+  hoverActions = true,
+  onDoubleTap,
 }: {
   message: OrderMessage;
   mine: boolean;
@@ -1418,48 +1453,82 @@ function MessageBubble({
   onLongPress?: () => void;
   /** Acciones visibles SIN hover (ancladas por long-press). */
   actionsOpen?: boolean;
+  /** Mostrar acciones al hover (solo dispositivos con mouse; en tactil NO). */
+  hoverActions?: boolean;
+  /** Doble toque / doble click: 👍 al mensaje. */
+  onDoubleTap?: () => void;
 }) {
   const isPhoto = message.kind === 'imei_photo' || message.kind === 'serial_photo';
   const isDoc = message.kind === 'document';
   const isFile = message.kind === 'file';
 
   // Long-press tactil: 420ms sin mover el dedo (>10px cancela: es scroll).
-  const lp = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> | null }>({
-    x: 0,
-    y: 0,
-    timer: null,
-  });
+  // Doble TOQUE (o doble click en PC): 👍 al mensaje.
+  const lp = useRef<{
+    x: number;
+    y: number;
+    timer: ReturnType<typeof setTimeout> | null;
+    moved: boolean;
+    fired: boolean;
+    lastTap: number;
+  }>({ x: 0, y: 0, timer: null, moved: false, fired: false, lastTap: 0 });
   const cancelLp = () => {
     if (lp.current.timer) {
       clearTimeout(lp.current.timer);
       lp.current.timer = null;
     }
   };
-  const touchHandlers = onLongPress
-    ? {
-        onTouchStart: (e: React.TouchEvent) => {
-          const t = e.touches[0];
-          if (!t) return;
-          lp.current.x = t.clientX;
-          lp.current.y = t.clientY;
-          cancelLp();
-          lp.current.timer = setTimeout(() => {
-            lp.current.timer = null;
-            onLongPress();
-          }, 420);
-        },
-        onTouchMove: (e: React.TouchEvent) => {
-          const t = e.touches[0];
-          if (!t) return;
-          if (Math.abs(t.clientX - lp.current.x) > 10 || Math.abs(t.clientY - lp.current.y) > 10) {
+  const touchHandlers =
+    onLongPress || onDoubleTap
+      ? {
+          onTouchStart: (e: React.TouchEvent) => {
+            const t = e.touches[0];
+            if (!t) return;
+            lp.current.x = t.clientX;
+            lp.current.y = t.clientY;
+            lp.current.moved = false;
+            lp.current.fired = false;
             cancelLp();
-          }
-        },
-        onTouchEnd: cancelLp,
-        onTouchCancel: cancelLp,
-        onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
-      }
-    : {};
+            if (onLongPress) {
+              lp.current.timer = setTimeout(() => {
+                lp.current.timer = null;
+                lp.current.fired = true;
+                onLongPress();
+              }, 420);
+            }
+          },
+          onTouchMove: (e: React.TouchEvent) => {
+            const t = e.touches[0];
+            if (!t) return;
+            if (
+              Math.abs(t.clientX - lp.current.x) > 10 ||
+              Math.abs(t.clientY - lp.current.y) > 10
+            ) {
+              lp.current.moved = true;
+              cancelLp();
+            }
+          },
+          onTouchEnd: () => {
+            cancelLp();
+            if (lp.current.moved || lp.current.fired || !onDoubleTap || selectionActive) return;
+            const now = Date.now();
+            if (now - lp.current.lastTap < 300) {
+              lp.current.lastTap = 0;
+              if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+                navigator.vibrate?.(15);
+              }
+              onDoubleTap();
+            } else {
+              lp.current.lastTap = now;
+            }
+          },
+          onTouchCancel: cancelLp,
+          onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+          onDoubleClick: () => {
+            if (!selectionActive && onDoubleTap) onDoubleTap();
+          },
+        }
+      : {};
   if (message.kind === 'system') {
     return (
       <div className="mt-3 flex justify-center py-1 first:mt-0">
@@ -1548,7 +1617,8 @@ function MessageBubble({
           : undefined
       }
       className={cn(
-        'group flex select-none flex-col px-1 py-0.5 first:mt-0 md:select-auto',
+        // touch-manipulation: sin zoom por doble toque (el doble toque es 👍).
+        'group flex touch-manipulation select-none flex-col px-1 py-0.5 first:mt-0 md:select-auto',
         grouped ? 'mt-0.5' : 'mt-4',
         mine ? 'items-end' : 'items-start',
         selected && 'rounded-xl bg-primary/10 ring-1 ring-primary/20',
@@ -1576,7 +1646,10 @@ function MessageBubble({
             data-msg-actions
             className={cn(
               'pointer-events-none absolute -top-4 z-10 flex items-center gap-0.5 rounded-lg border border-border bg-popover px-1 py-0.5 opacity-0 shadow-md transition-opacity duration-100',
-              'group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
+              // El hover SOLO en dispositivos con mouse: en tactil un tap simula
+              // hover y abria esto con solo tocar (alli: SOLO long-press).
+              hoverActions &&
+                'group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
               actionsOpen && 'pointer-events-auto opacity-100',
               mine ? 'right-1' : 'left-1',
             )}
