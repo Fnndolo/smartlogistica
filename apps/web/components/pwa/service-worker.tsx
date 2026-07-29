@@ -24,15 +24,38 @@ export function ServiceWorker() {
     };
     navigator.serviceWorker.addEventListener('controllerchange', onControllerChange);
 
+    // FORZAR la busqueda de actualizaciones del SW: los telefonos con la PWA
+    // instalada pueden quedarse DIAS con un sw.js viejo (el navegador solo
+    // chequea en navegaciones completas). Se chequea al registrar, cada vez
+    // que la app vuelve a primer plano y cada 30 min.
+    let reg: ServiceWorkerRegistration | null = null;
+    let interval: ReturnType<typeof setInterval> | null = null;
+    const checkUpdate = () => void reg?.update().catch(() => undefined);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') checkUpdate();
+    };
+
     const register = () => {
-      navigator.serviceWorker.register('/sw.js').catch(() => {
-        /* la app funciona igual sin SW; no bloquear */
-      });
+      navigator.serviceWorker
+        .register('/sw.js')
+        .then((r) => {
+          reg = r;
+          checkUpdate();
+          document.addEventListener('visibilitychange', onVisible);
+          interval = setInterval(checkUpdate, 30 * 60_000);
+        })
+        .catch(() => {
+          /* la app funciona igual sin SW; no bloquear */
+        });
     };
     if (document.readyState === 'complete') register();
     else window.addEventListener('load', register, { once: true });
 
-    return () => navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange);
+    return () => {
+      navigator.serviceWorker.removeEventListener('controllerchange', onControllerChange);
+      document.removeEventListener('visibilitychange', onVisible);
+      if (interval) clearInterval(interval);
+    };
   }, []);
 
   return null;

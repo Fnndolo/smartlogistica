@@ -14,7 +14,7 @@
  * Version del cache: subirla PURGA el cache viejo en `activate` (recupera a los
  * usuarios que quedaron con un cache envenenado de una version anterior).
  */
-const CACHE = 'smartlog-static-v8';
+const CACHE = 'smartlog-static-v9';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
