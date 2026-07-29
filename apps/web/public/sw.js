@@ -14,7 +14,7 @@
  * Version del cache: subirla PURGA el cache viejo en `activate` (recupera a los
  * usuarios que quedaron con un cache envenenado de una version anterior).
  */
-const CACHE = 'smartlog-static-v10';
+const CACHE = 'smartlog-static-v11';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -84,15 +84,13 @@ self.addEventListener('push', (event) => {
       const count = (prev.count || 0) + 1;
 
       // Estructura SIEMPRE igual (pedido del user):
-      //   titulo: QUIEN ESCRIBE (el ultimo) · CLIENTE DEL PEDIDO
+      //   titulo: SEDE (o "PEDIDOS GENERALES") · CLIENTE DEL PEDIDO
       //   cuerpo: autor en negrilla UNA vez y sus mensajes debajo; bloque
       //   nuevo al cambiar de autor.
-      const lastAuthor = entries[entries.length - 1].a || data.author || '';
       const customer = data.customer || prev.customer || '';
+      const sede = data.sede || prev.sede || '';
       const title =
-        lastAuthor && customer
-          ? lastAuthor + ' · ' + customer
-          : data.title || 'SmartLogistica';
+        sede && customer ? sede + ' · ' + customer : data.title || 'SmartLogistica';
 
       const parts = [];
       let currentAuthor = null;
@@ -111,7 +109,7 @@ self.addEventListener('push', (event) => {
         badge: '/icons/icon-192.png',
         tag,
         renotify: true,
-        data: { url: data.url || '/mentions', entries, count, customer },
+        data: { url: data.url || '/mentions', entries, count, customer, sede },
       });
     })(),
   );

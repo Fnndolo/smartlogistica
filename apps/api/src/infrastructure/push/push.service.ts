@@ -14,6 +14,7 @@ export interface PushPayload {
   author?: string; // quien escribio ("Marlon Cruz")
   msg?: string; // el texto ("hola") o la accion ("reacciono 👍")
   customer?: string; // cliente del pedido ("SANDRA MENESES")
+  sede?: string; // nombre de la sede o "PEDIDOS GENERALES"
 }
 
 /**

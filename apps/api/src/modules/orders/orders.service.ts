@@ -369,6 +369,14 @@ export class OrdersService {
       ? `/warehouses/${order.warehouseId}?order=${orderId}`
       : `/orders?order=${orderId}`;
     const preview = (input.body ?? '').slice(0, 120);
+    const sede = order.warehouseId
+      ? ((
+          await prisma.warehouse.findUnique({
+            where: { id: order.warehouseId },
+            select: { name: true },
+          })
+        )?.name ?? 'PEDIDOS GENERALES')
+      : 'PEDIDOS GENERALES';
     const mentioned = new Set(mentions.filter((id) => id !== auth.userId));
     const others = new Set(
       [...participants.map((p) => p.authorId), replyTo?.authorId ?? '']
@@ -377,20 +385,22 @@ export class OrdersService {
     );
     void Promise.all([
       this.push.sendToUsers([...mentioned], {
-        title: `${displayName(auth)} te mencionó · ${order.customerName}`,
+        title: `${sede} · ${order.customerName}`,
         body: preview,
         url,
         author: displayName(auth),
         msg: preview,
         customer: order.customerName,
+        sede,
       }),
       this.push.sendToUsers([...others], {
-        title: `${displayName(auth)} · ${order.customerName}`,
+        title: `${sede} · ${order.customerName}`,
         body: preview,
         url,
         author: displayName(auth),
         msg: preview,
         customer: order.customerName,
+        sede,
       }),
     ]).catch(() => undefined);
 
@@ -436,9 +446,17 @@ export class OrdersService {
       });
       if (msg.authorId !== auth.userId) {
         // WEB PUSH al autor del mensaje (aunque tenga la app cerrada).
+        const sede = order.warehouseId
+          ? ((
+              await prisma.warehouse.findUnique({
+                where: { id: order.warehouseId },
+                select: { name: true },
+              })
+            )?.name ?? 'PEDIDOS GENERALES')
+          : 'PEDIDOS GENERALES';
         void this.push
           .sendToUsers([msg.authorId], {
-            title: `${displayName(auth)} reaccionó ${emoji} · ${order.customerName}`,
+            title: `${sede} · ${order.customerName}`,
             body: msg.body ? `A: "${msg.body.slice(0, 100)}"` : 'A tu mensaje',
             url: order.warehouseId
               ? `/warehouses/${order.warehouseId}?order=${orderId}`
@@ -446,6 +464,7 @@ export class OrdersService {
             author: displayName(auth),
             msg: `reaccionó ${emoji}`,
             customer: order.customerName,
+            sede,
           })
           .catch(() => undefined);
       }
