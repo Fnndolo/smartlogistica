@@ -11,7 +11,6 @@ import {
   ArrowRightLeft,
   Camera,
   Check,
-  CheckSquare,
   ChevronDown,
   Download,
   Image as ImageIcon,
@@ -388,9 +387,7 @@ function ConversacionTab({
   const [replyTo, setReplyTo] = useState<OrderMessage | null>(null);
   // Picker de emojis abierto para un mensaje (con el punto donde se abrio).
   const [pickerFor, setPickerFor] = useState<{ messageId: string; x: number; y: number } | null>(null);
-  // Seleccion multiple (long-press en cel / boton en PC) + acciones ancladas
-  // al mensaje long-presseado (el hover no existe en tactil).
-  const [selectedMsgIds, setSelectedMsgIds] = useState<Set<string>>(new Set());
+  // Acciones ancladas al mensaje long-presseado (el hover no existe en tactil).
   const [mobileActionsFor, setMobileActionsFor] = useState<string | null>(null);
   // "Esta escribiendo...": usuarios con señal viva (expira a los 4s).
   const [typingUsers, setTypingUsers] = useState<Map<string, { name: string; until: number }>>(
@@ -804,14 +801,13 @@ function ConversacionTab({
 
   const mentionMatches = mention ? matchMembers(mention.query, members) : [];
 
-  // Eliminar UNO O VARIOS mensajes. Optimista: desaparecen al instante; el
-  // invalidate final reconcilia (y restaura los que hayan fallado).
+  // Eliminar mensaje(s). Optimista: desaparecen al instante; el invalidate
+  // final reconcilia (y restaura los que hayan fallado).
   const deleteMessages = useCallback(
     (ids: string[]) => {
       qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) =>
         old.filter((m) => !ids.includes(m.id)),
       );
-      setSelectedMsgIds(new Set());
       setMobileActionsFor(null);
       void Promise.allSettled(
         ids.map((id) => api.delete(`/v1/orders/${orderId}/messages/${id}`)),
@@ -825,26 +821,12 @@ function ConversacionTab({
     [qc, orderId],
   );
 
-  const selectionActive = selectedMsgIds.size > 0;
-  const clearSelection = useCallback(() => {
-    setSelectedMsgIds(new Set());
-    setMobileActionsFor(null);
-  }, []);
-  const toggleSelectMsg = useCallback((id: string) => {
-    setMobileActionsFor(null);
-    setSelectedMsgIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
+  const closeActions = useCallback(() => setMobileActionsFor(null), []);
 
-  // Long-press (cel): vibra, selecciona el mensaje y ancla sus acciones
-  // (reacciones rapidas / responder / eliminar), estilo WhatsApp.
+  // Long-press (cel): vibra y ancla las acciones del mensaje (reacciones
+  // rapidas / responder / eliminar), estilo WhatsApp.
   const onBubbleLongPress = useCallback((m: OrderMessage) => {
     if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.(35);
-    setSelectedMsgIds(new Set([m.id]));
     setMobileActionsFor(m.id);
   }, []);
 
@@ -949,33 +931,6 @@ function ConversacionTab({
 
   return (
     <div className="relative flex h-full flex-col">
-      {/* Barra de seleccion multiple (long-press en cel / "seleccionar" en PC). */}
-      {selectionActive ? (
-        <div className="flex items-center gap-2 border-b border-border bg-muted/60 px-4 py-2">
-          <button
-            type="button"
-            onClick={clearSelection}
-            className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-            aria-label="Cancelar seleccion"
-          >
-            <X className="h-4 w-4" />
-          </button>
-          <span className="text-sm font-medium tabular-nums">
-            {selectedMsgIds.size} seleccionado{selectedMsgIds.size === 1 ? '' : 's'}
-          </span>
-          <span className="flex-1" />
-          <button
-            type="button"
-            onClick={() => setConfirmDelete([...selectedMsgIds])}
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-red-600 dark:hover:text-red-400"
-            aria-label="Eliminar seleccionados"
-            title="Eliminar seleccionados"
-          >
-            <Trash2 className="h-4 w-4" />
-          </button>
-        </div>
-      ) : null}
-
       {/* flex-col + spacer mt-auto: con pocos mensajes el chat NACE DESDE
           ABAJO (como WhatsApp) y va subiendo; con muchos, scrollea normal. */}
       <div
@@ -1043,7 +998,7 @@ function ConversacionTab({
                   m.kind !== 'system'
                     ? () => {
                         setReplyTo(m);
-                        clearSelection();
+                        closeActions();
                       }
                     : undefined
                 }
@@ -1054,14 +1009,10 @@ function ConversacionTab({
                 }
                 onToggleReaction={(emoji) => {
                   react.mutate({ messageId: m.id, emoji });
-                  clearSelection();
+                  closeActions();
                 }}
-                selectionActive={selectionActive}
-                selected={selectedMsgIds.has(m.id)}
-                selectable={m.kind !== 'system' && (m.authorId === me?.id || isOwner)}
-                onToggleSelect={() => toggleSelectMsg(m.id)}
                 onLongPress={m.kind !== 'system' ? () => onBubbleLongPress(m) : undefined}
-                actionsOpen={mobileActionsFor === m.id && selectedMsgIds.size <= 1}
+                actionsOpen={mobileActionsFor === m.id}
                 hoverActions={hoverCapable}
                 onDoubleTap={
                   m.kind === 'text'
@@ -1264,7 +1215,7 @@ function ConversacionTab({
           onPick={(emoji) => {
             react.mutate({ messageId: pickerFor.messageId, emoji });
             setPickerFor(null);
-            clearSelection();
+            closeActions();
           }}
         />
       ) : null}
@@ -1420,10 +1371,6 @@ function MessageBubble({
   onReply,
   onReact,
   onToggleReaction,
-  selectionActive = false,
-  selected = false,
-  selectable = false,
-  onToggleSelect,
   onLongPress,
   actionsOpen = false,
   hoverActions = true,
@@ -1444,11 +1391,6 @@ function MessageBubble({
   onReply?: () => void;
   onReact?: (e: { clientX: number; clientY: number }) => void;
   onToggleReaction?: (emoji: string) => void;
-  /** Modo seleccion multiple activo (algun mensaje seleccionado). */
-  selectionActive?: boolean;
-  selected?: boolean;
-  selectable?: boolean;
-  onToggleSelect?: () => void;
   /** Long-press (cel): abre las acciones ancladas a este mensaje. */
   onLongPress?: () => void;
   /** Acciones visibles SIN hover (ancladas por long-press). */
@@ -1471,7 +1413,8 @@ function MessageBubble({
     moved: boolean;
     fired: boolean;
     lastTap: number;
-  }>({ x: 0, y: 0, timer: null, moved: false, fired: false, lastTap: 0 });
+    lastTouchTap: number;
+  }>({ x: 0, y: 0, timer: null, moved: false, fired: false, lastTap: 0, lastTouchTap: 0 });
   const cancelLp = () => {
     if (lp.current.timer) {
       clearTimeout(lp.current.timer);
@@ -1510,7 +1453,11 @@ function MessageBubble({
           },
           onTouchEnd: () => {
             cancelLp();
-            if (lp.current.moved || lp.current.fired || !onDoubleTap || selectionActive) return;
+            // Marca de "ultimo toque tactil": el navegador dispara ADEMAS un
+            // dblclick sintetico tras dos taps; sin esta marca, ese fantasma
+            // volvia a togglear el 👍 y lo quitaba al instante.
+            lp.current.lastTouchTap = Date.now();
+            if (lp.current.moved || lp.current.fired || !onDoubleTap) return;
             const now = Date.now();
             if (now - lp.current.lastTap < 300) {
               lp.current.lastTap = 0;
@@ -1525,7 +1472,9 @@ function MessageBubble({
           onTouchCancel: cancelLp,
           onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
           onDoubleClick: () => {
-            if (!selectionActive && onDoubleTap) onDoubleTap();
+            // Ignorar el dblclick sintetico que sigue a un doble TOQUE.
+            if (Date.now() - lp.current.lastTouchTap < 700) return;
+            if (onDoubleTap) onDoubleTap();
           },
         }
       : {};
@@ -1603,25 +1552,14 @@ function MessageBubble({
   return (
     <div
       {...touchHandlers}
-      onClickCapture={
-        selectionActive
-          ? (e) => {
-              // Las acciones ancladas (long-press) siguen funcionando normal.
-              if ((e.target as HTMLElement).closest?.('[data-msg-actions]')) return;
-              // En modo seleccion, tocar el mensaje lo marca/desmarca (y no
-              // dispara su accion normal, p.ej. abrir la foto).
-              e.preventDefault();
-              e.stopPropagation();
-              if (selectable && onToggleSelect) onToggleSelect();
-            }
-          : undefined
-      }
       className={cn(
         // touch-manipulation: sin zoom por doble toque (el doble toque es 👍).
         'group flex touch-manipulation select-none flex-col px-1 py-0.5 first:mt-0 md:select-auto',
         grouped ? 'mt-0.5' : 'mt-4',
         mine ? 'items-end' : 'items-start',
-        selected && 'rounded-xl bg-primary/10 ring-1 ring-primary/20',
+        // El mensaje long-presseado queda resaltado mientras sus acciones
+        // estan abiertas (feedback de "lo tengo agarrado", estilo WhatsApp).
+        actionsOpen && 'rounded-xl bg-primary/10',
       )}
     >
       {/* Cabecera del grupo: nombre (otros) + hora, UNA vez por conjunto. */}
@@ -1641,7 +1579,7 @@ function MessageBubble({
       <div className="relative max-w-[85%]">
         {bubble}
 
-        {(onReply || onReact || (canDelete && onDelete)) && (!selectionActive || actionsOpen) ? (
+        {onReply || onReact || (canDelete && onDelete) ? (
           <div
             data-msg-actions
             className={cn(
@@ -1690,17 +1628,6 @@ function MessageBubble({
                 title="Responder"
               >
                 <Reply className="h-3.5 w-3.5" />
-              </button>
-            ) : null}
-            {selectable && onToggleSelect ? (
-              <button
-                type="button"
-                onClick={onToggleSelect}
-                className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-                aria-label="Seleccionar mensaje"
-                title="Seleccionar (para eliminar varios)"
-              >
-                <CheckSquare className="h-3.5 w-3.5" />
               </button>
             ) : null}
             {canDelete && onDelete ? (
