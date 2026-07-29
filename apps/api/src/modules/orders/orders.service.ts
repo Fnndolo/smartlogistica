@@ -834,23 +834,23 @@ export class OrdersService {
       throw new BadRequestException('Formato no soportado. Sube una imagen JPG, PNG, WEBP o GIF.');
     }
 
-    // 1. Leer el/los codigo(s) con IA segun el tipo. Si no hay ninguno, corta aca.
+    // 1+2 EN PARALELO: la IA lee el codigo mientras la imagen sube al storage
+    // (antes iban en serie y se sumaban los tiempos). Si la IA no encuentra
+    // nada, la imagen recien subida se borra (best-effort) y se corta.
     const base64 = file.buffer.toString('base64');
-    const codes =
-      kind === 'imei'
-        ? await this.ai.extractImeis(base64, mime)
-        : await this.ai.extractSerials(base64, mime);
+    const key = `tenants/${tenantId}/orders/${orderId}/${randomUUID()}.${IMAGE_EXT[mime]}`;
+    const [codes] = await Promise.all([
+      kind === 'imei' ? this.ai.extractImeis(base64, mime) : this.ai.extractSerials(base64, mime),
+      this.storage.put(key, file.buffer, mime),
+    ]);
     if (codes.length === 0) {
+      void this.storage.delete(key).catch(() => undefined);
       throw new BadRequestException(
         kind === 'imei'
           ? 'No se detecto ningun IMEI valido en la imagen. Sube una foto nitida del IMEI.'
           : 'No se detecto ningun serial en la imagen. Sube una foto nitida del serial.',
       );
     }
-
-    // 2. Guardar la imagen en storage (privada, key namespaced por tenant).
-    const key = `tenants/${tenantId}/orders/${orderId}/${randomUUID()}.${IMAGE_EXT[mime]}`;
-    await this.storage.put(key, file.buffer, mime);
 
     // 3. Registrar el mensaje en la conversacion del pedido.
     const msg = await prisma.orderMessage.create({
@@ -1033,7 +1033,7 @@ export class OrdersService {
     const { tenantId, prisma } = getTenantContext();
 
     const client = extractInvoiceClient(order);
-    const { result, pdf, payment } = await this.alegra.createInvoiceForWarehouse(
+    const { result, payment } = await this.alegra.createInvoiceForWarehouse(
       order.warehouseId,
       client,
       input.lines,
@@ -1052,30 +1052,32 @@ export class OrdersService {
       },
     });
 
-    // Adjuntar el PDF de la factura al chat, como si quien facturo lo hubiera
-    // enviado como archivo. Best-effort: si falla, la factura ya quedo emitida.
-    if (pdf && this.storage.isConfigured()) {
+    // PDF + Certificado de Garantia + adjunto al chat: EN BACKGROUND. La
+    // factura ya quedo emitida; descargar el PDF de Alegra, transformarlo y
+    // subirlo agregaba 2-4s al boton sin aportar nada a la respuesta. El
+    // documento aparece en el chat segundos despues via SSE.
+    const warehouseId = order.warehouseId;
+    void (async () => {
       try {
-        // Certificado de Garantia: si la sede tiene plantilla, la factura se
-        // transforma en el certificado (nunca se envia la factura cruda). Si no
-        // hay plantilla o falla, va la factura original.
+        const pdf = await this.alegra.invoicePdf(warehouseId, result.id);
+        if (!pdf || !this.storage.isConfigured()) return;
+        // Certificado: si la sede tiene plantilla, la factura se transforma
+        // (nunca se envia la factura cruda). Si no hay plantilla, va la original.
         const clientNameRaw = (client.name ?? '').trim().toUpperCase();
-        const certificate = order.warehouseId
-          ? await this.warranty
-              .certificateFor(order.warehouseId, pdf, {
-                moneda: 'COP',
-                fecha: new Date().toISOString().slice(0, 10),
-                cliente: clientNameRaw,
-                numeroFactura: result.number,
-                // Forma/medio de pago REALES de la factura de Alegra.
-                formaPago: payment.formaPago,
-                medioPago: payment.medioPago,
-              })
-              .catch(() => null)
-          : null;
+        const certificate = await this.warranty
+          .certificateFor(warehouseId, pdf, {
+            moneda: 'COP',
+            fecha: new Date().toISOString().slice(0, 10),
+            cliente: clientNameRaw,
+            numeroFactura: result.number,
+            // Forma/medio de pago REALES de la factura de Alegra.
+            formaPago: payment.formaPago,
+            medioPago: payment.medioPago,
+          })
+          .catch(() => null);
         const finalPdf = certificate ?? pdf;
 
-        // Nombre del archivo: FACTURA-<NOMBRE CLIENTE EN MAYUSCULA> (ej. FACTURA-DAVID CASTRO).
+        // Nombre del archivo: FACTURA-<NOMBRE CLIENTE EN MAYUSCULA>.
         const clientName = clientNameRaw || `FACTURA ${result.number}`;
         const fileName = `FACTURA-${clientName}.pdf`;
         const key = `tenants/${tenantId}/orders/${orderId}/${slugForKey(fileName)}-${randomUUID()}.pdf`;
@@ -1092,10 +1094,11 @@ export class OrdersService {
             imeis: [],
           },
         });
+        await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
       } catch {
-        // no bloquear la facturacion por un fallo al adjuntar el PDF
+        // best-effort: la facturacion nunca se bloquea por el adjunto
       }
-    }
+    })();
     await prisma.orderEvent.create({
       data: {
         orderId,
@@ -1785,24 +1788,24 @@ function prorateToOrderTotal<T extends { codes: string[]; suggestedPrice: string
   if (lines.some((l) => l.suggestedPrice == null || Number.isNaN(Number(l.suggestedPrice)))) {
     return lines;
   }
-  const qty = (l: T) => Math.max(1, l.codes.length);
-  const totals = lines.map((l) => Number(l.suggestedPrice) * qty(l));
+  // OJO: cada linea es UN equipo (una foto), cantidad 1 — aunque `codes` traiga
+  // 2 IMEIs (dual-SIM). Usar codes.length como cantidad duplicaba la suma y el
+  // prorrateo "bajaba" el precio hasta la mitad para cuadrar el total.
+  const totals = lines.map((l) => Number(l.suggestedPrice));
   const sum = totals.reduce((a, b) => a + b, 0);
   const diff = Math.round(orderTotal - sum);
   if (sum <= 0 || diff === 0) return lines;
 
   const maxIdx = totals.indexOf(Math.max(...totals));
-  const shares = lines.map((l, i) => {
-    if (i === maxIdx) return 0;
-    const q = qty(l);
-    return Math.round((diff * (totals[i] ?? 0)) / sum / q) * q;
-  });
+  const shares = lines.map((_, i) =>
+    i === maxIdx ? 0 : Math.round((diff * (totals[i] ?? 0)) / sum),
+  );
   shares[maxIdx] = diff - shares.reduce((a, b) => a + b, 0);
 
-  const adjusted = lines.map((l, i) => {
-    const unit = Number(l.suggestedPrice) + (shares[i] ?? 0) / qty(l);
-    return { ...l, suggestedPrice: String(Math.round(unit * 100) / 100) };
-  });
+  const adjusted = lines.map((l, i) => ({
+    ...l,
+    suggestedPrice: String(Number(l.suggestedPrice) + (shares[i] ?? 0)),
+  }));
   // Un descuento enorme podria dejar precios negativos: mejor no sugerir nada raro.
   return adjusted.some((l) => Number(l.suggestedPrice) < 0) ? lines : adjusted;
 }

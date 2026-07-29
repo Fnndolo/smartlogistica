@@ -1,11 +1,21 @@
 import 'reflect-metadata';
+import * as http from 'node:http';
+import * as https from 'node:https';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
+import axios from 'axios';
 import { Logger } from 'nestjs-pino';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 
 import { AppModule } from './app.module';
+
+// KEEP-ALIVE global para TODO el trafico saliente (Alegra, VTEX, Coordinadora,
+// Whapify...): reutiliza las conexiones TLS en vez de abrir una por request.
+// Con 10-20 usuarios facturando a la vez, cada handshake ahorrado son
+// ~100-300ms menos por llamada externa.
+axios.defaults.httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 64 });
+axios.defaults.httpAgent = new http.Agent({ keepAlive: true, maxSockets: 64 });
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {

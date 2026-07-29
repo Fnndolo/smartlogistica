@@ -56,6 +56,8 @@ import { cn } from '@/lib/utils';
 import { setActiveChat } from './active-chat';
 import { GuidePanel } from './guide-panel';
 import { InvoicePanel } from './invoice-panel';
+import { compressImage } from '@/lib/compress-image';
+
 import { EmojiPicker } from './emoji-picker';
 import { bumpReaction, topReactions } from './reaction-frequents';
 import {
@@ -164,11 +166,29 @@ function DrawerContent({
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
   const me = useCurrentUser();
+  const qc = useQueryClient();
   // El OPERADOR solo trabaja el pedido: detalle + conversacion (sube fotos,
   // chatea). Facturar, guia y actividad son de administradores.
   const canManage = me?.role === 'OWNER' || me?.role === 'ADMIN';
 
   const { data: detail } = useQuery(orderDetailQuery(order.id));
+
+  // PRECARGAR Facturar y Guia apenas se abre el pedido: cuando el usuario
+  // entra a esas pestañas, el contenido ya esta en cache (antes esperaba
+  // 4-6s el fetch de Alegra/Coordinadora al abrir la pestaña).
+  useEffect(() => {
+    if (!canManage) return;
+    void qc.prefetchQuery({
+      queryKey: ['invoice-preview', order.id],
+      queryFn: () => api.get(`/v1/orders/${order.id}/invoice-preview`),
+      staleTime: 20_000,
+    });
+    void qc.prefetchQuery({
+      queryKey: ['guide-preview', order.id],
+      queryFn: () => api.get(`/v1/orders/${order.id}/guide-preview`),
+      staleTime: 20_000,
+    });
+  }, [order.id, canManage, qc]);
 
   const tabs: { id: Tab; label: string; icon: typeof Info }[] = [
     { id: 'detalle', label: 'Detalle', icon: Info },
@@ -894,8 +914,9 @@ function ConversacionTab({
     setUploadLabel('Subiendo archivo...');
     setUploading(true);
     try {
+      const compact = await compressImage(file);
       const fd = new FormData();
-      fd.append('file', file);
+      fd.append('file', compact, compact.name);
       await api.upload<OrderMessage>(`/v1/orders/${orderId}/attachment`, fd);
       qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
     } catch (err) {
@@ -912,8 +933,10 @@ function ConversacionTab({
     setUploading(true);
     const kind = pendingKind.current;
     try {
+      // Comprimir ANTES de subir: sube en una fraccion y la IA lee mas rapido.
+      const compact = await compressImage(file);
       const fd = new FormData();
-      fd.append('file', file);
+      fd.append('file', compact, compact.name);
       const res = await api.upload<DevicePhotoResponse>(
         `/v1/orders/${orderId}/device-photo?kind=${kind}`,
         fd,
@@ -921,6 +944,8 @@ function ConversacionTab({
       toast.success(`${kind === 'imei' ? 'IMEI' : 'Serial'} detectado: ${res.message.imeis.join(', ')}`);
       qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
       qc.invalidateQueries({ queryKey: ['catalog', orderId] });
+      // Las lineas de facturar dependen de los codigos: refrescar el preview.
+      qc.invalidateQueries({ queryKey: ['invoice-preview', orderId] });
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'No se pudo procesar la foto');
     } finally {

@@ -474,7 +474,6 @@ export class AlegraService {
     auth: AuthContext,
   ): Promise<{
     result: InvoiceResult;
-    pdf: Buffer | null;
     /** Forma/medio de pago REALES de la factura (ya traducidos), para el Certificado. */
     payment: { formaPago: string; medioPago: string };
   }> {
@@ -562,9 +561,8 @@ export class AlegraService {
         ],
       });
 
-      // PDF de la factura (para adjuntarlo al chat). Best-effort.
-      const pdf = await this.client.getInvoicePdf(http, String(created.id)).catch(() => null);
-
+      // El PDF ya NO se descarga aqui: alarga el boton ~1-2s y solo se usa
+      // para adjuntar al chat. Se trae en background con invoicePdf().
       return {
         result: {
           id: String(created.id),
@@ -573,7 +571,6 @@ export class AlegraService {
           total: created.total != null ? String(created.total) : String(total),
           balance: created.balance != null ? String(created.balance) : '0',
         },
-        pdf,
         payment: {
           formaPago: paymentFormLabel(created.paymentForm),
           medioPago: paymentMethodLabel(created.paymentMethod),
@@ -589,6 +586,17 @@ export class AlegraService {
       }
       throw this.alegraError(err, 'No se pudo crear la factura en Alegra');
     }
+  }
+
+  /**
+   * PDF de una factura ya emitida (para adjuntarlo al chat EN BACKGROUND, sin
+   * frenar el boton de facturar). Sin guardas de rol: se llama tras una accion
+   * ya autorizada.
+   */
+  async invoicePdf(warehouseId: string, invoiceId: string): Promise<Buffer | null> {
+    const { tenantId } = getTenantContext();
+    const http = await this.client.forWarehouse(tenantId, warehouseId);
+    return this.client.getInvoicePdf(http, invoiceId).catch(() => null);
   }
 
   private toItem(raw: {
