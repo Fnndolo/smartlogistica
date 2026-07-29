@@ -14,7 +14,7 @@
  * Version del cache: subirla PURGA el cache viejo en `activate` (recupera a los
  * usuarios que quedaron con un cache envenenado de una version anterior).
  */
-const CACHE = 'smartlog-static-v9';
+const CACHE = 'smartlog-static-v10';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
@@ -47,6 +47,23 @@ self.addEventListener('activate', (event) => {
  * Pedidos distintos = notificaciones separadas. El cliente las limpia al
  * enfocar la app (como WhatsApp al leer).
  */
+/**
+ * "Negrilla" en texto plano (las notificaciones no admiten markup): mapea
+ * letras/numeros a sus equivalentes Unicode sans-serif bold (𝗔𝗮𝟬). Los
+ * caracteres sin equivalente (tildes, ñ) quedan normales.
+ */
+function boldify(s) {
+  let out = '';
+  for (const ch of String(s)) {
+    const c = ch.codePointAt(0);
+    if (c >= 65 && c <= 90) out += String.fromCodePoint(0x1d5d4 + c - 65);
+    else if (c >= 97 && c <= 122) out += String.fromCodePoint(0x1d5ee + c - 97);
+    else if (c >= 48 && c <= 57) out += String.fromCodePoint(0x1d7ec + c - 48);
+    else out += ch;
+  }
+  return out;
+}
+
 self.addEventListener('push', (event) => {
   let data = {};
   try {
@@ -66,25 +83,27 @@ self.addEventListener('push', (event) => {
         .slice(-8);
       const count = (prev.count || 0) + 1;
 
-      let title;
-      let body;
-      if (count === 1) {
-        title = data.title || 'SmartLogistica';
-        body = data.body || '';
-      } else {
-        title = `${count} mensajes · ${data.customer || 'SmartLogistica'}`;
-        // Nombre UNA vez y debajo sus mensajes; nuevo bloque al cambiar de autor.
-        const parts = [];
-        let lastAuthor = null;
-        for (const e of entries) {
-          if (e.a && e.a !== lastAuthor) {
-            parts.push(e.a);
-            lastAuthor = e.a;
-          }
-          if (e.m) parts.push('  ' + e.m);
+      // Estructura SIEMPRE igual (pedido del user):
+      //   titulo: QUIEN ESCRIBE (el ultimo) · CLIENTE DEL PEDIDO
+      //   cuerpo: autor en negrilla UNA vez y sus mensajes debajo; bloque
+      //   nuevo al cambiar de autor.
+      const lastAuthor = entries[entries.length - 1].a || data.author || '';
+      const customer = data.customer || prev.customer || '';
+      const title =
+        lastAuthor && customer
+          ? lastAuthor + ' · ' + customer
+          : data.title || 'SmartLogistica';
+
+      const parts = [];
+      let currentAuthor = null;
+      for (const e of entries) {
+        if (e.a && e.a !== currentAuthor) {
+          parts.push(boldify(e.a));
+          currentAuthor = e.a;
         }
-        body = parts.join('\n');
+        if (e.m) parts.push(e.m);
       }
+      const body = parts.join('\n');
 
       await self.registration.showNotification(title, {
         body,
@@ -92,7 +111,7 @@ self.addEventListener('push', (event) => {
         badge: '/icons/icon-192.png',
         tag,
         renotify: true,
-        data: { url: data.url || '/mentions', entries, count },
+        data: { url: data.url || '/mentions', entries, count, customer },
       });
     })(),
   );
