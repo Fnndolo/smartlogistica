@@ -411,6 +411,22 @@ export class OrdersService {
     return this.toMessage(msg, auth.userId);
   }
 
+  /**
+   * Señal "esta escribiendo" (efimera, sin DB): se publica por SSE y los chats
+   * abiertos de ese pedido la muestran unos segundos. El cliente la manda
+   * throttled desde la primera letra.
+   */
+  async typing(orderId: string, auth: AuthContext): Promise<void> {
+    await this.loadAccessibleOrder(orderId, auth);
+    const { tenantId } = getTenantContext();
+    await this.realtime.publish(tenantId, {
+      kind: 'chat.typing',
+      orderId,
+      userId: auth.userId,
+      userName: displayName(auth),
+    });
+  }
+
   /** Alterna MI reaccion con un emoji sobre un mensaje. Devuelve el mensaje actualizado. */
   async toggleReaction(
     orderId: string,

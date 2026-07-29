@@ -11,6 +11,7 @@ import {
   ArrowRightLeft,
   Camera,
   Check,
+  CheckSquare,
   ChevronDown,
   Download,
   Image as ImageIcon,
@@ -381,11 +382,21 @@ function ConversacionTab({
   const [uploading, setUploading] = useState(false);
   const [uploadLabel, setUploadLabel] = useState('Subiendo...');
   const [attachOpen, setAttachOpen] = useState(false);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // Eliminar: uno o VARIOS mensajes (seleccion multiple).
+  const [confirmDelete, setConfirmDelete] = useState<string[] | null>(null);
   // Responder/citar: el mensaje al que voy a responder (barra sobre el composer).
   const [replyTo, setReplyTo] = useState<OrderMessage | null>(null);
   // Picker de emojis abierto para un mensaje (con el punto donde se abrio).
   const [pickerFor, setPickerFor] = useState<{ messageId: string; x: number; y: number } | null>(null);
+  // Seleccion multiple (long-press en cel / boton en PC) + acciones ancladas
+  // al mensaje long-presseado (el hover no existe en tactil).
+  const [selectedMsgIds, setSelectedMsgIds] = useState<Set<string>>(new Set());
+  const [mobileActionsFor, setMobileActionsFor] = useState<string | null>(null);
+  // "Esta escribiendo...": usuarios con señal viva (expira a los 4s).
+  const [typingUsers, setTypingUsers] = useState<Map<string, { name: string; until: number }>>(
+    new Map(),
+  );
+  const lastTypingSent = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pendingKind = useRef<DevicePhotoKind>('imei');
@@ -467,8 +478,27 @@ function ConversacionTab({
             qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) =>
               old.some((m) => m.id === injected.id) ? old : [...old, injected],
             );
+            // Su mensaje llego: se apaga su "esta escribiendo".
+            setTypingUsers((prev) => {
+              if (!prev.has(authorId)) return prev;
+              const next = new Map(prev);
+              next.delete(authorId);
+              return next;
+            });
           }
           reconcile();
+          return;
+        }
+
+        if (event.kind === 'chat.typing') {
+          const userId = String(event.userId ?? '');
+          if (!userId || userId === me?.id) return;
+          const name = String(event.userName ?? '');
+          setTypingUsers((prev) => {
+            const next = new Map(prev);
+            next.set(userId, { name, until: Date.now() + 4000 });
+            return next;
+          });
           return;
         }
 
@@ -769,23 +799,77 @@ function ConversacionTab({
 
   const mentionMatches = mention ? matchMembers(mention.query, members) : [];
 
-  // Eliminar un mensaje (incluidas las fotos). Optimista: desaparece al instante.
-  const del = useMutation({
-    mutationFn: (messageId: string) => api.delete(`/v1/orders/${orderId}/messages/${messageId}`),
-    onMutate: async (messageId: string) => {
-      await qc.cancelQueries({ queryKey: ['order-messages', orderId] });
-      const prev = qc.getQueryData<OrderMessage[]>(['order-messages', orderId]);
+  // Eliminar UNO O VARIOS mensajes. Optimista: desaparecen al instante; el
+  // invalidate final reconcilia (y restaura los que hayan fallado).
+  const deleteMessages = useCallback(
+    (ids: string[]) => {
       qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) =>
-        old.filter((m) => m.id !== messageId),
+        old.filter((m) => !ids.includes(m.id)),
       );
-      return { prev };
+      setSelectedMsgIds(new Set());
+      setMobileActionsFor(null);
+      void Promise.allSettled(
+        ids.map((id) => api.delete(`/v1/orders/${orderId}/messages/${id}`)),
+      ).then((results) => {
+        if (results.some((r) => r.status === 'rejected')) {
+          toast.error('Algunos mensajes no se pudieron eliminar');
+        }
+        void qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
+      });
     },
-    onError: (err, _id, ctx) => {
-      if (ctx?.prev) qc.setQueryData(['order-messages', orderId], ctx.prev);
-      toast.error(err instanceof ApiError ? err.message : 'No se pudo eliminar el mensaje');
-    },
-    onSettled: () => qc.invalidateQueries({ queryKey: ['order-messages', orderId] }),
-  });
+    [qc, orderId],
+  );
+
+  const selectionActive = selectedMsgIds.size > 0;
+  const clearSelection = useCallback(() => {
+    setSelectedMsgIds(new Set());
+    setMobileActionsFor(null);
+  }, []);
+  const toggleSelectMsg = useCallback((id: string) => {
+    setMobileActionsFor(null);
+    setSelectedMsgIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  // Long-press (cel): vibra, selecciona el mensaje y ancla sus acciones
+  // (reacciones rapidas / responder / eliminar), estilo WhatsApp.
+  const onBubbleLongPress = useCallback((m: OrderMessage) => {
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) navigator.vibrate?.(35);
+    setSelectedMsgIds(new Set([m.id]));
+    setMobileActionsFor(m.id);
+  }, []);
+
+  // "Esta escribiendo": señal throttled al server desde la PRIMERA letra.
+  const signalTyping = useCallback(() => {
+    const now = Date.now();
+    if (now - lastTypingSent.current < 2500) return;
+    lastTypingSent.current = now;
+    void api.post(`/v1/orders/${orderId}/typing`).catch(() => undefined);
+  }, [orderId]);
+
+  // Expirar señales de escritura viejas (4s sin refresco).
+  useEffect(() => {
+    if (typingUsers.size === 0) return;
+    const t = setInterval(() => {
+      setTypingUsers((prev) => {
+        const now = Date.now();
+        let changed = false;
+        const next = new Map(prev);
+        for (const [k, v] of next) {
+          if (v.until < now) {
+            next.delete(k);
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, [typingUsers]);
 
   const isOwner = me?.role === 'OWNER' || me?.role === 'ADMIN';
 
@@ -845,9 +929,44 @@ function ConversacionTab({
 
   return (
     <div className="relative flex h-full flex-col">
+      {/* Barra de seleccion multiple (long-press en cel / "seleccionar" en PC). */}
+      {selectionActive ? (
+        <div className="flex items-center gap-2 border-b border-border bg-muted/60 px-4 py-2">
+          <button
+            type="button"
+            onClick={clearSelection}
+            className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Cancelar seleccion"
+          >
+            <X className="h-4 w-4" />
+          </button>
+          <span className="text-sm font-medium tabular-nums">
+            {selectedMsgIds.size} seleccionado{selectedMsgIds.size === 1 ? '' : 's'}
+          </span>
+          <span className="flex-1" />
+          <button
+            type="button"
+            onClick={() => setConfirmDelete([...selectedMsgIds])}
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-red-600 dark:hover:text-red-400"
+            aria-label="Eliminar seleccionados"
+            title="Eliminar seleccionados"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
+      ) : null}
+
       {/* flex-col + spacer mt-auto: con pocos mensajes el chat NACE DESDE
           ABAJO (como WhatsApp) y va subiendo; con muchos, scrollea normal. */}
-      <div ref={scrollRef} onScroll={onChatScroll} className="flex min-h-0 flex-1 flex-col overflow-y-auto p-5">
+      <div
+        ref={scrollRef}
+        onScroll={onChatScroll}
+        onClick={() => {
+          // Tocar fuera cierra las acciones ancladas del long-press.
+          if (mobileActionsFor) setMobileActionsFor(null);
+        }}
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto p-5"
+      >
         <div className="mt-auto" aria-hidden />
         {isLoading ? (
           <div className="flex justify-center py-8">
@@ -899,14 +1018,30 @@ function ConversacionTab({
                 matchByCode={matchByCode}
                 members={members}
                 canDelete={m.kind !== 'system' && (m.authorId === me?.id || isOwner)}
-                onDelete={() => setConfirmDeleteId(m.id)}
-                onReply={m.kind !== 'system' ? () => setReplyTo(m) : undefined}
+                onDelete={() => setConfirmDelete([m.id])}
+                onReply={
+                  m.kind !== 'system'
+                    ? () => {
+                        setReplyTo(m);
+                        clearSelection();
+                      }
+                    : undefined
+                }
                 onReact={
                   m.kind !== 'system'
                     ? (e) => setPickerFor({ messageId: m.id, x: e.clientX, y: e.clientY })
                     : undefined
                 }
-                onToggleReaction={(emoji) => react.mutate({ messageId: m.id, emoji })}
+                onToggleReaction={(emoji) => {
+                  react.mutate({ messageId: m.id, emoji });
+                  clearSelection();
+                }}
+                selectionActive={selectionActive}
+                selected={selectedMsgIds.has(m.id)}
+                selectable={m.kind !== 'system' && (m.authorId === me?.id || isOwner)}
+                onToggleSelect={() => toggleSelectMsg(m.id)}
+                onLongPress={m.kind !== 'system' ? () => onBubbleLongPress(m) : undefined}
+                actionsOpen={mobileActionsFor === m.id && selectedMsgIds.size <= 1}
               />
               </Fragment>
             );
@@ -936,6 +1071,15 @@ function ConversacionTab({
             </span>
           ) : null}
         </button>
+      ) : null}
+
+      {/* "Fulano esta escribiendo..." (en vivo, desde la primera letra). */}
+      {typingUsers.size > 0 ? (
+        <div className="px-5 pb-0.5 text-xs italic text-primary">
+          {[...typingUsers.values()].map((t) => t.name).join(', ')}{' '}
+          {typingUsers.size > 1 ? 'están escribiendo' : 'está escribiendo'}
+          <span className="animate-pulse">...</span>
+        </div>
       ) : null}
 
       <div className="border-t border-border p-3">
@@ -1044,6 +1188,7 @@ function ConversacionTab({
               value={text}
               onChange={(e) => {
                 setText(e.target.value);
+                if (e.target.value.trim()) signalTyping();
                 syncMention();
               }}
               onKeyUp={syncMention}
@@ -1086,20 +1231,29 @@ function ConversacionTab({
           onPick={(emoji) => {
             react.mutate({ messageId: pickerFor.messageId, emoji });
             setPickerFor(null);
+            clearSelection();
           }}
         />
       ) : null}
 
       <ConfirmDialog
-        open={confirmDeleteId !== null}
-        title="Eliminar mensaje"
-        description="Se eliminará para todos. Esta acción no se puede deshacer."
+        open={confirmDelete !== null}
+        title={
+          confirmDelete && confirmDelete.length > 1
+            ? `Eliminar ${confirmDelete.length} mensajes`
+            : 'Eliminar mensaje'
+        }
+        description={
+          confirmDelete && confirmDelete.length > 1
+            ? `Se eliminarán ${confirmDelete.length} mensajes para todos. Esta acción no se puede deshacer.`
+            : 'Se eliminará para todos. Esta acción no se puede deshacer.'
+        }
         confirmLabel="Eliminar"
-        onCancel={() => setConfirmDeleteId(null)}
+        onCancel={() => setConfirmDelete(null)}
         onConfirm={() => {
-          const id = confirmDeleteId;
-          setConfirmDeleteId(null);
-          if (id) del.mutate(id);
+          const ids = confirmDelete;
+          setConfirmDelete(null);
+          if (ids?.length) deleteMessages(ids);
         }}
       />
     </div>
@@ -1233,6 +1387,12 @@ function MessageBubble({
   onReply,
   onReact,
   onToggleReaction,
+  selectionActive = false,
+  selected = false,
+  selectable = false,
+  onToggleSelect,
+  onLongPress,
+  actionsOpen = false,
 }: {
   message: OrderMessage;
   mine: boolean;
@@ -1249,10 +1409,57 @@ function MessageBubble({
   onReply?: () => void;
   onReact?: (e: { clientX: number; clientY: number }) => void;
   onToggleReaction?: (emoji: string) => void;
+  /** Modo seleccion multiple activo (algun mensaje seleccionado). */
+  selectionActive?: boolean;
+  selected?: boolean;
+  selectable?: boolean;
+  onToggleSelect?: () => void;
+  /** Long-press (cel): abre las acciones ancladas a este mensaje. */
+  onLongPress?: () => void;
+  /** Acciones visibles SIN hover (ancladas por long-press). */
+  actionsOpen?: boolean;
 }) {
   const isPhoto = message.kind === 'imei_photo' || message.kind === 'serial_photo';
   const isDoc = message.kind === 'document';
   const isFile = message.kind === 'file';
+
+  // Long-press tactil: 420ms sin mover el dedo (>10px cancela: es scroll).
+  const lp = useRef<{ x: number; y: number; timer: ReturnType<typeof setTimeout> | null }>({
+    x: 0,
+    y: 0,
+    timer: null,
+  });
+  const cancelLp = () => {
+    if (lp.current.timer) {
+      clearTimeout(lp.current.timer);
+      lp.current.timer = null;
+    }
+  };
+  const touchHandlers = onLongPress
+    ? {
+        onTouchStart: (e: React.TouchEvent) => {
+          const t = e.touches[0];
+          if (!t) return;
+          lp.current.x = t.clientX;
+          lp.current.y = t.clientY;
+          cancelLp();
+          lp.current.timer = setTimeout(() => {
+            lp.current.timer = null;
+            onLongPress();
+          }, 420);
+        },
+        onTouchMove: (e: React.TouchEvent) => {
+          const t = e.touches[0];
+          if (!t) return;
+          if (Math.abs(t.clientX - lp.current.x) > 10 || Math.abs(t.clientY - lp.current.y) > 10) {
+            cancelLp();
+          }
+        },
+        onTouchEnd: cancelLp,
+        onTouchCancel: cancelLp,
+        onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+      }
+    : {};
   if (message.kind === 'system') {
     return (
       <div className="mt-3 flex justify-center py-1 first:mt-0">
@@ -1311,7 +1518,8 @@ function MessageBubble({
   ) : (
     <div
       className={cn(
-        'px-3.5 py-2 text-sm',
+        // En cel el texto va un punto mas grande (15px); en escritorio text-sm.
+        'px-3.5 py-2 text-[15px] md:text-sm',
         radius,
         mine ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground',
       )}
@@ -1325,10 +1533,25 @@ function MessageBubble({
 
   return (
     <div
+      {...touchHandlers}
+      onClickCapture={
+        selectionActive
+          ? (e) => {
+              // Las acciones ancladas (long-press) siguen funcionando normal.
+              if ((e.target as HTMLElement).closest?.('[data-msg-actions]')) return;
+              // En modo seleccion, tocar el mensaje lo marca/desmarca (y no
+              // dispara su accion normal, p.ej. abrir la foto).
+              e.preventDefault();
+              e.stopPropagation();
+              if (selectable && onToggleSelect) onToggleSelect();
+            }
+          : undefined
+      }
       className={cn(
-        'group flex flex-col first:mt-0',
+        'group flex select-none flex-col px-1 py-0.5 first:mt-0 md:select-auto',
         grouped ? 'mt-0.5' : 'mt-4',
         mine ? 'items-end' : 'items-start',
+        selected && 'rounded-xl bg-primary/10 ring-1 ring-primary/20',
       )}
     >
       {/* Cabecera del grupo: nombre (otros) + hora, UNA vez por conjunto. */}
@@ -1348,11 +1571,13 @@ function MessageBubble({
       <div className="relative max-w-[85%]">
         {bubble}
 
-        {(onReply || onReact || (canDelete && onDelete)) ? (
+        {(onReply || onReact || (canDelete && onDelete)) && (!selectionActive || actionsOpen) ? (
           <div
+            data-msg-actions
             className={cn(
               'pointer-events-none absolute -top-4 z-10 flex items-center gap-0.5 rounded-lg border border-border bg-popover px-1 py-0.5 opacity-0 shadow-md transition-opacity duration-100',
               'group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
+              actionsOpen && 'pointer-events-auto opacity-100',
               mine ? 'right-1' : 'left-1',
             )}
           >
@@ -1392,6 +1617,17 @@ function MessageBubble({
                 title="Responder"
               >
                 <Reply className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+            {selectable && onToggleSelect ? (
+              <button
+                type="button"
+                onClick={onToggleSelect}
+                className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                aria-label="Seleccionar mensaje"
+                title="Seleccionar (para eliminar varios)"
+              >
+                <CheckSquare className="h-3.5 w-3.5" />
               </button>
             ) : null}
             {canDelete && onDelete ? (

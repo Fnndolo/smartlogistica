@@ -9,7 +9,13 @@ import Redis from 'ioredis';
  * evolucionar a updates granulares mas adelante.
  */
 export interface OrderRealtimeEvent {
-  kind: 'order.upserted' | 'order.removed' | 'orders.refresh' | 'chat.message' | 'chat.reaction';
+  kind:
+    | 'order.upserted'
+    | 'order.removed'
+    | 'orders.refresh'
+    | 'chat.message'
+    | 'chat.reaction'
+    | 'chat.typing';
   externalId?: string;
   at: number;
   // Campos extra de los eventos de chat (chat.message / chat.reaction): el

@@ -27,9 +27,13 @@ export function useMentions(): { items: MentionItem[]; unread: number } {
   });
 
   useOrdersStream(
-    useCallback(() => {
-      qc.invalidateQueries({ queryKey: ['mentions'] });
-    }, [qc]),
+    useCallback(
+      (event?: { kind: string }) => {
+        if (event?.kind === 'chat.typing') return; // efimero, no toca la lista
+        qc.invalidateQueries({ queryKey: ['mentions'] });
+      },
+      [qc],
+    ),
   );
 
   useEffect(() => {

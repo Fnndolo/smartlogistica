@@ -149,13 +149,18 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   // Cada evento SSE -> refetch debounced de la pagina actual. El debounce
   // coalesce rafagas (ej: 100 upserts durante un backfill -> pocos refetch).
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const handleStreamEvent = useCallback(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
-      queryClient.invalidateQueries({ queryKey: ['order-stats'] });
-    }, SSE_DEBOUNCE_MS);
-  }, [queryClient]);
+  const handleStreamEvent = useCallback(
+    (event?: { kind: string }) => {
+      // "esta escribiendo" es efimero: no toca las listas.
+      if (event?.kind === 'chat.typing') return;
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ['orders'] });
+        queryClient.invalidateQueries({ queryKey: ['order-stats'] });
+      }, SSE_DEBOUNCE_MS);
+    },
+    [queryClient],
+  );
   useEffect(() => () => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
   }, []);

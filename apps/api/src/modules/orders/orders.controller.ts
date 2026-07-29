@@ -225,6 +225,13 @@ export class OrdersController {
     return this.orders.postMessage(id, body, user);
   }
 
+  /** Señal efimera "esta escribiendo" (se emite por SSE a los chats abiertos). */
+  @Post(':id/typing')
+  @HttpCode(204)
+  async typing(@Param('id') id: string, @CurrentUser() user: AuthContext): Promise<void> {
+    await this.orders.typing(id, user);
+  }
+
   /** Alterna MI reaccion con un emoji sobre un mensaje del chat. */
   @Post(':id/messages/:messageId/reactions')
   @HttpCode(200)
