@@ -14,7 +14,7 @@ const buttonVariants = cva(
         destructive: 'bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90',
         // outline = superficie blanca sobre el lienzo frio (mockup); el hover
         // acentua el borde en cobalto en vez de rellenar de azul.
-        outline: 'border border-input bg-card shadow-sm hover:border-accent/40 hover:text-foreground',
+        outline: 'shadow-card border border-input bg-card hover:border-accent/40 hover:text-foreground',
         secondary: 'bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80',
         ghost: 'hover:bg-muted hover:text-foreground',
         link: 'text-primary underline-offset-4 hover:underline',

@@ -89,7 +89,7 @@ export function OrdersPulseRow({
         return (
           <div
             key={t.label}
-            className="shadow-card flex flex-col items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-3 text-center transition-shadow hover:shadow-float"
+            className="shadow-card flex flex-col items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-3 text-center transition-all hover:-translate-y-px hover:shadow-float"
           >
             <div className="flex items-center justify-center gap-2 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground">
               <span className={cn('flex h-6 w-6 items-center justify-center rounded-md', TINT[t.tint])}>

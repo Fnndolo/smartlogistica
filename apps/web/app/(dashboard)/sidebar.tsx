@@ -71,10 +71,10 @@ export function Sidebar() {
     // sticky + h-screen + overflow-y-auto: el sidebar queda fijo y con SU propio
     // scroll, independiente del scroll de la pagina. Superficie blanca sobre el
     // lienzo frio (profundidad del rediseño).
-    <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col overflow-y-auto border-r border-border bg-card px-4 py-5 md:flex">
-      <div className="mb-6 flex items-center justify-between gap-2">
-        <Link href="/dashboard" className="flex min-w-0 items-center gap-2 px-2" prefetch>
-          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-foreground text-background">
+    <aside className="sticky top-0 hidden h-screen w-[264px] shrink-0 flex-col overflow-y-auto border-r border-border bg-card px-3 py-3.5 md:flex">
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <Link href="/dashboard" className="flex min-w-0 items-center gap-2.5 px-2 py-1.5" prefetch>
+          <div className="shadow-card flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-foreground via-foreground to-[color-mix(in_srgb,hsl(var(--foreground))_72%,hsl(var(--accent)))] text-background">
             <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
               <path
                 d="M4 7l8-4 8 4M4 7v10l8 4 8-4V7M4 7l8 4m0 0l8-4m-8 4v10"
@@ -87,7 +87,7 @@ export function Sidebar() {
           </div>
           <div className="flex min-w-0 flex-col leading-tight">
             <span className="truncate text-sm font-semibold tracking-tight">SmartLogistica</span>
-            <span className="truncate text-[11px] text-muted-foreground">
+            <span className="truncate font-mono text-[11px] text-muted-foreground">
               {user?.activeTenantSlug ?? '...'}
             </span>
           </div>
@@ -108,10 +108,10 @@ export function Sidebar() {
               href={item.href}
               prefetch
               className={cn(
-                'group relative flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors',
+                'group relative flex items-center gap-2.5 rounded-lg px-2.5 py-[7px] text-[13px] transition-colors',
                 isActive
-                  ? 'bg-accent/10 text-foreground'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                  ? 'bg-accent/10 font-medium text-foreground'
+                  : 'font-normal text-muted-foreground hover:bg-muted hover:text-foreground',
               )}
             >
               {/* Riel de acento del item activo */}
@@ -134,7 +134,7 @@ export function Sidebar() {
       {/* Sedes */}
       <div className="mt-6">
         <div className="mb-1 flex items-center justify-between px-2">
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          <span className="text-[10.5px] font-semibold uppercase tracking-[0.09em] text-muted-foreground">
             Sedes
           </span>
           {isAdminUser ? (
@@ -176,10 +176,10 @@ export function Sidebar() {
                     href={base}
                     prefetch
                     className={cn(
-                      'group relative flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm font-medium transition-colors',
+                      'group relative flex items-center justify-between gap-2 rounded-lg px-2.5 py-[7px] text-[13px] transition-colors',
                       active
-                        ? 'bg-accent/10 text-foreground'
-                        : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                        ? 'bg-accent/10 font-medium text-foreground'
+                        : 'font-normal text-muted-foreground hover:bg-muted hover:text-foreground',
                     )}
                   >
                     {active ? (
@@ -206,9 +206,9 @@ export function Sidebar() {
                             href={s.href}
                             prefetch
                             className={cn(
-                              'flex items-center gap-2 rounded-md px-2 py-1 text-[13px] transition-colors',
+                              'flex items-center gap-2 rounded-md px-2 py-1 text-[12.5px] transition-colors',
                               on
-                                ? 'font-medium text-foreground'
+                                ? 'bg-accent/10 font-medium text-foreground'
                                 : 'text-muted-foreground hover:text-foreground',
                             )}
                           >

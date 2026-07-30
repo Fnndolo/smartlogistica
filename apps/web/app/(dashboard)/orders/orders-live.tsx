@@ -313,7 +313,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
               datos anteriores atenuados: se VE que esta aplicando. */}
           <div
             className={cn(
-              'rounded-xl border border-border bg-card transition-opacity duration-150',
+              'shadow-card overflow-hidden rounded-xl border border-border bg-card transition-opacity duration-150',
               isPlaceholderData && 'pointer-events-none opacity-50',
             )}
           >
@@ -644,8 +644,8 @@ function AssignmentBar({
   // En movil la barra se levanta por encima de la navegacion inferior.
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] z-40 flex justify-center px-4 md:bottom-6">
-      <div className="pointer-events-auto flex max-w-[calc(100vw-2rem)] flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-border bg-popover px-4 py-3 shadow-lg">
-        <span className="text-sm font-medium tabular-nums">
+      <div className="shadow-pop pointer-events-auto flex max-w-[calc(100vw-2rem)] flex-wrap items-center gap-x-3 gap-y-2 rounded-[14px] border border-border bg-popover px-3 py-[9px]">
+        <span className="text-[12.5px] font-medium tabular-nums">
           {selectedIds.length} seleccionado{selectedIds.length === 1 ? '' : 's'}
         </span>
         <div className="h-5 w-px bg-border" />
@@ -706,7 +706,7 @@ function WarehousePicker({
       {open ? (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <ul className="absolute bottom-full left-0 z-20 mb-2 max-h-64 w-56 overflow-auto rounded-lg border border-border bg-popover p-1 shadow-lg">
+          <ul className="shadow-pop absolute bottom-full left-0 z-20 mb-2 max-h-64 w-56 overflow-auto rounded-lg border border-border bg-popover p-1">
             {warehouses.map((w) => (
               <li key={w.id}>
                 <button
@@ -715,7 +715,7 @@ function WarehousePicker({
                     setOpen(false);
                     onPick(w);
                   }}
-                  className="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-sm hover:bg-muted"
+                  className="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-sm hover:bg-accent/10"
                 >
                   <span className="truncate">{w.name}</span>
                   <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{w.orderCount}</span>

@@ -144,7 +144,7 @@ export function OrdersTable({
                 className={cn(
                   'group/row relative transition-colors hover:bg-accent/[0.05]',
                   (onOpenOrder || multi) && 'cursor-pointer',
-                  (isOpen || isSelected) && 'bg-muted/30',
+                  (isOpen || isSelected) && 'bg-accent/[0.08]',
                   // Con reacciones, la fila crece: los chips tienen su FRANJA
                   // propia abajo y nunca tapan contenido (igual que el mockup).
                   order.reactions.length > 0 && '[&>td]:pb-7',
@@ -382,7 +382,7 @@ function ReactionChips({
           }}
           title={r.mine ? 'Tu reacción · clic para quitar' : `Reaccionaron ${r.count} · clic para sumarte`}
           className={cn(
-            'inline-flex h-[18px] cursor-pointer items-center gap-1 rounded-full border px-1.5 text-[11px] leading-none shadow-card transition-colors',
+            'inline-flex h-[18px] cursor-pointer items-center gap-1 rounded-full border px-1.5 text-[11px] leading-none shadow-card transition-all hover:-translate-y-px',
             r.mine
               ? 'border-accent/40 bg-accent/10'
               : 'border-border bg-card hover:border-accent/40',
@@ -754,10 +754,10 @@ function SortHeader({
         {label}
         {active ? (
           <ChevronDown
-            className={cn('h-3.5 w-3.5 transition-transform', dir === 'asc' && 'rotate-180')}
+            className={cn('h-3 w-3 transition-transform', dir === 'asc' && 'rotate-180')}
           />
         ) : (
-          <ChevronsUpDown className="h-3.5 w-3.5 opacity-50" />
+          <ChevronsUpDown className="h-3 w-3 opacity-50" />
         )}
       </button>
     </TableHead>
@@ -811,7 +811,7 @@ function RouteDots({ order }: { order: OrderSummary }) {
       {Array.from({ length: 6 }, (_, i) => {
         const n = i + 1;
         const on = n <= step;
-        const fill = done ? 'bg-emerald-500' : 'bg-accent';
+        const fill = done ? 'bg-emerald-600 dark:bg-emerald-500' : 'bg-accent';
         return (
           <Fragment key={n}>
             <span
@@ -822,7 +822,7 @@ function RouteDots({ order }: { order: OrderSummary }) {
               )}
             />
             {n < 6 ? (
-              <span className={cn('h-px w-2.5 shrink-0', n < step ? fill : 'bg-border')} />
+              <span className={cn('h-[1.5px] w-3 shrink-0', n < step ? fill : 'bg-border')} />
             ) : null}
           </Fragment>
         );
@@ -844,7 +844,7 @@ function ShippingCell({ order }: { order: OrderSummary }) {
         {meta.label}
       </Badge>
       <RouteDots order={order} />
-      <span className="mt-1 font-mono text-[10px] text-muted-foreground" title="Número de guía">
+      <span className="mt-1 font-mono text-[10.5px] text-muted-foreground/70" title="Número de guía">
         Guía {order.guideNumber}
       </span>
     </div>

@@ -141,7 +141,7 @@ export function OrderDrawer({
     <div className="fixed inset-0 z-40">
       <div
         className={cn(
-          'absolute inset-0 bg-black/50 transition-opacity duration-200',
+          'absolute inset-0 bg-[rgba(5,8,14,0.55)] backdrop-blur-[2px] transition-opacity duration-200',
           shown ? 'opacity-100' : 'opacity-0',
         )}
         onClick={onClose}
@@ -152,7 +152,7 @@ export function OrderDrawer({
         className={cn(
           // Movil: pantalla completa. Escritorio (md+): panel lateral de max-w-xl.
           // bg-card: el drawer es una SUPERFICIE blanca (el lienzo es gris).
-          'absolute right-0 top-0 flex h-full w-full max-w-none flex-col bg-card shadow-2xl transition-transform duration-200 ease-out md:max-w-xl md:border-l md:border-border',
+          'shadow-pop absolute right-0 top-0 flex h-full w-full max-w-none flex-col bg-card transition-transform duration-200 ease-out md:max-w-[560px] md:border-l md:border-border',
           shown ? 'translate-x-0' : 'translate-x-full',
         )}
       >
@@ -221,10 +221,10 @@ function DrawerContent({
   return (
     <>
       {/* Header */}
-      <header className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
+      <header className="flex items-start justify-between gap-3 border-b border-border px-5 pb-3 pt-4">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="font-mono text-xs text-muted-foreground">#{order.externalId}</span>
+            <span className="font-mono text-[11px] text-muted-foreground">#{order.externalId}</span>
             <StatusPill status={order.status} />
           </div>
           <h2 className="mt-1 truncate text-[17px] font-semibold tracking-tight">
@@ -1116,7 +1116,7 @@ function ConversacionTab({
           // Tocar fuera cierra las acciones ancladas del long-press.
           if (mobileActionsFor) setMobileActionsFor(null);
         }}
-        className="flex min-h-0 flex-1 flex-col overflow-y-auto p-5"
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto px-[18px] pb-2 pt-[18px]"
       >
         <div className="mt-auto" aria-hidden />
         {isLoading ? (
@@ -1151,11 +1151,11 @@ function ConversacionTab({
               <Fragment key={m.id}>
                 {isUnreadBoundary ? (
                   <div id="chat-unread-divider" className="mt-4 flex items-center gap-3">
-                    <span className="h-px flex-1 rounded bg-accent/50" />
-                    <span className="text-[11px] font-semibold tracking-wide text-accent">
+                    <span className="h-px flex-1 rounded bg-accent/30" />
+                    <span className="text-[11px] font-semibold tracking-[0.06em] text-accent">
                       No leídos
                     </span>
-                    <span className="h-px flex-1 rounded bg-accent/50" />
+                    <span className="h-px flex-1 rounded bg-accent/30" />
                   </div>
                 ) : null}
               <MessageBubble
@@ -1204,14 +1204,14 @@ function ConversacionTab({
         {/* Globito "esta escribiendo" estilo WhatsApp: burbuja con 3 puntos
             rebotando, como un mensaje entrante en camino. */}
         {typingUsers.size > 0 ? (
-          <div className="mt-3 flex flex-col items-start px-1">
-            <span className="mb-1 px-1 text-[11px] font-semibold text-foreground/70">
+          <div className="mt-3 flex flex-col items-start">
+            <span className="mb-1 px-1 text-[10.5px] font-semibold text-muted-foreground">
               {[...typingUsers.values()].map((t) => t.name).join(', ')}
             </span>
-            <div className="flex items-center gap-1.5 rounded-2xl rounded-bl-md bg-muted px-4 py-3.5">
-              <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:-300ms]" />
-              <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:-150ms]" />
-              <span className="h-2 w-2 animate-bounce rounded-full bg-muted-foreground/60" />
+            <div className="flex items-center gap-1 rounded-2xl rounded-bl-md bg-muted px-3.5 py-[11px]">
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:-300ms]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:-150ms]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/60" />
             </div>
           </div>
         ) : null}
@@ -1377,7 +1377,7 @@ function ConversacionTab({
               // inline por defecto y el baseline los descuadra unos pixeles).
               // Pill redonda estilo WhatsApp (como el mockup aprobado).
               // Pill GRIS que resalta sobre el drawer blanco (mockup).
-              className="block h-9 w-full resize-none rounded-full border border-input bg-muted px-4 py-[7px] text-sm leading-5 outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring"
+              className="block h-9 w-full resize-none rounded-full border border-input bg-muted px-4 py-2 text-[12.5px] leading-5 outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
           {/* Enviar: circulo en acento cobalto (mockup). */}
@@ -1528,7 +1528,7 @@ function MentionText({
             // inline-block + nowrap: el chip salta de linea COMPLETO (como en
             // Google Chat), nunca se parte a mitad del nombre.
             className={cn(
-              'inline-block max-w-full truncate rounded-md px-1 py-0.5 align-bottom font-medium',
+              'inline-block max-w-full truncate rounded-[5px] px-[5px] align-bottom font-medium',
               mine
                 ? 'bg-accent-foreground/25 text-accent-foreground'
                 : 'bg-accent/10 text-accent',
@@ -1746,9 +1746,9 @@ function MessageBubble({
       {...touchHandlers}
       className={cn(
         // touch-manipulation: sin zoom por doble toque (el doble toque es 👍).
-        // Sin padding vertical extra: los consecutivos del mismo autor quedan
-        // pegaditos (3px), como el mockup.
-        'group flex touch-manipulation select-none flex-col px-1 first:mt-0 md:select-auto',
+        // Sin padding extra: los consecutivos del mismo autor quedan pegaditos
+        // (3px) y el inset lateral es solo el del scroll, como el mockup.
+        'group flex touch-manipulation select-none flex-col first:mt-0 md:select-auto',
         grouped ? 'mt-[3px]' : 'mt-3.5',
         mine ? 'items-end' : 'items-start',
         // El mensaje long-presseado queda resaltado mientras sus acciones
@@ -1761,7 +1761,7 @@ function MessageBubble({
       {/* Cabecera del grupo: nombre (otros) + hora, UNA vez por conjunto. */}
       {!grouped ? (
         <span className="mb-1 px-1 text-[10.5px] text-muted-foreground">
-          {!mine ? <span className="font-semibold text-foreground/80">{author}</span> : null}
+          {!mine ? <span className="font-semibold">{author}</span> : null}
           {!mine ? ' · ' : ''}
           {format(new Date(message.createdAt), 'd MMM, HH:mm', { locale: es })}
         </span>
@@ -1851,14 +1851,15 @@ function MessageBubble({
               onClick={() => onToggleReaction?.(r.emoji)}
               title={r.users.join(', ')}
               className={cn(
-                'flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs transition-colors',
+                // Chips finos con tinte de acento (mockup), los mios mas marcados.
+                'flex items-center gap-1 rounded-full border px-2 py-px text-[11px] transition-all hover:-translate-y-px',
                 r.mine
-                  ? 'border-accent/40 bg-accent/10 text-accent'
-                  : 'border-border bg-card hover:bg-muted',
+                  ? 'border-accent/60 bg-accent/15 text-accent'
+                  : 'border-accent/30 bg-accent/10 hover:border-accent/50',
               )}
             >
-              <span className="text-sm leading-none">{r.emoji}</span>
-              <span className="font-mono text-[10.5px] tabular-nums">{r.count}</span>
+              <span className="text-[11px] leading-none">{r.emoji}</span>
+              <span className="font-mono text-[10.5px] tabular-nums text-accent">{r.count}</span>
             </button>
           ))}
         </div>
@@ -2015,8 +2016,9 @@ function PhotoCard({
   return (
     <div
       className={cn(
-        'max-w-[80%] overflow-hidden rounded-2xl border',
-        // Mismo lenguaje que las burbujas: mias = tinte primario + esquina derecha;
+        // Tarjeta COMPACTA (230px, mockup): la foto completa se abre al tocarla.
+        'w-[230px] max-w-[80%] overflow-hidden rounded-[14px] border',
+        // Mismo lenguaje que las burbujas: mias = tinte acento + esquina derecha;
         // de otro usuario = neutro + esquina izquierda.
         mine ? 'rounded-br-sm border-accent/25 bg-accent/5' : 'rounded-bl-sm border-border bg-card',
         className,
@@ -2028,7 +2030,7 @@ function PhotoCard({
           <img
             src={message.attachmentUrl}
             alt={isSerial ? 'Foto serial' : 'Foto IMEI'}
-            className="max-h-56 w-full bg-muted object-cover"
+            className="h-[120px] w-full bg-muted object-cover"
           />
         </a>
       ) : null}

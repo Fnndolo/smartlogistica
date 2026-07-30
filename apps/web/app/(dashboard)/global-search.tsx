@@ -80,8 +80,11 @@ export function GlobalSearch({ variant }: { variant: 'sidebar' | 'icon' }) {
     open && typeof document !== 'undefined'
       ? createPortal(
           <div className="fixed inset-0 z-[60]">
-            <div className="absolute inset-0 bg-black/50" onClick={() => setOpen(false)} />
-            <div className="absolute inset-x-3 top-16 mx-auto max-w-xl overflow-hidden rounded-xl border border-border bg-popover shadow-2xl sm:top-24">
+            <div
+              className="absolute inset-0 bg-[rgba(5,8,14,0.5)] backdrop-blur-[2px]"
+              onClick={() => setOpen(false)}
+            />
+            <div className="shadow-pop absolute inset-x-3 top-16 mx-auto max-w-xl overflow-hidden rounded-[14px] border border-border bg-popover sm:top-24">
               <div className="flex items-center gap-2.5 border-b border-border px-3.5">
                 {isFetching ? (
                   <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
@@ -99,7 +102,7 @@ export function GlobalSearch({ variant }: { variant: 'sidebar' | 'icon' }) {
                   placeholder="Buscar pedidos: cliente, N.º, cédula o producto..."
                   className="h-12 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
                 />
-                <kbd className="hidden shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground sm:block">
+                <kbd className="hidden shrink-0 rounded-[5px] border border-b-2 border-border bg-card px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:block">
                   ESC
                 </kbd>
               </div>
@@ -122,8 +125,8 @@ export function GlobalSearch({ variant }: { variant: 'sidebar' | 'icon' }) {
                         type="button"
                         onClick={() => go(r)}
                         className={cn(
-                          'flex w-full items-center gap-3 border-b border-border px-4 py-2.5 text-left transition-colors last:border-0 hover:bg-muted/60',
-                          i === 0 && 'bg-muted/30',
+                          'flex w-full items-center gap-3 border-b border-border/60 px-4 py-2.5 text-left transition-colors last:border-0 hover:bg-accent/10',
+                          i === 0 && 'bg-accent/10',
                         )}
                       >
                         <span className="min-w-0 flex-1">
@@ -181,7 +184,7 @@ export function GlobalSearch({ variant }: { variant: 'sidebar' | 'icon' }) {
       >
         <Search className="h-3.5 w-3.5 shrink-0" />
         <span className="flex-1 text-left text-xs">Buscar pedidos...</span>
-        <kbd className="rounded border border-border bg-muted px-1.5 py-0.5 text-[10px]">⌘K</kbd>
+        <kbd className="rounded-[5px] border border-b-2 border-border bg-card px-1.5 py-0.5 font-mono text-[10px]">⌘K</kbd>
       </button>
       {modal}
     </>
