@@ -18,3 +18,18 @@ export function replaceUrlParams(pathname: string, params: URLSearchParams): voi
   const qs = params.toString();
   window.history.replaceState(null, '', qs ? `${pathname}?${qs}` : pathname);
 }
+
+/**
+ * "ADRIAN PEREZ" -> "Adrian Perez". Los nombres llegan de VTEX en mayusculas
+ * crudas; en la UI se muestran con mayuscula inicial (como el mockup aprobado).
+ * Si el nombre ya viene mixto (p. ej. "Camila Rodríguez"), se respeta.
+ */
+export function titleCaseName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return trimmed;
+  // Solo normalizamos si viene TODO en mayusculas (o todo en minusculas).
+  if (trimmed !== trimmed.toUpperCase() && trimmed !== trimmed.toLowerCase()) return trimmed;
+  return trimmed
+    .toLowerCase()
+    .replace(/(^|[\s.'-])(\p{L})/gu, (_, sep: string, ch: string) => sep + ch.toUpperCase());
+}

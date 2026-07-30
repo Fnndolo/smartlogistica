@@ -2,8 +2,8 @@
 
 import { useSearchParams, usePathname } from 'next/navigation';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Building2, Check, ChevronDown, ChevronLeft, ChevronRight, MapPin, Truck, Undo2, X } from 'lucide-react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Building2, Check, ChevronLeft, ChevronRight, MapPin, Truck, Undo2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type {
   ListOrdersResponse,
@@ -256,29 +256,53 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
     [queryClient],
   );
 
+  const sectionLabel = state === 'invoiced' ? 'Facturados' : 'Por preparar';
+  const viewTitle =
+    scope.kind === 'general' ? 'Pedidos generales' : `${scope.name} · ${sectionLabel}`;
+  const crumbs =
+    scope.kind === 'general' ? ['Pedidos', 'Generales'] : ['Sedes', scope.name, sectionLabel];
+
   return (
     <>
+      {/* Encabezado de la vista (mockup): migas + titulo + chip "En vivo" al
+          lado + rango en mono a la derecha, con un brillo cobalto sutil. */}
+      <div className="relative">
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -left-8 -top-8 h-40 w-[540px] rounded-full bg-accent/[0.07] blur-3xl"
+        />
+        <nav className="relative mb-1.5 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
+          {crumbs.map((c, i) => (
+            <Fragment key={`${c}-${i}`}>
+              {i > 0 ? <span aria-hidden>·</span> : null}
+              <span className={i === 0 ? 'font-medium' : undefined}>{c}</span>
+            </Fragment>
+          ))}
+        </nav>
+        <div className="relative flex flex-wrap items-center gap-3">
+          <h1 className="text-[19px] font-semibold leading-tight tracking-[-0.02em]">{viewTitle}</h1>
+          <LivePill live={live} />
+          <HeaderRange
+            live={live}
+            lastUpdate={dataUpdatedAt}
+            rangeStart={rangeStart}
+            rangeEnd={rangeEnd}
+            total={total}
+          />
+        </div>
+      </div>
+
       {/* Pulso de la vista: 4 metricas operativas acordes a DONDE estas. */}
       <OrdersPulseRow
         scope={scope.kind === 'general' ? 'general' : state === 'invoiced' ? 'invoiced' : 'pending'}
         warehouseId={warehouseId}
       />
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <SearchFilter />
-          <DateRangeFilter />
-          {state === 'invoiced' && warehouseId ? <ShippingFilter /> : null}
-          {state !== 'invoiced' ? <AddressFilter /> : null}
-        </div>
-        <div className="flex items-center gap-4">
-          <LiveIndicator live={live} lastUpdate={dataUpdatedAt} itemCount={total} />
-          {total > 0 ? (
-            <p className="text-xs tabular-nums text-muted-foreground">
-              {rangeStart}–{rangeEnd} de {total} {total === 1 ? 'pedido' : 'pedidos'}
-            </p>
-          ) : null}
-        </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <SearchFilter />
+        <DateRangeFilter />
+        {state === 'invoiced' && warehouseId ? <ShippingFilter /> : null}
+        {state !== 'invoiced' ? <AddressFilter /> : null}
       </div>
 
       {items.length === 0 ? (
@@ -407,9 +431,7 @@ function ShippingFilter() {
           >
             <X className="h-3 w-3" />
           </span>
-        ) : (
-          <ChevronDown className="h-3.5 w-3.5" />
-        )}
+        ) : null}
       </Button>
 
       {open ? (
@@ -536,9 +558,7 @@ function AddressFilter() {
           >
             <X className="h-3 w-3" />
           </span>
-        ) : (
-          <ChevronDown className="h-3.5 w-3.5" />
-        )}
+        ) : null}
       </Button>
 
       {open ? (
@@ -784,14 +804,41 @@ function buildPageList(current: number, total: number): Array<number | 'ellipsis
   return window;
 }
 
-function LiveIndicator({
+/** Chip "En vivo" del encabezado (pill esmeralda con punto que emite ondas). */
+function LivePill({ live }: { live: boolean }) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium',
+        live
+          ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+          : 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400',
+      )}
+    >
+      <span className="relative inline-flex h-1.5 w-1.5" aria-hidden>
+        <span className="absolute inline-flex h-full w-full rounded-full bg-current" />
+        {live ? (
+          <span className="absolute -inset-0.5 animate-ping rounded-full bg-current opacity-40" />
+        ) : null}
+      </span>
+      {live ? 'En vivo' : 'Reconectando'}
+    </span>
+  );
+}
+
+/** Rango + frescura, a la derecha del titulo, en mono (mockup). */
+function HeaderRange({
   live,
   lastUpdate,
-  itemCount,
+  rangeStart,
+  rangeEnd,
+  total,
 }: {
   live: boolean;
   lastUpdate: number;
-  itemCount: number;
+  rangeStart: number;
+  rangeEnd: number;
+  total: number;
 }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -800,22 +847,12 @@ function LiveIndicator({
   }, []);
   const secondsAgo = Math.max(0, Math.floor((now - lastUpdate) / 1000));
 
-  // Chip "En vivo" (estilo pill esmeralda con punto respirando).
   return (
-    <span
-      className={cn(
-        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium tabular-nums',
-        live
-          ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-          : 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400',
-      )}
-    >
-      <span
-        className={cn('inline-block h-1.5 w-1.5 rounded-full bg-current', live && 'animate-pulse')}
-        aria-hidden
-      />
-      {live ? 'En vivo' : 'Reconectando'} · {itemCount} {itemCount === 1 ? 'pedido' : 'pedidos'}
-      {!live ? ` · hace ${secondsAgo}s` : ''}
+    <span className="ml-auto hidden font-mono text-[11.5px] tabular-nums text-muted-foreground md:block">
+      {total > 0
+        ? `${rangeStart}–${rangeEnd} de ${total} ${total === 1 ? 'pedido' : 'pedidos'} · `
+        : ''}
+      {live ? `sincronizado hace ${secondsAgo} s` : `reconectando · hace ${secondsAgo} s`}
     </span>
   );
 }

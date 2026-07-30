@@ -72,16 +72,9 @@ export default async function OrdersPage({ searchParams }: PageProps) {
     address: params.address,
   });
 
+  // El encabezado (migas + titulo + "En vivo" + rango) lo pinta OrdersLive.
   return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Pedidos</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Pedidos en estado &laquo;Listo para preparar&raquo;, en tiempo real. Cuando un pedido
-          cambia de estado en VTEX, desaparece automaticamente.
-        </p>
-      </header>
-
+    <div className="space-y-5">
       <OrdersLive initialData={initialData} />
     </div>
   );

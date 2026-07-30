@@ -58,7 +58,7 @@ import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ApiError, api } from '@/lib/api-client';
-import { cn } from '@/lib/utils';
+import { cn, titleCaseName } from '@/lib/utils';
 
 import { setActiveChat } from './active-chat';
 import { ClaimChip } from './claim-chip';
@@ -226,7 +226,9 @@ function DrawerContent({
             <span className="font-mono text-xs text-muted-foreground">#{order.externalId}</span>
             <StatusPill status={order.status} />
           </div>
-          <h2 className="mt-1 truncate text-lg font-semibold tracking-tight">{order.customerName}</h2>
+          <h2 className="mt-1 truncate text-lg font-semibold tracking-tight">
+            {titleCaseName(order.customerName)}
+          </h2>
           {order.customerDocument ? (
             <p className="text-xs text-muted-foreground">CC {order.customerDocument}</p>
           ) : null}

@@ -19,7 +19,7 @@ import type { OrderSummary, OrderSortField, SortDir } from '@smartlogistica/shar
 
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { cn } from '@/lib/utils';
+import { cn, titleCaseName } from '@/lib/utils';
 
 import { ClaimChip, ClaimSlot, initialsOf } from './claim-chip';
 import { EmojiPicker } from './emoji-picker';
@@ -124,7 +124,7 @@ export function OrdersTable({
           <TableHead>N&ordm; Pedido</TableHead>
           <TableHead>Cliente</TableHead>
           <TableHead>Producto</TableHead>
-          <SortHeader label="Cantidad" field="quantity" sort={sort} dir={dir} onSort={onSort} align="right" />
+          <SortHeader label="Cant." field="quantity" sort={sort} dir={dir} onSort={onSort} align="right" />
           <SortHeader label="Precio de venta" field="price" sort={sort} dir={dir} onSort={onSort} align="right" />
           <SortHeader label="Fecha" field="date" sort={sort} dir={dir} onSort={onSort} />
           <TableHead>Estado</TableHead>
@@ -200,7 +200,7 @@ export function OrdersTable({
                 <TableCell>
                   <div className="flex flex-col">
                     <span className="flex items-center gap-1.5 font-medium text-foreground">
-                      {order.customerName}
+                      {titleCaseName(order.customerName)}
                       {order.unreadCount > 0 ? (
                         <span
                           title={`${order.unreadCount} mensaje(s) sin leer`}
@@ -606,7 +606,7 @@ function OrderCard({
         </div>
 
         <div className="mt-1 flex items-center gap-1.5">
-          <span className="truncate font-medium text-foreground">{order.customerName}</span>
+          <span className="truncate font-medium text-foreground">{titleCaseName(order.customerName)}</span>
           {order.unreadCount > 0 ? (
             <span className="inline-flex h-[17px] min-w-[17px] shrink-0 items-center justify-center rounded-full bg-accent px-1 font-mono text-[10px] font-semibold leading-none text-accent-foreground">
               {order.unreadCount > 99 ? '99+' : order.unreadCount}
@@ -746,8 +746,9 @@ function SortHeader({
         className={cn(
           // text-transform/letter-spacing NO se heredan en <button> (preflight de
           // Tailwind), por eso los repetimos para que sea simetrico con los <th>.
+          // La flecha SIEMPRE despues del label (como el mockup), tambien en
+          // las columnas alineadas a la derecha.
           'inline-flex items-center gap-1 rounded text-[11px] font-medium uppercase tracking-wide transition-colors hover:text-foreground',
-          align === 'right' && 'flex-row-reverse',
           active ? 'text-foreground' : 'text-muted-foreground',
         )}
       >

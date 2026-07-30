@@ -1,14 +1,13 @@
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft } from 'lucide-react';
 
 import { getWarehouses, hasSession } from '@/lib/server-api';
 
 import { SedeTabs } from './sede-tabs';
 
 /**
- * Layout de una sede: cabecera con el nombre. Las 3 sub-secciones (por preparar /
- * facturados / ajustes) se navegan desde el menu lateral y se renderizan aqui.
+ * Layout de una sede. El encabezado (migas + titulo + "En vivo") lo pinta cada
+ * seccion (OrdersLive en Por preparar/Facturados; Ajustes trae el suyo); aqui
+ * solo quedan las pestañas de navegacion en movil.
  */
 export default async function WarehouseLayout({
   children,
@@ -24,17 +23,7 @@ export default async function WarehouseLayout({
   if (!warehouse) notFound();
 
   return (
-    <div className="space-y-6">
-      <header>
-        <Link
-          href="/warehouses"
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-          Sedes
-        </Link>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">{warehouse.name}</h1>
-      </header>
+    <div className="space-y-5">
       <SedeTabs warehouseId={id} />
       {children}
     </div>

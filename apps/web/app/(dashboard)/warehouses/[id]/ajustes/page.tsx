@@ -21,6 +21,18 @@ export default async function WarehouseSettingsPage({ params }: { params: Promis
 
   return (
     <div className="space-y-4">
+      <header>
+        <nav className="mb-1.5 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
+          <span className="font-medium">Sedes</span>
+          <span aria-hidden>·</span>
+          <span>{name}</span>
+          <span aria-hidden>·</span>
+          <span>Ajustes</span>
+        </nav>
+        <h1 className="text-[19px] font-semibold leading-tight tracking-[-0.02em]">
+          {name} · Ajustes
+        </h1>
+      </header>
       <div className="grid gap-4 lg:grid-cols-2">
         <AlegraConnectionCard warehouseId={id} warehouseName={name} initial={alegra ?? null} />
         <CoordinadoraConnectionCard warehouseId={id} warehouseName={name} initial={coordinadora ?? null} />

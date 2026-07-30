@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { Calendar, ChevronDown, X } from 'lucide-react';
+import { Calendar, X } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { cn, replaceUrlParams } from '@/lib/utils';
@@ -126,9 +126,7 @@ export function DateRangeFilter() {
           >
             <X className="h-3 w-3" />
           </span>
-        ) : (
-          <ChevronDown className="h-3.5 w-3.5" />
-        )}
+        ) : null}
       </Button>
 
       {open ? (
