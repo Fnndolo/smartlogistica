@@ -79,6 +79,10 @@ export function OrdersTable({
     setMenu({ kind, order, x: r.left + r.width / 2, y: kind === 'react' ? r.top : r.bottom });
   };
 
+  // El hueco de la ficha "tomado" solo se reserva si ALGUN pedido de la pagina
+  // esta tomado (asi la tabla no gana ancho cuando nadie ha tomado nada).
+  const anyClaimed = items.some((o) => o.claimedBy);
+
   return (
     <>
       {/* Movil: lista de tarjetas (la tabla no cabe). */}
@@ -169,16 +173,16 @@ export function OrdersTable({
                   {!selectable ? <RowRail /> : null}
                   <span className="inline-flex items-center gap-2">
                     {/* Distintivo de "tomado" al INICIO de la fila (hueco reservado
-                        cuando esta libre: los numeros alinean siempre). */}
+                        solo si hay tomados en la pagina: los numeros alinean). */}
                     {order.claimedBy ? (
                       <ClaimChip
                         userId={order.claimedBy.userId}
                         name={order.claimedBy.name}
                         mine={order.claimedBy.mine}
                       />
-                    ) : (
+                    ) : anyClaimed ? (
                       <ClaimSlot />
-                    )}
+                    ) : null}
                     {order.externalId}
                     {order.hasDevicePhoto ? (
                       <span
@@ -243,20 +247,20 @@ export function OrdersTable({
                     </span>
                   </div>
                 </TableCell>
-                <TableCell className={cn(!showAddress && !showShipping && 'relative pr-20')}>
+                <TableCell className={cn(!showAddress && !showShipping && 'relative')}>
                   <StatusBadge status={order.status} />
                   {!showAddress && !showShipping ? (
                     <RowActions order={order} onClaim={openMenu('claim')} onReact={openMenu('react')} onToggleReaction={actions.toggleReaction} />
                   ) : null}
                 </TableCell>
                 {showAddress ? (
-                  <TableCell className="relative pr-20">
+                  <TableCell className="relative">
                     <AddressCell order={order} />
                     <RowActions order={order} onClaim={openMenu('claim')} onReact={openMenu('react')} onToggleReaction={actions.toggleReaction} />
                   </TableCell>
                 ) : null}
                 {showShipping ? (
-                  <TableCell className="relative pr-20">
+                  <TableCell className="relative">
                     <ShippingCell order={order} />
                     <RowActions order={order} onClaim={openMenu('claim')} onReact={openMenu('react')} onToggleReaction={actions.toggleReaction} />
                   </TableCell>
@@ -410,7 +414,9 @@ function RowActions({
   return (
     <>
       <ReactionChips order={order} onToggleReaction={onToggleReaction} className="mt-1.5" />
-      <span className="absolute right-2 top-1/2 flex -translate-y-1/2 gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover/row:opacity-100">
+      {/* Flotan ENCIMA del contenido al hacer hover (sin reservar ancho: la
+          tabla debe caber completa). Fondo opaco para leerse sobre el badge. */}
+      <span className="absolute right-1.5 top-1/2 flex -translate-y-1/2 gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover/row:opacity-100">
         <button
           type="button"
           onClick={(e) => onReact(order, e)}
