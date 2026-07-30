@@ -58,19 +58,20 @@ export function SearchFilter() {
   );
 
   return (
+    // Superficie blanca con sombra suave y esquinas mas redondeadas (mockup).
     <div
       className={cn(
-        'flex h-9 w-full items-center gap-2 rounded-md border border-input bg-background px-2.5 text-sm sm:w-auto',
-        'focus-within:ring-2 focus-within:ring-ring',
-        value && 'border-foreground/40',
+        'shadow-card flex h-[34px] w-full items-center gap-2 rounded-lg border border-input bg-card px-3 text-xs sm:w-auto',
+        'transition-colors focus-within:ring-2 focus-within:ring-ring',
+        value && 'border-accent/40',
       )}
     >
-      <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder="Buscar por cliente, N.º, producto..."
-        className="w-full min-w-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground sm:w-72"
+        className="w-full min-w-0 bg-transparent text-xs outline-none placeholder:text-muted-foreground/70 sm:w-64"
         aria-label="Buscar pedidos"
       />
       {value ? (

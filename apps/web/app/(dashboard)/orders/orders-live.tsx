@@ -412,11 +412,11 @@ function ShippingFilter() {
         variant="outline"
         size="sm"
         onClick={() => setOpen((s) => !s)}
-        className={cn(hasFilter && 'border-foreground/40')}
+        className={cn('h-[34px] rounded-lg font-normal text-muted-foreground', hasFilter && 'border-accent/40')}
       >
-        <Truck className="h-3.5 w-3.5" />
+        <Truck className="h-3.5 w-3.5 text-muted-foreground/70" />
         <span className="text-xs">
-          Envío: <span className="font-semibold">{label}</span>
+          Envío: <span className="font-semibold text-foreground">{label}</span>
         </span>
         {hasFilter ? (
           <span
@@ -538,11 +538,11 @@ function AddressFilter() {
         variant="outline"
         size="sm"
         onClick={() => setOpen((s) => !s)}
-        className={cn(hasFilter && 'border-foreground/40')}
+        className={cn('h-[34px] rounded-lg font-normal text-muted-foreground', hasFilter && 'border-accent/40')}
       >
-        <MapPin className="h-3.5 w-3.5" />
+        <MapPin className="h-3.5 w-3.5 text-muted-foreground/70" />
         <span className="text-xs">
-          Dirección: <span className="font-semibold">{label}</span>
+          Dirección: <span className="font-semibold text-foreground">{label}</span>
         </span>
         {hasFilter ? (
           <span

@@ -107,11 +107,11 @@ export function DateRangeFilter() {
         variant="outline"
         size="sm"
         onClick={() => setOpen((s) => !s)}
-        className={cn(hasFilter && 'border-foreground/40')}
+        className={cn('h-[34px] rounded-lg font-normal text-muted-foreground', hasFilter && 'border-accent/40')}
       >
-        <Calendar className="h-3.5 w-3.5" />
+        <Calendar className="h-3.5 w-3.5 text-muted-foreground/70" />
         <span className="text-xs">
-          Creado: <span className="font-semibold">{label}</span>
+          Creado: <span className="font-semibold text-foreground">{label}</span>
         </span>
         {hasFilter ? (
           <span

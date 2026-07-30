@@ -204,21 +204,23 @@ export function OrdersTable({
                       {order.unreadCount > 0 ? (
                         <span
                           title={`${order.unreadCount} mensaje(s) sin leer`}
-                          className="inline-flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-accent px-1 font-mono text-[10px] font-semibold leading-none text-accent-foreground"
+                          className="animate-unread inline-flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-accent px-1 font-mono text-[10px] font-semibold leading-none text-accent-foreground"
                         >
                           {order.unreadCount > 99 ? '99+' : order.unreadCount}
                         </span>
                       ) : null}
                     </span>
                     {order.customerDocument ? (
-                      <span className="text-[11px] text-muted-foreground">{order.customerDocument}</span>
+                      <span className="font-mono text-[10.5px] text-muted-foreground/80">
+                        CC {order.customerDocument}
+                      </span>
                     ) : null}
                   </div>
                 </TableCell>
 
-                {/* Producto: 1 -> nombre; varios -> primero + "+N" con chevron.
+                {/* Producto: 1 -> nombre; varios -> nombre + pildora "+N" debajo.
                     El nombre SIEMPRE se muestra completo (envuelve en lineas). */}
-                <TableCell className="min-w-[200px] max-w-[340px] align-top">
+                <TableCell className="min-w-[200px] max-w-[340px]">
                   <ProductCell
                     order={order}
                     multi={multi}
@@ -230,22 +232,24 @@ export function OrdersTable({
                 {/* Cantidad: unidades totales + cuantos productos distintos */}
                 <TableCell className="text-right">
                   <div className="flex flex-col items-end leading-tight">
-                    <span className="font-medium tabular-nums">{order.totalUnits}</span>
+                    <span className="text-[13px] font-medium tabular-nums">{order.totalUnits}</span>
                     {multi ? (
-                      <span className="text-[11px] text-muted-foreground">
+                      <span className="text-[10.5px] text-muted-foreground/80">
                         {order.items.length} productos
                       </span>
                     ) : null}
                   </div>
                 </TableCell>
 
-                <TableCell className="text-right font-mono tabular-nums">
+                <TableCell className="whitespace-nowrap text-right font-mono text-xs tabular-nums">
                   {formatCurrency(order.totalValue, order.currency)}
                 </TableCell>
                 <TableCell className="whitespace-nowrap text-muted-foreground">
                   <div className="flex flex-col leading-tight">
-                    <span>{format(new Date(order.marketplaceCreatedAt), 'd MMM yyyy', { locale: es })}</span>
-                    <span className="text-[11px]">
+                    <span className="text-xs">
+                      {format(new Date(order.marketplaceCreatedAt), 'd MMM yyyy', { locale: es })}
+                    </span>
+                    <span className="font-mono text-[10.5px] text-muted-foreground/70">
                       {format(new Date(order.marketplaceCreatedAt), 'HH:mm')}
                     </span>
                   </div>
@@ -270,35 +274,29 @@ export function OrdersTable({
                 ) : null}
               </TableRow>
 
-              {/* Sub-fila expandible con el desglose de productos */}
+              {/* Sub-fila expandible con el desglose de productos (mockup):
+                  icono + nombre con SKU al lado en gris + "1 × precio" a la
+                  derecha. Sin caja interna ni columna de total. */}
               {multi && isOpen ? (
                 <TableRow className="bg-muted/20 hover:bg-muted/20">
-                  <TableCell colSpan={colCount} className="py-0">
-                    <div className="ml-[2px] border-l-2 border-border py-2 pl-4">
-                      <div className="overflow-hidden rounded-lg border border-border bg-background">
-                        {order.items.map((item, idx) => (
-                          <div
-                            key={`${item.sku}-${idx}`}
-                            className={cn(
-                              'flex items-center gap-3 px-3 py-2 text-sm',
-                              idx > 0 && 'border-t border-border',
-                            )}
-                          >
-                            <Package className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate font-medium">{item.name}</p>
-                              <p className="font-mono text-[11px] text-muted-foreground">{item.sku}</p>
-                            </div>
-                            <span className="shrink-0 tabular-nums text-muted-foreground">
-                              {item.quantity} &times; {formatCurrency(item.unitPrice, order.currency)}
-                            </span>
-                            <span className="w-28 shrink-0 text-right font-mono tabular-nums">
-                              {formatCurrency(lineTotal(item.unitPrice, item.quantity), order.currency)}
-                            </span>
-                          </div>
-                        ))}
+                  <TableCell colSpan={colCount} className="py-1 pl-12 pr-4">
+                    {order.items.map((item, idx) => (
+                      <div
+                        key={`${item.sku}-${idx}`}
+                        className="flex items-center gap-2.5 py-1.5 text-xs"
+                      >
+                        <Package className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+                        <span className="min-w-0 flex-1 break-words leading-snug">
+                          {item.name}{' '}
+                          <span className="font-mono text-[10.5px] text-muted-foreground/80">
+                            SKU {item.sku}
+                          </span>
+                        </span>
+                        <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+                          {item.quantity} &times; {formatCurrency(item.unitPrice, order.currency)}
+                        </span>
                       </div>
-                    </div>
+                    ))}
                   </TableCell>
                 </TableRow>
               ) : null}
@@ -608,7 +606,7 @@ function OrderCard({
         <div className="mt-1 flex items-center gap-1.5">
           <span className="truncate font-medium text-foreground">{titleCaseName(order.customerName)}</span>
           {order.unreadCount > 0 ? (
-            <span className="inline-flex h-[17px] min-w-[17px] shrink-0 items-center justify-center rounded-full bg-accent px-1 font-mono text-[10px] font-semibold leading-none text-accent-foreground">
+            <span className="animate-unread inline-flex h-[17px] min-w-[17px] shrink-0 items-center justify-center rounded-full bg-accent px-1 font-mono text-[10px] font-semibold leading-none text-accent-foreground">
               {order.unreadCount > 99 ? '99+' : order.unreadCount}
             </span>
           ) : null}
@@ -694,30 +692,27 @@ function ProductCell({
   }
   const first = order.items[0]!;
   if (!multi) {
-    return <span className="block break-words leading-snug">{first.name}</span>;
+    return <span className="block break-words text-[12.5px] leading-snug">{first.name}</span>;
   }
+  // Varios: nombre completo + pildora "+N ›" DEBAJO (mockup); la pildora
+  // alterna el desglose inline sin abrir el drawer de la fila.
   return (
-    <div className="flex items-start gap-1.5">
-      {/* El chevron alterna el desglose inline sin abrir el drawer de la fila. */}
+    <div className="flex flex-col items-start gap-1">
+      <span className="break-words text-[12.5px] leading-snug">{first.name}</span>
       <button
         type="button"
         onClick={(e) => {
           e.stopPropagation();
           onToggle();
         }}
-        className="mt-0.5 shrink-0 rounded text-muted-foreground hover:text-foreground"
         aria-label={isOpen ? 'Ocultar productos' : 'Ver productos'}
+        className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-[10.5px] font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-foreground"
       >
-        {isOpen ? (
-          <ChevronDown className="h-3.5 w-3.5" />
-        ) : (
-          <ChevronRight className="h-3.5 w-3.5" />
-        )}
-      </button>
-      <span className="break-words leading-snug">{first.name}</span>
-      <Badge variant="secondary" className="mt-0.5 shrink-0">
         +{order.items.length - 1}
-      </Badge>
+        <ChevronRight
+          className={cn('h-2.5 w-2.5 transition-transform', isOpen && 'rotate-90')}
+        />
+      </button>
     </div>
   );
 }
@@ -747,9 +742,9 @@ function SortHeader({
           // text-transform/letter-spacing NO se heredan en <button> (preflight de
           // Tailwind), por eso los repetimos para que sea simetrico con los <th>.
           // La flecha SIEMPRE despues del label (como el mockup), tambien en
-          // las columnas alineadas a la derecha.
-          'inline-flex items-center gap-1 rounded text-[11px] font-medium uppercase tracking-wide transition-colors hover:text-foreground',
-          active ? 'text-foreground' : 'text-muted-foreground',
+          // las columnas alineadas a la derecha. Mismo tono tenue que los th.
+          'inline-flex items-center gap-1 rounded text-[10.5px] font-semibold uppercase tracking-wider transition-colors hover:text-foreground',
+          active ? 'text-foreground' : 'text-muted-foreground/70',
         )}
       >
         {label}
@@ -891,11 +886,6 @@ function StatusBadge({ status }: { status: string }) {
       {mapped?.label ?? status}
     </Badge>
   );
-}
-
-function lineTotal(unitPrice: string, quantity: number): string {
-  const n = Number(unitPrice) * quantity;
-  return Number.isNaN(n) ? unitPrice : n.toFixed(2);
 }
 
 function formatCurrency(value: string, currency: string): string {

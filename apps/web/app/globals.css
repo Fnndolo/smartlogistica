@@ -118,4 +118,23 @@
   .ring-halo {
     box-shadow: 0 0 0 3px hsl(var(--accent) / 0.18);
   }
+  /* Badge de no leidos: aro azul clarito que se desvanece y vuelve (mockup). */
+  .animate-unread {
+    animation: unread-breathe 3s ease-in-out infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .animate-unread {
+      animation: none;
+    }
+  }
+}
+
+@keyframes unread-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 hsl(var(--accent) / 0);
+  }
+  50% {
+    box-shadow: 0 0 0 4px hsl(var(--accent) / 0.2);
+  }
 }
