@@ -261,7 +261,7 @@ function DrawerContent({
               <t.icon className="h-3.5 w-3.5" />
               {t.label}
               {active ? (
-                <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-foreground" />
+                <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-accent" />
               ) : null}
             </button>
           );
@@ -1143,11 +1143,11 @@ function ConversacionTab({
               <Fragment key={m.id}>
                 {isUnreadBoundary ? (
                   <div id="chat-unread-divider" className="mt-4 flex items-center gap-3">
-                    <span className="h-px flex-1 rounded bg-primary/50" />
-                    <span className="text-[11px] font-semibold tracking-wide text-primary">
+                    <span className="h-px flex-1 rounded bg-accent/50" />
+                    <span className="text-[11px] font-semibold tracking-wide text-accent">
                       No leídos
                     </span>
-                    <span className="h-px flex-1 rounded bg-primary/50" />
+                    <span className="h-px flex-1 rounded bg-accent/50" />
                   </div>
                 ) : null}
               <MessageBubble
@@ -1236,8 +1236,8 @@ function ConversacionTab({
       <div className="border-t border-border p-3">
         {/* Barra de respuesta (citar): a quien respondo + fragmento + cancelar. */}
         {replyTo ? (
-          <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-primary bg-muted/50 px-3 py-1.5">
-            <Reply className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
+          <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-accent bg-muted/50 px-3 py-1.5">
+            <Reply className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />
             <div className="min-w-0 flex-1 text-xs">
               <span className="block font-semibold">
                 {members.find((m) => m.userId === replyTo.authorId)?.name ?? replyTo.authorName}
@@ -1264,7 +1264,7 @@ function ConversacionTab({
               onClick={() => setAttachOpen((o) => !o)}
               disabled={uploading}
               aria-label="Adjuntar foto"
-              className="h-9 w-9"
+              className="h-9 w-9 rounded-full"
             >
               {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
             </Button>
@@ -1323,7 +1323,7 @@ function ConversacionTab({
                     onClick={() => pickMention(m)}
                     className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
                   >
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[11px] font-semibold text-primary">
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent/10 text-[11px] font-semibold text-accent">
                       {initialsOf(mentionName(m))}
                     </span>
                     <span className="min-w-0">
@@ -1367,12 +1367,20 @@ function ConversacionTab({
               placeholder="Escribe un mensaje... (@ para mencionar)"
               // h-9 EXACTO (igual que los botones) + block (los textarea son
               // inline por defecto y el baseline los descuadra unos pixeles).
-              className="block h-9 w-full resize-none rounded-md border border-input bg-background px-3 py-[7px] text-sm leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              // Pill redonda estilo WhatsApp (como el mockup aprobado).
+              className="block h-9 w-full resize-none rounded-full border border-input bg-background px-4 py-[7px] text-sm leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
-          <Button size="icon" onClick={submit} disabled={!text.trim()} className="h-9 w-9">
+          {/* Enviar: circulo en acento cobalto (mockup). */}
+          <button
+            type="button"
+            onClick={submit}
+            disabled={!text.trim()}
+            aria-label="Enviar"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground transition-[filter] hover:brightness-110 disabled:pointer-events-none disabled:opacity-40"
+          >
             <Send className="h-4 w-4" />
-          </Button>
+          </button>
         </div>
       </div>
 
@@ -1514,7 +1522,7 @@ function MentionText({
               'inline-block max-w-full truncate rounded-md px-1 py-0.5 align-bottom font-medium',
               mine
                 ? 'bg-primary-foreground/25 text-primary-foreground'
-                : 'bg-primary/10 text-primary',
+                : 'bg-accent/10 text-accent',
             )}
           >
             {part.value}
@@ -1683,7 +1691,7 @@ function MessageBubble({
           'mb-1 rounded-lg border-l-2 px-2.5 py-1.5 text-xs',
           mine
             ? 'border-primary-foreground/50 bg-primary-foreground/10 text-primary-foreground/90'
-            : 'border-primary/60 bg-background/60 text-muted-foreground',
+            : 'border-accent/60 bg-background/60 text-muted-foreground',
         )}
       >
         {quoted === null ? (
@@ -1732,9 +1740,9 @@ function MessageBubble({
         mine ? 'items-end' : 'items-start',
         // El mensaje long-presseado queda resaltado mientras sus acciones
         // estan abiertas (feedback de "lo tengo agarrado", estilo WhatsApp).
-        actionsOpen && 'rounded-xl bg-primary/10',
+        actionsOpen && 'rounded-xl bg-accent/10',
         // Salto desde una mencion: destello breve para ubicar el mensaje.
-        flash && 'rounded-xl bg-primary/15 transition-colors duration-700',
+        flash && 'rounded-xl bg-accent/15 transition-colors duration-700',
       )}
     >
       {/* Cabecera del grupo: nombre (otros) + hora, UNA vez por conjunto. */}
@@ -1832,7 +1840,7 @@ function MessageBubble({
               className={cn(
                 'flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs transition-colors',
                 r.mine
-                  ? 'border-primary/40 bg-primary/10 text-primary'
+                  ? 'border-accent/40 bg-accent/10 text-accent'
                   : 'border-border bg-card hover:bg-muted',
               )}
             >

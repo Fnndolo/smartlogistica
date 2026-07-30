@@ -144,6 +144,9 @@ export function OrdersTable({
                   'group/row relative transition-colors hover:bg-accent/[0.05]',
                   (onOpenOrder || multi) && 'cursor-pointer',
                   (isOpen || isSelected) && 'bg-muted/30',
+                  // Con reacciones, la fila crece: los chips tienen su FRANJA
+                  // propia abajo y nunca tapan contenido (igual que el mockup).
+                  order.reactions.length > 0 && '[&>td]:pb-7',
                 )}
                 onClick={
                   onOpenOrder
@@ -247,20 +250,20 @@ export function OrdersTable({
                     </span>
                   </div>
                 </TableCell>
-                <TableCell className={cn(!showAddress && !showShipping && 'relative')}>
+                <TableCell className={cn(!showAddress && !showShipping && 'relative pr-16')}>
                   <StatusBadge status={order.status} />
                   {!showAddress && !showShipping ? (
                     <RowActions order={order} onClaim={openMenu('claim')} onReact={openMenu('react')} onToggleReaction={actions.toggleReaction} />
                   ) : null}
                 </TableCell>
                 {showAddress ? (
-                  <TableCell className="relative">
+                  <TableCell className="relative pr-16">
                     <AddressCell order={order} />
                     <RowActions order={order} onClaim={openMenu('claim')} onReact={openMenu('react')} onToggleReaction={actions.toggleReaction} />
                   </TableCell>
                 ) : null}
                 {showShipping ? (
-                  <TableCell className="relative">
+                  <TableCell className="relative pr-16">
                     <ShippingCell order={order} />
                     <RowActions order={order} onClaim={openMenu('claim')} onReact={openMenu('react')} onToggleReaction={actions.toggleReaction} />
                   </TableCell>
@@ -413,9 +416,14 @@ function RowActions({
 }) {
   return (
     <>
-      <ReactionChips order={order} onToggleReaction={onToggleReaction} className="mt-1.5" />
-      {/* Flotan ENCIMA del contenido al hacer hover (sin reservar ancho: la
-          tabla debe caber completa). Fondo opaco para leerse sobre el badge. */}
+      {/* Chips en la esquina inferior derecha de la FILA, dentro de la franja
+          reservada (pb-7 del row): nunca tapan el contenido (como el mockup). */}
+      <ReactionChips
+        order={order}
+        onToggleReaction={onToggleReaction}
+        className="absolute bottom-1.5 right-3"
+      />
+      {/* Botones DESPUES del estado (la celda reserva pr-16), centrados. */}
       <span className="absolute right-1.5 top-1/2 flex -translate-y-1/2 gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover/row:opacity-100">
         <button
           type="button"
