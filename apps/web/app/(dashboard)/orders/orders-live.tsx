@@ -107,20 +107,24 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
     setSelected(new Set());
   }, [page, q, from, to, sort, dir, warehouseId, shipping, address]);
 
-  // Pedido abierto en el drawer (click en la fila).
+  // Pedido abierto en el drawer (click en la fila). La conversacion es SIEMPRE
+  // la primera pestaña.
   const [openOrder, setOpenOrder] = useState<OrderSummary | null>(null);
-  // Cuando el pedido se abre desde la campana entramos directo a la conversacion.
-  const [openTab, setOpenTab] = useState<'detalle' | 'conversacion'>('detalle');
+  const [openTab, setOpenTab] = useState<'detalle' | 'conversacion'>('conversacion');
+  // Mensaje al que hay que SALTAR al abrir (deep-link de una mencion).
+  const [openMsg, setOpenMsg] = useState<string | null>(null);
 
   const openFromRow = useCallback((o: OrderSummary) => {
-    setOpenTab('detalle');
+    setOpenTab('conversacion');
+    setOpenMsg(null);
     setOpenOrder(o);
   }, []);
 
-  // Deep-link desde la campana de notificaciones: ?order=<id> abre el drawer del
-  // pedido (aunque no este en la pagina actual: se trae por id). Luego limpia el
-  // parametro para que no se reabra al navegar.
+  // Deep-link desde la campana/menciones: ?order=<id> abre el drawer del pedido
+  // (aunque no este en la pagina actual: se trae por id) y ?msg=<id> salta a ese
+  // mensaje dentro de la conversacion. Luego limpia los parametros.
   const orderParam = searchParams.get('order');
+  const msgParam = searchParams.get('msg');
   useEffect(() => {
     if (!orderParam) return;
     let cancelled = false;
@@ -129,6 +133,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
         const detail = await api.get<OrderSummary>(`/v1/orders/${orderParam}`);
         if (!cancelled) {
           setOpenTab('conversacion');
+          setOpenMsg(msgParam);
           setOpenOrder(detail);
         }
       } catch {
@@ -136,6 +141,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       } finally {
         const params = new URLSearchParams(searchParams.toString());
         params.delete('order');
+        params.delete('msg');
         replaceUrlParams(pathname, params);
       }
     })();
@@ -312,7 +318,12 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
         />
       ) : null}
 
-      <OrderDrawer order={openOrder} onClose={() => setOpenOrder(null)} initialTab={openTab} />
+      <OrderDrawer
+        order={openOrder}
+        onClose={() => setOpenOrder(null)}
+        initialTab={openTab}
+        focusMessageId={openMsg}
+      />
     </>
   );
 }

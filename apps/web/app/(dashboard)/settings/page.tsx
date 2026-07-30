@@ -1,12 +1,14 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowRight, Building2, Link2, Mail, Users } from 'lucide-react';
+import type { PackagePreset } from '@smartlogistica/shared';
 
 import { Badge } from '@/components/ui/badge';
-import { serverFetchResult } from '@/lib/server-api';
+import { serverFetch, serverFetchResult } from '@/lib/server-api';
 
 import { ChangePasswordCard } from './change-password-card';
 import { ConfirmationLogCard } from './confirmation-log-card';
+import { PackagePresetsCard } from './package-presets-card';
 
 export const metadata: Metadata = { title: 'Ajustes' };
 
@@ -28,6 +30,9 @@ export default async function SettingsPage() {
   const res = await serverFetchResult<Me>('/v1/auth/me');
   const me = res.ok ? res.data : null;
   const isOwner = me?.role === 'OWNER' || me?.role === 'ADMIN';
+  const packagePresets = isOwner
+    ? ((await serverFetch<PackagePreset[]>('/v1/warehouses/package-presets')) ?? [])
+    : [];
 
   return (
     <div className="space-y-8">
@@ -102,6 +107,15 @@ export default async function SettingsPage() {
           </>
         ) : null}
       </section>
+
+      {isOwner ? (
+        <section className="space-y-3">
+          <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Envíos
+          </h2>
+          <PackagePresetsCard initial={packagePresets} />
+        </section>
+      ) : null}
 
       {isOwner ? (
         <section className="space-y-3">

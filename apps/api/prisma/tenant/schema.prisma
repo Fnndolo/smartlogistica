@@ -94,6 +94,14 @@ model AlegraConnection {
   warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
 }
 
+/// Ajustes generales del workspace (clave -> JSON). Hoy: 'packagePresets'
+/// (paquetes de guia GLOBALES, ya no por sede).
+model AppSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+}
+
 /// Vendedor de Alegra elegido por CADA usuario en una sede: las facturas que ese
 /// usuario emita desde esa sede salen con ese "seller" de Alegra. El catalogo de
 /// vendedores se trae en vivo de Alegra (no se espeja).

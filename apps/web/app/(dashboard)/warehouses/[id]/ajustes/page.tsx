@@ -8,9 +8,8 @@ import { AlegraConnectionCard } from '../alegra-connection-card';
 import { AlegraSellerCard } from '../alegra-seller-card';
 import { CertificateCard } from '../certificate-card';
 import { CoordinadoraConnectionCard } from '../coordinadora-connection-card';
-import { PackagePresetsCard } from '../package-presets-card';
 
-/** Ajustes de la sede: conexiones (Alegra/Coordinadora) + paquetes de guia + Certificado. */
+/** Ajustes de la sede: conexiones (Alegra/Coordinadora) + Certificado. */
 export default async function WarehouseSettingsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const warehouse = (await getWarehouses()).find((w) => w.id === id);
@@ -27,7 +26,6 @@ export default async function WarehouseSettingsPage({ params }: { params: Promis
         <CoordinadoraConnectionCard warehouseId={id} warehouseName={name} initial={coordinadora ?? null} />
       </div>
       <AlegraSellerCard warehouseId={id} />
-      <PackagePresetsCard warehouseId={id} initial={warehouse?.packagePresets ?? []} />
       <CertificateCard warehouseId={id} warehouseName={name} />
     </div>
   );

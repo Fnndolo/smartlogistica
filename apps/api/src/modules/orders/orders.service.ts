@@ -54,7 +54,7 @@ import { CoordinadoraService } from '../marketplaces/coordinadora/coordinadora.s
 import type { RastreoResult } from '../marketplaces/coordinadora/coordinadora-client.service';
 import { MktDocumentService } from '../marketplaces/vtex/mkt-document.service';
 import { VtexClient } from '../marketplaces/vtex/vtex-client.service';
-import { WarehousesService, parsePackagePresets } from '../warehouses/warehouses.service';
+import { WarehousesService } from '../warehouses/warehouses.service';
 
 const IMAGE_EXT: Record<ImageMime, string> = {
   'image/jpeg': 'jpg',
@@ -101,6 +101,18 @@ interface UnreadInfo {
 
 @Injectable()
 export class OrdersService {
+  /**
+   * Candado en memoria contra dobles operaciones: dos clicks seguidos a
+   * "Facturar" (o dos pestañas) creaban DOS facturas porque ambas requests
+   * pasaban el chequeo de existingInvoice antes de que la primera terminara.
+   */
+  private readonly opLocks = new Set<string>();
+
+  private acquireLock(key: string, busyMessage: string): void {
+    if (this.opLocks.has(key)) throw new ConflictException(busyMessage);
+    this.opLocks.add(key);
+  }
+
   constructor(
     private readonly realtime: RealtimeService,
     private readonly push: PushService,
@@ -1017,6 +1029,19 @@ export class OrdersService {
     input: CreateInvoiceInput,
     auth: AuthContext,
   ): Promise<InvoiceResult> {
+    this.acquireLock(`${orderId}:invoice`, 'Ya hay una facturación en curso para este pedido.');
+    try {
+      return await this.createInvoiceLocked(orderId, input, auth);
+    } finally {
+      this.opLocks.delete(`${orderId}:invoice`);
+    }
+  }
+
+  private async createInvoiceLocked(
+    orderId: string,
+    input: CreateInvoiceInput,
+    auth: AuthContext,
+  ): Promise<InvoiceResult> {
     const order = await this.loadAccessibleOrder(orderId, auth);
     if (!order.warehouseId) {
       throw new BadRequestException('Asigna el pedido a una sede para facturar.');
@@ -1149,20 +1174,17 @@ export class OrdersService {
 
     const sender = await this.coordinadora.senderFor(order.warehouseId);
     const client = extractInvoiceClient(order);
-    const [city, warehouse] = await Promise.all([
+    const [city, packagePresets] = await Promise.all([
       this.coordinadora
         .resolveCity(order.warehouseId, client.address?.city ?? null, client.address?.department ?? null)
         .catch(() => null),
-      getTenantContext().prisma.warehouse.findUnique({
-        where: { id: order.warehouseId },
-        select: { packagePresets: true },
-      }),
+      this.warehouses.getGlobalPackagePresets(),
     ]);
 
     const { rotuloId, ...senderData } = sender;
     return {
       guide: await this.existingGuide(orderId),
-      packagePresets: parsePackagePresets(warehouse?.packagePresets),
+      packagePresets,
       recipient: {
         name: client.name,
         document: client.identification,
@@ -1298,6 +1320,19 @@ export class OrdersService {
 
   /** Genera la guia en Coordinadora, adjunta el rotulo al chat y registra el evento. */
   async generateGuide(orderId: string, input: CreateGuideInput, auth: AuthContext): Promise<Guide> {
+    this.acquireLock(`${orderId}:guide`, 'Ya hay una guía en curso para este pedido.');
+    try {
+      return await this.generateGuideLocked(orderId, input, auth);
+    } finally {
+      this.opLocks.delete(`${orderId}:guide`);
+    }
+  }
+
+  private async generateGuideLocked(
+    orderId: string,
+    input: CreateGuideInput,
+    auth: AuthContext,
+  ): Promise<Guide> {
     const order = await this.loadAccessibleOrder(orderId, auth);
     if (!order.warehouseId) {
       throw new BadRequestException('Asigna el pedido a una sede para generar guia.');

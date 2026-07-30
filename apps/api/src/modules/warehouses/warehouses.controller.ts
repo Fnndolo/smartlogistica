@@ -33,6 +33,20 @@ export class WarehousesController {
     return this.warehouses.list(user);
   }
 
+  /** Paquetes de guia (Coordinadora) GLOBALES — aplican a todas las sedes. */
+  @Get('package-presets')
+  async getPackagePresets(): Promise<PackagePreset[]> {
+    return this.warehouses.getGlobalPackagePresets();
+  }
+
+  @Put('package-presets')
+  async savePackagePresets(
+    @Body(new ZodValidationPipe(savePackagePresetsSchema)) body: PackagePreset[],
+    @CurrentUser() user: AuthContext,
+  ): Promise<PackagePreset[]> {
+    return this.warehouses.saveGlobalPackagePresets(body, user);
+  }
+
   @Post()
   @HttpCode(201)
   async create(
@@ -49,16 +63,6 @@ export class WarehousesController {
     @CurrentUser() user: AuthContext,
   ): Promise<WarehouseSummary> {
     return this.warehouses.update(id, body, user);
-  }
-
-  /** Reemplaza los paquetes predefinidos de guias (Coordinadora) de la sede. */
-  @Put(':id/package-presets')
-  async savePackagePresets(
-    @Param('id') id: string,
-    @Body(new ZodValidationPipe(savePackagePresetsSchema)) body: PackagePreset[],
-    @CurrentUser() user: AuthContext,
-  ): Promise<WarehouseSummary> {
-    return this.warehouses.savePackagePresets(id, body, user);
   }
 
   @Delete(':id')

@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef, useState } from 'react';
+import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -27,6 +27,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, api } from '@/lib/api-client';
 
+import { clearDraft, getDraft, setDraft } from './panel-drafts';
+
 interface Recipient {
   name: string;
   document: string;
@@ -46,11 +48,20 @@ interface Pkg {
   observations: string;
 }
 
+interface GuideDraft {
+  recipient: Recipient;
+  pkg: Pkg;
+  rotuloId: number | null;
+}
+
 export function GuidePanel({ orderId }: { orderId: string }) {
   const qc = useQueryClient();
-  const [recipient, setRecipient] = useState<Recipient | null>(null);
-  const [pkg, setPkg] = useState<Pkg | null>(null);
-  const [rotuloId, setRotuloId] = useState<number | null>(null);
+  // Arrancar del borrador si el usuario ya habia editado aqui (cerro el drawer
+  // o navego y volvio); si no, se llena desde el preview.
+  const draft = getDraft<GuideDraft>(`guide:${orderId}`);
+  const [recipient, setRecipient] = useState<Recipient | null>(draft?.recipient ?? null);
+  const [pkg, setPkg] = useState<Pkg | null>(draft?.pkg ?? null);
+  const [rotuloId, setRotuloId] = useState<number | null>(draft?.rotuloId ?? null);
   const [result, setResult] = useState<Guide | null>(null);
 
   const {
@@ -87,7 +98,15 @@ export function GuidePanel({ orderId }: { orderId: string }) {
     }
   }, [preview, recipient]);
 
+  // Persistir el borrador con cada edicion (sobrevive cierre del drawer).
+  useEffect(() => {
+    if (recipient && pkg) setDraft<GuideDraft>(`guide:${orderId}`, { recipient, pkg, rotuloId });
+  }, [recipient, pkg, rotuloId, orderId]);
+
   const generate = useMutation({
+    // Con clave: si cierran el drawer con la guia EN CURSO, al volver el boton
+    // sigue "cargando" (useIsMutating) y no se puede re-enviar.
+    mutationKey: ['op-guide', orderId],
     mutationFn: () =>
       api.post<Guide>(`/v1/orders/${orderId}/guide`, {
         recipient: {
@@ -111,6 +130,7 @@ export function GuidePanel({ orderId }: { orderId: string }) {
       }),
     onSuccess: (g) => {
       setResult(g);
+      clearDraft(`guide:${orderId}`);
       toast.success(`Guia ${g.number} generada`);
       qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
       qc.invalidateQueries({ queryKey: ['order-events', orderId] });
@@ -118,6 +138,25 @@ export function GuidePanel({ orderId }: { orderId: string }) {
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo generar la guia'),
   });
+
+  // Pendiente GLOBAL: cuenta la mutacion en vuelo aunque este panel se haya
+  // remontado. "Hacer todo" (op-all) tambien genera guia -> tambien bloquea.
+  const guideInFlight = useIsMutating({ mutationKey: ['op-guide', orderId] });
+  const allInFlight = useIsMutating({ mutationKey: ['op-all', orderId] });
+  const generating = guideInFlight > 0 || allInFlight > 0;
+
+  // Si la guia la disparo una instancia YA desmontada, sus onSuccess no corren
+  // aqui: al terminar (generating true->false) se refresca el preview.
+  const wasBusy = useRef(generating);
+  useEffect(() => {
+    if (wasBusy.current && !generating) {
+      qc.invalidateQueries({ queryKey: ['guide-preview', orderId] });
+      qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
+      qc.invalidateQueries({ queryKey: ['order-events', orderId] });
+    }
+    wasBusy.current = generating;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [generating]);
 
   if (isLoading) {
     return (
@@ -295,7 +334,7 @@ export function GuidePanel({ orderId }: { orderId: string }) {
         <p className="text-[11px] text-muted-foreground">
           El rotulo se adjunta al chat al generar la guia.
         </p>
-        <Button onClick={() => generate.mutate()} loading={generate.isPending} disabled={!canGenerate}>
+        <Button onClick={() => generate.mutate()} loading={generating} disabled={!canGenerate || generating}>
           <Truck className="h-4 w-4" />
           Generar guia
         </Button>

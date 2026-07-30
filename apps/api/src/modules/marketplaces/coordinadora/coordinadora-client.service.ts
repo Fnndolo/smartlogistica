@@ -39,6 +39,53 @@ function splitTopLevelItems(body: string): string[] {
   return chunks;
 }
 
+/**
+ * La secuencia canonica del rastreo de Coordinadora. Su API (rastreoExtendido)
+ * a veces SALTA estados intermedios (verificado en prod: llega 1,2,5 sin el 3
+ * "EN TRANSPORTE" ni el 4 "EN TERMINAL DESTINO"), pero su pagina oficial los
+ * pinta igual, infiriendolos: si vas "EN REPARTO" ya pasaste por ellos. Aqui
+ * se rellenan los huecos heredando fecha/hora del siguiente estado conocido
+ * (igual que hace la pagina de Coordinadora).
+ */
+const CANONICAL_STATES: Record<number, string> = {
+  1: 'A RECIBIR POR COORDINADORA',
+  2: 'EN TERMINAL ORIGEN',
+  3: 'EN TRANSPORTE',
+  4: 'EN TERMINAL DESTINO',
+  5: 'EN REPARTO',
+  6: 'ENTREGADO',
+};
+
+function fillCanonicalStates(events: RastreoEvent[]): RastreoEvent[] {
+  if (events.length === 0) return events;
+  const byCode = new Map(events.map((e) => [e.codigo, e]));
+  const known = events.filter((e) => e.codigo >= 1 && e.codigo <= 6);
+  if (known.length === 0) return events;
+  const maxCode = Math.max(...known.map((e) => e.codigo));
+
+  const out: RastreoEvent[] = [];
+  for (let code = 1; code <= maxCode; code++) {
+    const event = byCode.get(code);
+    if (event) {
+      out.push(event);
+      continue;
+    }
+    if (!(code in CANONICAL_STATES)) continue;
+    const next = known.filter((e) => e.codigo > code).sort((a, b) => a.codigo - b.codigo)[0];
+    out.push({
+      codigo: code,
+      descripcion: CANONICAL_STATES[code]!,
+      fecha: next?.fecha ?? '',
+      hora: next?.hora ?? '',
+    });
+  }
+  // Codigos fuera del canon (si aparecieran) se conservan al final.
+  for (const e of events) {
+    if (!out.includes(e)) out.push(e);
+  }
+  return out;
+}
+
 function emptyRastreo(codigoRemision: string): RastreoResult {
   return {
     codigoRemision,
@@ -337,7 +384,7 @@ export class CoordinadoraClient {
       horaEntrega: T('hora_entrega'),
       nombreOrigen: T('nombre_origen'),
       nombreDestino: T('nombre_destino'),
-      estados: parseEvents(block('detalle_estados'), 'codigo_estado'),
+      estados: fillCanonicalStates(parseEvents(block('detalle_estados'), 'codigo_estado')),
       novedades: parseEvents(block('detalle_novedades'), 'codigo_novedad'),
     };
   }

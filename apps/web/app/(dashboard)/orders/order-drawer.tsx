@@ -2,7 +2,13 @@
 
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  keepPreviousData,
+  useIsMutating,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { format } from 'date-fns/format';
 import { es } from 'date-fns/locale/es';
 import {
@@ -84,10 +90,13 @@ export function OrderDrawer({
   order,
   onClose,
   initialTab,
+  focusMessageId,
 }: {
   order: OrderSummary | null;
   onClose: () => void;
   initialTab?: Tab;
+  /** Mensaje al que saltar al abrir la conversacion (deep-link de mencion). */
+  focusMessageId?: string | null;
 }) {
   // Mantener el contenido montado durante la animacion de salida.
   const [rendered, setRendered] = useState<OrderSummary | null>(order);
@@ -147,7 +156,8 @@ export function OrderDrawer({
           key={rendered.id}
           order={rendered}
           onClose={onClose}
-          initialTab={initialTab ?? 'detalle'}
+          initialTab={initialTab ?? 'conversacion'}
+          focusMessageId={focusMessageId ?? null}
         />
       </aside>
     </div>,
@@ -159,10 +169,12 @@ function DrawerContent({
   order,
   onClose,
   initialTab,
+  focusMessageId,
 }: {
   order: OrderSummary;
   onClose: () => void;
   initialTab: Tab;
+  focusMessageId: string | null;
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
   const me = useCurrentUser();
@@ -191,8 +203,8 @@ function DrawerContent({
   }, [order.id, canManage, qc]);
 
   const tabs: { id: Tab; label: string; icon: typeof Info }[] = [
-    { id: 'detalle', label: 'Detalle', icon: Info },
     { id: 'conversacion', label: 'Conversación', icon: MessageSquare },
+    { id: 'detalle', label: 'Detalle', icon: Info },
     ...(canManage
       ? ([
           { id: 'facturar', label: 'Facturar', icon: ReceiptText },
@@ -250,17 +262,60 @@ function DrawerContent({
         })}
       </nav>
 
-      {/* Content */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {tab === 'detalle' ? <DetalleTab order={order} detail={detail} /> : null}
-        {tab === 'conversacion' ? (
-          <ConversacionTab orderId={order.id} initialUnread={order.unreadCount ?? 0} />
+      {/* Content: TODAS las pestañas quedan montadas (apiladas, las inactivas
+          invisibles). Asi al cambiar de pestaña no se pierde nada: scroll del
+          chat, items editados en Facturar, direccion/paquete en Guia, y las
+          operaciones en curso siguen mostrando su estado al volver. */}
+      <div className="relative min-h-0 flex-1">
+        <TabPane active={tab === 'conversacion'}>
+          <ConversacionTab
+            orderId={order.id}
+            initialUnread={order.unreadCount ?? 0}
+            active={tab === 'conversacion'}
+            focusMessageId={focusMessageId}
+          />
+        </TabPane>
+        <TabPane active={tab === 'detalle'} scroll>
+          <DetalleTab order={order} detail={detail} />
+        </TabPane>
+        {canManage ? (
+          <>
+            <TabPane active={tab === 'facturar'} scroll>
+              <InvoicePanel orderId={order.id} />
+            </TabPane>
+            <TabPane active={tab === 'guia'} scroll>
+              <GuidePanel orderId={order.id} />
+            </TabPane>
+            <TabPane active={tab === 'actividad'} scroll>
+              <ActividadTab orderId={order.id} />
+            </TabPane>
+          </>
         ) : null}
-        {tab === 'facturar' ? <InvoicePanel orderId={order.id} /> : null}
-        {tab === 'guia' ? <GuidePanel orderId={order.id} /> : null}
-        {tab === 'actividad' ? <ActividadTab orderId={order.id} /> : null}
       </div>
     </>
+  );
+}
+
+/**
+ * Panel de pestaña que NUNCA se desmonta: las inactivas quedan con
+ * visibility:hidden (conserva scroll y estado, no intercepta clicks).
+ */
+function TabPane({
+  active,
+  scroll,
+  children,
+}: {
+  active: boolean;
+  scroll?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className={cn('absolute inset-0', scroll && 'overflow-y-auto', !active && 'invisible')}
+      aria-hidden={!active}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -360,9 +415,15 @@ function DetalleTab({ order, detail }: { order: OrderSummary; detail: OrderDetai
 function ConversacionTab({
   orderId,
   initialUnread = 0,
+  active = true,
+  focusMessageId = null,
 }: {
   orderId: string;
   initialUnread?: number;
+  /** false cuando otra pestaña esta al frente (el chat sigue montado). */
+  active?: boolean;
+  /** Al abrir, saltar a ESTE mensaje (deep-link de una mencion) y resaltarlo. */
+  focusMessageId?: string | null;
 }) {
   const qc = useQueryClient();
   const me = useCurrentUser();
@@ -382,6 +443,8 @@ function ConversacionTab({
     return max;
   });
   const [unreadBoundaryId, setUnreadBoundaryId] = useState<string | null>(null);
+  // Mensaje resaltado brevemente tras saltar a el desde una mencion.
+  const [flashId, setFlashId] = useState<string | null>(null);
   const didInitialScroll = useRef(false);
   // Scroll inteligente (WhatsApp + Google Chat): si estoy leyendo ARRIBA, un
   // mensaje nuevo NO me arrastra al fondo; aparece el boton "ir al final" con
@@ -393,13 +456,14 @@ function ConversacionTab({
   const jumpIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Registrar que este chat esta EN PANTALLA (silencia sonido/toast globales).
+  // Solo cuenta si la pestaña Conversacion esta al frente: montada pero tapada
+  // por Facturar/Guia NO silencia notificaciones ni marca leidos.
   useEffect(() => {
+    if (!active) return;
     setActiveChat(orderId);
     return () => setActiveChat(null);
-  }, [orderId]);
+  }, [orderId, active]);
   const [text, setText] = useState('');
-  const [uploading, setUploading] = useState(false);
-  const [uploadLabel, setUploadLabel] = useState('Subiendo...');
   const [attachOpen, setAttachOpen] = useState(false);
   // Eliminar: uno o VARIOS mensajes (seleccion multiple).
   const [confirmDelete, setConfirmDelete] = useState<string[] | null>(null);
@@ -443,7 +507,9 @@ function ConversacionTab({
 
   // Al abrir la conversacion, marcar el hilo como leido (limpia el badge/campana
   // de ESTE usuario). Se re-marca cuando llegan mensajes nuevos estando abierto.
+  // Solo cuando la pestaña esta AL FRENTE (montada pero tapada no lee).
   useEffect(() => {
+    if (!active) return;
     api
       .post(`/v1/orders/${orderId}/read`)
       .then(() => {
@@ -451,7 +517,7 @@ function ConversacionTab({
         qc.invalidateQueries({ queryKey: ['inbox'] });
       })
       .catch(() => {});
-  }, [orderId, messages.length, qc]);
+  }, [orderId, messages.length, qc, active]);
 
   // Realtime AL PESTAÑEO: los eventos de chat traen el contenido completo y se
   // INYECTAN directo a la cache (cero refetch en el camino critico). Un
@@ -604,11 +670,19 @@ function ConversacionTab({
     setUnreadBoundaryId(boundary);
     prevLenRef.current = messages.length; // base para detectar llegadas nuevas
     requestAnimationFrame(() => {
+      // Si venimos de una MENCION, el destino es ESE mensaje (resaltado breve).
+      const target = focusMessageId ? document.getElementById(`msg-${focusMessageId}`) : null;
+      if (target) {
+        target.scrollIntoView({ block: 'center' });
+        setFlashId(focusMessageId);
+        setTimeout(() => setFlashId(null), 2600);
+        return;
+      }
       const el = boundary ? document.getElementById('chat-unread-divider') : null;
       if (el) el.scrollIntoView({ block: 'center' });
       else scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
     });
-  }, [messages, me, unreadAtOpen]);
+  }, [messages, me, unreadAtOpen, focusMessageId]);
 
   const scrollToBottom = useCallback(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
@@ -680,13 +754,6 @@ function ConversacionTab({
     setShowJump(true);
     setUnreadBoundaryId((prev) => prev ?? incoming[0]!.id);
   }, [messages, me]);
-
-  useEffect(() => {
-    if (!didInitialScroll.current || !uploading) return;
-    if (atBottomRef.current) {
-      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-    }
-  }, [uploading]);
 
   const send = useMutation({
     mutationFn: ({ body, mentions, replyToId }: { body: string; mentions: string[]; replyToId?: string }) =>
@@ -909,49 +976,77 @@ function ConversacionTab({
     setTimeout(() => attachRef.current?.click(), 0);
   };
 
-  const onAttachmentFile = async (file: File | null) => {
-    if (!file || uploading) return;
-    setUploadLabel('Subiendo archivo...');
-    setUploading(true);
-    try {
+  // Subidas como mutaciones CON CLAVE: si el usuario cambia de pestaña o
+  // cierra el drawer, la subida sigue y al volver el indicador reaparece
+  // (useIsMutating cuenta las mutaciones en vuelo aunque esto se remonte).
+  const uploadAttachment = useMutation({
+    mutationKey: ['op-attach', orderId],
+    mutationFn: async (file: File) => {
       const compact = await compressImage(file);
       const fd = new FormData();
       fd.append('file', compact, compact.name);
-      await api.upload<OrderMessage>(`/v1/orders/${orderId}/attachment`, fd);
+      return api.upload<OrderMessage>(`/v1/orders/${orderId}/attachment`, fd);
+    },
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
-    } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'No se pudo subir el archivo');
-    } finally {
-      setUploading(false);
+    },
+    onError: (err) =>
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo subir el archivo'),
+    onSettled: () => {
       if (attachRef.current) attachRef.current.value = '';
-    }
-  };
+    },
+  });
 
-  const onFile = async (file: File | null) => {
-    if (!file || uploading) return;
-    setUploadLabel('Leyendo la foto y buscando en compras...');
-    setUploading(true);
-    const kind = pendingKind.current;
-    try {
+  const uploadPhoto = useMutation({
+    mutationKey: ['op-photo', orderId],
+    mutationFn: async ({ file, kind }: { file: File; kind: DevicePhotoKind }) => {
       // Comprimir ANTES de subir: sube en una fraccion y la IA lee mas rapido.
       const compact = await compressImage(file);
       const fd = new FormData();
       fd.append('file', compact, compact.name);
-      const res = await api.upload<DevicePhotoResponse>(
+      return api.upload<DevicePhotoResponse>(
         `/v1/orders/${orderId}/device-photo?kind=${kind}`,
         fd,
       );
+    },
+    onSuccess: (res, { kind }) => {
       toast.success(`${kind === 'imei' ? 'IMEI' : 'Serial'} detectado: ${res.message.imeis.join(', ')}`);
       qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
       qc.invalidateQueries({ queryKey: ['catalog', orderId] });
       // Las lineas de facturar dependen de los codigos: refrescar el preview.
       qc.invalidateQueries({ queryKey: ['invoice-preview', orderId] });
-    } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'No se pudo procesar la foto');
-    } finally {
-      setUploading(false);
+    },
+    onError: (err) =>
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo procesar la foto'),
+    onSettled: () => {
       if (fileRef.current) fileRef.current.value = '';
+    },
+  });
+
+  const photoUploading = useIsMutating({ mutationKey: ['op-photo', orderId] }) > 0;
+  const attachUploading = useIsMutating({ mutationKey: ['op-attach', orderId] }) > 0;
+  const uploading = photoUploading || attachUploading;
+  const uploadLabel = photoUploading
+    ? 'Leyendo la foto y buscando en compras...'
+    : 'Subiendo archivo...';
+
+  // El indicador de subida aparece al fondo: si estaba en el fondo, mantenerlo
+  // a la vista.
+  useEffect(() => {
+    if (!didInitialScroll.current || !uploading) return;
+    if (atBottomRef.current) {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
     }
+  }, [uploading]);
+
+  const onAttachmentFile = (file: File | null) => {
+    if (!file || uploading) return;
+    uploadAttachment.mutate(file);
+  };
+
+  const onFile = (file: File | null) => {
+    if (!file || uploading) return;
+    uploadPhoto.mutate({ file, kind: pendingKind.current });
   };
 
   return (
@@ -1039,6 +1134,7 @@ function ConversacionTab({
                 onLongPress={m.kind !== 'system' ? () => onBubbleLongPress(m) : undefined}
                 actionsOpen={mobileActionsFor === m.id}
                 hoverActions={hoverCapable}
+                flash={flashId === m.id}
                 onDoubleTap={
                   m.kind === 'text'
                     ? () => react.mutate({ messageId: m.id, emoji: '👍' })
@@ -1400,6 +1496,7 @@ function MessageBubble({
   actionsOpen = false,
   hoverActions = true,
   onDoubleTap,
+  flash = false,
 }: {
   message: OrderMessage;
   mine: boolean;
@@ -1424,6 +1521,8 @@ function MessageBubble({
   hoverActions?: boolean;
   /** Doble toque / doble click: 👍 al mensaje. */
   onDoubleTap?: () => void;
+  /** Resaltado temporal (se acaba de saltar a este mensaje desde una mencion). */
+  flash?: boolean;
 }) {
   const isPhoto = message.kind === 'imei_photo' || message.kind === 'serial_photo';
   const isDoc = message.kind === 'document';
@@ -1505,7 +1604,7 @@ function MessageBubble({
       : {};
   if (message.kind === 'system') {
     return (
-      <div className="mt-3 flex justify-center py-1 first:mt-0">
+      <div id={`msg-${message.id}`} className="mt-3 flex justify-center py-1 first:mt-0">
         <span className="rounded-full bg-muted px-3 py-1 text-center text-[11px] text-muted-foreground">
           {message.body}
         </span>
@@ -1576,6 +1675,7 @@ function MessageBubble({
 
   return (
     <div
+      id={`msg-${message.id}`}
       {...touchHandlers}
       className={cn(
         // touch-manipulation: sin zoom por doble toque (el doble toque es 👍).
@@ -1585,6 +1685,8 @@ function MessageBubble({
         // El mensaje long-presseado queda resaltado mientras sus acciones
         // estan abiertas (feedback de "lo tengo agarrado", estilo WhatsApp).
         actionsOpen && 'rounded-xl bg-primary/10',
+        // Salto desde una mencion: destello breve para ubicar el mensaje.
+        flash && 'rounded-xl bg-primary/15 transition-colors duration-700',
       )}
     >
       {/* Cabecera del grupo: nombre (otros) + hora, UNA vez por conjunto. */}

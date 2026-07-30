@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Package, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
-import type { PackagePreset, WarehouseSummary } from '@smartlogistica/shared';
+import type { PackagePreset } from '@smartlogistica/shared';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -29,17 +29,11 @@ const toRow = (p: PackagePreset): Row => ({
 const EMPTY_ROW: Row = { name: '', weight: '', height: '', width: '', length: '' };
 
 /**
- * Paquetes predefinidos para las guias de Coordinadora (por sede). Equivalen a
- * los "empaques" del portal web de Coordinadora — su API no los expone, asi que
- * se configuran aqui y se eligen en la pestana Guia del pedido.
+ * Paquetes predefinidos para las guias de Coordinadora — GLOBALES, aplican a
+ * todas las sedes. Equivalen a los "empaques" del portal web de Coordinadora
+ * (su API no los expone): se configuran aqui y se eligen en la pestana Guia.
  */
-export function PackagePresetsCard({
-  warehouseId,
-  initial,
-}: {
-  warehouseId: string;
-  initial: PackagePreset[];
-}) {
+export function PackagePresetsCard({ initial }: { initial: PackagePreset[] }) {
   const qc = useQueryClient();
   const [rows, setRows] = useState<Row[]>(initial.map(toRow));
   const [dirty, setDirty] = useState(false);
@@ -68,8 +62,8 @@ export function PackagePresetsCard({
 
   const save = useMutation({
     mutationFn: () =>
-      api.put<WarehouseSummary>(
-        `/v1/warehouses/${warehouseId}/package-presets`,
+      api.put<PackagePreset[]>(
+        `/v1/warehouses/package-presets`,
         rows.map((r) => ({
           name: r.name.trim(),
           weight: Number(r.weight),
@@ -81,7 +75,6 @@ export function PackagePresetsCard({
     onSuccess: () => {
       setDirty(false);
       toast.success('Paquetes guardados');
-      qc.invalidateQueries({ queryKey: ['warehouses'] });
       qc.invalidateQueries({ queryKey: ['guide-preview'] });
     },
     onError: (err) =>
@@ -98,7 +91,7 @@ export function PackagePresetsCard({
           <h3 className="text-sm font-semibold">Paquetes de guía</h3>
           <p className="mt-0.5 text-sm text-muted-foreground">
             Como los empaques del portal de Coordinadora: al generar una guía los eliges y llenan
-            medidas y peso de un clic.
+            medidas y peso de un clic. Aplican a todas las sedes.
           </p>
         </div>
       </div>

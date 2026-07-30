@@ -90,24 +90,26 @@ export class WarehousesService {
     return this.toSummary(w, count);
   }
 
-  /** Reemplaza los paquetes predefinidos de guias de la sede. */
-  async savePackagePresets(
-    id: string,
+  /** Paquetes de guia GLOBALES (aplican a todas las sedes). */
+  async getGlobalPackagePresets(): Promise<PackagePreset[]> {
+    const { prisma } = getTenantContext();
+    const row = await prisma.appSetting.findUnique({ where: { key: 'packagePresets' } });
+    return parsePackagePresets(row?.value);
+  }
+
+  /** Reemplaza los paquetes de guia GLOBALES. */
+  async saveGlobalPackagePresets(
     presets: PackagePreset[],
     auth: AuthContext,
-  ): Promise<WarehouseSummary> {
-    if (!isAdmin(auth)) throw new ForbiddenException('Solo administradores pueden editar sedes');
+  ): Promise<PackagePreset[]> {
+    if (!isAdmin(auth)) throw new ForbiddenException('Solo administradores pueden editar los paquetes');
     const { prisma } = getTenantContext();
-    const existing = await prisma.warehouse.findUnique({ where: { id } });
-    if (!existing) throw new NotFoundException('Sede no encontrada');
-    const w = await prisma.warehouse.update({
-      where: { id },
-      data: { packagePresets: presets as unknown as Prisma.InputJsonValue },
+    await prisma.appSetting.upsert({
+      where: { key: 'packagePresets' },
+      create: { key: 'packagePresets', value: presets as unknown as Prisma.InputJsonValue },
+      update: { value: presets as unknown as Prisma.InputJsonValue },
     });
-    const count = await prisma.order.count({
-      where: { warehouseId: id, events: { none: { type: 'vtex_invoiced' } } },
-    });
-    return this.toSummary(w, count);
+    return presets;
   }
 
   async archive(id: string, auth: AuthContext): Promise<void> {
@@ -145,7 +147,6 @@ export class WarehousesService {
       slug: string;
       archived: boolean;
       invoicePrefix: string | null;
-      packagePresets?: unknown;
       createdAt: Date;
     },
     orderCount: number,
@@ -156,7 +157,6 @@ export class WarehousesService {
       slug: w.slug,
       archived: w.archived,
       invoicePrefix: w.invoicePrefix,
-      packagePresets: parsePackagePresets(w.packagePresets),
       orderCount,
       createdAt: w.createdAt.toISOString(),
     };

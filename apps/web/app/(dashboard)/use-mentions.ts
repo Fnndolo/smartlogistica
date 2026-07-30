@@ -55,16 +55,21 @@ export function useMentions(): { items: MentionItem[]; unread: number } {
   return { items, unread: items.filter((m) => m.unread).length };
 }
 
-/** A donde navega una mencion o un resultado de busqueda (abre el drawer via ?order=). */
+/**
+ * A donde navega una mencion o un resultado de busqueda (abre el drawer via
+ * ?order=). Si trae messageId, ademas salta a ESE mensaje dentro del chat.
+ */
 export function orderTarget(item: {
   orderId: string;
   warehouseId: string | null;
   stage: 'general' | 'pending' | 'invoiced';
+  messageId?: string;
 }): string {
   const base = !item.warehouseId
     ? '/orders'
     : item.stage === 'invoiced'
       ? `/warehouses/${item.warehouseId}/facturados`
       : `/warehouses/${item.warehouseId}`;
-  return `${base}?order=${encodeURIComponent(item.orderId)}`;
+  const msg = item.messageId ? `&msg=${encodeURIComponent(item.messageId)}` : '';
+  return `${base}?order=${encodeURIComponent(item.orderId)}${msg}`;
 }

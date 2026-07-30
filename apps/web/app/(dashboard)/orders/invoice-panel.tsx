@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef, useState } from 'react';
+import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CheckCircle2,
   Loader2,
@@ -25,6 +25,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ApiError, api } from '@/lib/api-client';
 
+import { clearDraft, getDraft, setDraft } from './panel-drafts';
+
 interface Line {
   key: string;
   // Codigos de la foto (dual-SIM = varios), separados por coma. Van a la descripcion.
@@ -37,7 +39,11 @@ interface Line {
 
 export function InvoicePanel({ orderId }: { orderId: string }) {
   const qc = useQueryClient();
-  const [lines, setLines] = useState<Line[] | null>(null);
+  // Items editados: arrancan del borrador si el usuario ya habia trabajado aqui
+  // (cerro el drawer o navego y volvio); si no, se llenan desde el preview.
+  const [lines, setLines] = useState<Line[] | null>(
+    () => getDraft<Line[]>(`invoice:${orderId}`) ?? null,
+  );
   const [result, setResult] = useState<InvoiceResult | null>(null);
 
   const {
@@ -64,6 +70,11 @@ export function InvoicePanel({ orderId }: { orderId: string }) {
       );
     }
   }, [preview, lines]);
+
+  // Persistir el borrador con cada edicion (sobrevive cierre del drawer).
+  useEffect(() => {
+    if (lines !== null) setDraft(`invoice:${orderId}`, lines);
+  }, [lines, orderId]);
 
   const patch = (key: string, p: Partial<Line>) =>
     setLines((ls) => (ls ?? []).map((l) => (l.key === key ? { ...l, ...p } : l)));
@@ -98,9 +109,13 @@ export function InvoicePanel({ orderId }: { orderId: string }) {
   };
 
   const invoice = useMutation({
+    // Con clave: si el usuario cierra el drawer con la facturacion EN CURSO, al
+    // volver el boton sigue "cargando" (useIsMutating) y no se puede re-enviar.
+    mutationKey: ['op-invoice', orderId],
     mutationFn: () => api.post<InvoiceResult>(`/v1/orders/${orderId}/invoice`, { lines: buildLines() }),
     onSuccess: (r) => {
       setResult(r);
+      clearDraft(`invoice:${orderId}`);
       toast.success(`Factura ${r.number} emitida`);
       refreshOrder();
     },
@@ -129,6 +144,7 @@ export function InvoicePanel({ orderId }: { orderId: string }) {
   );
 
   const processAll = useMutation({
+    mutationKey: ['op-all', orderId],
     mutationFn: () =>
       api.post<ProcessAllResult>(`/v1/orders/${orderId}/process-all`, {
         invoice: { lines: buildLines() },
@@ -146,6 +162,7 @@ export function InvoicePanel({ orderId }: { orderId: string }) {
       }),
     onSuccess: (res) => {
       setResult(res.invoice);
+      clearDraft(`invoice:${orderId}`);
       toast.success(`Listo: factura ${res.invoice.number} + guia ${res.guide.number} + MKT`);
       refreshOrder();
       qc.invalidateQueries({ queryKey: ['guide-preview', orderId] });
@@ -155,7 +172,25 @@ export function InvoicePanel({ orderId }: { orderId: string }) {
       toast.error(err instanceof ApiError ? err.message : 'No se pudo completar el proceso'),
   });
 
-  const busy = invoice.isPending || processAll.isPending;
+  // Pendientes GLOBALES (aunque este panel se haya remontado): cuenta las
+  // mutaciones en vuelo con estas claves en todo el arbol.
+  const invoicing = useIsMutating({ mutationKey: ['op-invoice', orderId] }) > 0;
+  const doingAll = useIsMutating({ mutationKey: ['op-all', orderId] }) > 0;
+  const busy = invoicing || doingAll;
+
+  // Si la operacion la disparo una instancia YA desmontada (cerraron el drawer
+  // mientras facturaba), sus onSuccess no corren aqui: al terminar (busy
+  // true->false) se refresca para mostrar la factura emitida.
+  const wasBusy = useRef(busy);
+  useEffect(() => {
+    if (wasBusy.current && !busy) {
+      refreshOrder();
+      qc.invalidateQueries({ queryKey: ['guide-preview', orderId] });
+      qc.invalidateQueries({ queryKey: ['orders'] });
+    }
+    wasBusy.current = busy;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy]);
 
   if (isLoading) {
     return (
@@ -245,7 +280,7 @@ export function InvoicePanel({ orderId }: { orderId: string }) {
           <Button
             variant="outline"
             onClick={() => processAll.mutate()}
-            loading={processAll.isPending}
+            loading={doingAll}
             disabled={!canInvoice || !guideReady || busy}
             title={
               guideReady
@@ -258,7 +293,7 @@ export function InvoicePanel({ orderId }: { orderId: string }) {
           </Button>
           <Button
             onClick={() => invoice.mutate()}
-            loading={invoice.isPending}
+            loading={invoicing}
             disabled={!canInvoice || busy}
           >
             <ReceiptText className="h-4 w-4" />
