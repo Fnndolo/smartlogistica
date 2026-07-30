@@ -21,6 +21,7 @@ import { OrdersTable } from './orders-table';
 import { OrderDrawer } from './order-drawer';
 import { EmptyState } from './empty-state';
 import { DateRangeFilter } from './date-range-filter';
+import { OrdersPulseRow } from './orders-pulse';
 import { SearchFilter } from './search-filter';
 import { useOrdersStream } from './use-orders-stream';
 
@@ -163,6 +164,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       debounceRef.current = setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ['orders'] });
         queryClient.invalidateQueries({ queryKey: ['order-stats'] });
+        queryClient.invalidateQueries({ queryKey: ['orders-pulse'] });
       }, SSE_DEBOUNCE_MS);
     },
     [queryClient],
@@ -256,6 +258,12 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
 
   return (
     <>
+      {/* Pulso de la vista: 4 metricas operativas acordes a DONDE estas. */}
+      <OrdersPulseRow
+        scope={scope.kind === 'general' ? 'general' : state === 'invoiced' ? 'invoiced' : 'pending'}
+        warehouseId={warehouseId}
+      />
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <SearchFilter />
@@ -792,18 +800,22 @@ function LiveIndicator({
   }, []);
   const secondsAgo = Math.max(0, Math.floor((now - lastUpdate) / 1000));
 
+  // Chip "En vivo" (estilo pill esmeralda con punto respirando).
   return (
-    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+    <span
+      className={cn(
+        'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium tabular-nums',
+        live
+          ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
+          : 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400',
+      )}
+    >
       <span
-        className={`inline-block h-1.5 w-1.5 rounded-full ${
-          live ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
-        }`}
+        className={cn('inline-block h-1.5 w-1.5 rounded-full bg-current', live && 'animate-pulse')}
         aria-hidden
       />
-      <span className="tabular-nums">
-        {live ? 'En vivo' : 'Reconectando'} · {itemCount} {itemCount === 1 ? 'pedido' : 'pedidos'}
-        {!live ? ` · hace ${secondsAgo}s` : ''}
-      </span>
-    </div>
+      {live ? 'En vivo' : 'Reconectando'} · {itemCount} {itemCount === 1 ? 'pedido' : 'pedidos'}
+      {!live ? ` · hace ${secondsAgo}s` : ''}
+    </span>
   );
 }

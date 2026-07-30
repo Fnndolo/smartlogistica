@@ -29,6 +29,7 @@ import type {
   OrderEvent as OrderEventDto,
   OrderMessage as OrderMessageDto,
   OrderSummary,
+  OrdersPulse,
   ProcessAllInput,
   ProcessAllResult,
   Inbox,
@@ -216,11 +217,11 @@ export class OrdersService {
     ]);
 
     // Que pedidos de esta pagina ya tienen foto IMEI/serial (indicador en la tabla)
-    // + cuantos mensajes sin leer tiene cada uno para este usuario (badge).
+    // + mensajes sin leer por pedido (badge) + reacciones agregadas por pedido.
     const ids = rows.map((r) => r.id);
-    const [withPhoto, unread] =
+    const [withPhoto, unread, reactions] =
       rows.length === 0
-        ? [new Set<string>(), new Map<string, UnreadInfo>()]
+        ? [new Set<string>(), new Map<string, UnreadInfo>(), new Map<string, OrderSummary['reactions']>()]
         : await Promise.all([
             prisma.orderMessage
               .groupBy({
@@ -229,15 +230,182 @@ export class OrdersService {
               })
               .then((g) => new Set(g.map((x) => x.orderId))),
             this.unreadMap(auth.userId, { orderIds: ids }),
+            this.reactionsMap(ids, auth.userId),
           ]);
 
     return {
-      items: rows.map((o) => this.toSummary(o, withPhoto.has(o.id), unread.get(o.id)?.count ?? 0)),
+      items: rows.map((o) =>
+        this.toSummary(
+          o,
+          withPhoto.has(o.id),
+          unread.get(o.id)?.count ?? 0,
+          auth.userId,
+          reactions.get(o.id) ?? [],
+        ),
+      ),
       total,
       page: query.page,
       limit: query.limit,
       totalPages: Math.max(1, Math.ceil(total / query.limit)),
     };
+  }
+
+  /** Reacciones por pedido, agregadas: [{emoji, count, mine}] en orden de llegada. */
+  private async reactionsMap(
+    orderIds: string[],
+    viewerId: string,
+  ): Promise<Map<string, OrderSummary['reactions']>> {
+    const { prisma } = getTenantContext();
+    const rows = await prisma.orderReaction.findMany({
+      where: { orderId: { in: orderIds } },
+      orderBy: { createdAt: 'asc' },
+      select: { orderId: true, emoji: true, userId: true },
+    });
+    const out = new Map<string, OrderSummary['reactions']>();
+    for (const r of rows) {
+      const list = out.get(r.orderId) ?? [];
+      if (!out.has(r.orderId)) out.set(r.orderId, list);
+      const agg = list.find((x) => x.emoji === r.emoji);
+      if (agg) {
+        agg.count += 1;
+        if (r.userId === viewerId) agg.mine = true;
+      } else {
+        list.push({ emoji: r.emoji, count: 1, mine: r.userId === viewerId });
+      }
+    }
+    return out;
+  }
+
+  /** "Tomar pedido": queda a cargo de quien lo toma; nadie mas puede tomarlo. */
+  async claimOrder(orderId: string, auth: AuthContext): Promise<{ ok: true }> {
+    await this.loadAccessibleOrder(orderId, auth);
+    const { tenantId, prisma } = getTenantContext();
+    const name = displayName(auth);
+    // Guard atomico: solo si esta libre (dos clicks a la vez -> uno gana).
+    const res = await prisma.order.updateMany({
+      where: { id: orderId, claimedById: null },
+      data: { claimedById: auth.userId, claimedByName: name, claimedAt: new Date() },
+    });
+    if (res.count === 0) {
+      const cur = await prisma.order.findUnique({
+        where: { id: orderId },
+        select: { claimedById: true, claimedByName: true },
+      });
+      if (cur?.claimedById === auth.userId) return { ok: true }; // ya era mio
+      throw new ConflictException(`Ya lo tomó ${cur?.claimedByName ?? 'otra persona'}`);
+    }
+    await prisma.orderEvent.create({
+      data: { orderId, type: 'claimed', actorId: auth.userId, actorName: name },
+    });
+    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+    return { ok: true };
+  }
+
+  /** Soltar un pedido tomado. Solo quien lo tomo (o un admin, por si acaso). */
+  async unclaimOrder(orderId: string, auth: AuthContext): Promise<{ ok: true }> {
+    const order = await this.loadAccessibleOrder(orderId, auth);
+    const { tenantId, prisma } = getTenantContext();
+    if (!order.claimedById) return { ok: true };
+    if (order.claimedById !== auth.userId && !isAdmin(auth)) {
+      throw new ForbiddenException(`Solo ${order.claimedByName ?? 'quien lo tomó'} puede soltarlo`);
+    }
+    await prisma.order.update({
+      where: { id: orderId },
+      data: { claimedById: null, claimedByName: null, claimedAt: null },
+    });
+    await prisma.orderEvent.create({
+      data: { orderId, type: 'unclaimed', actorId: auth.userId, actorName: displayName(auth) },
+    });
+    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+    return { ok: true };
+  }
+
+  /** Reaccion al PEDIDO (toggle, como en los mensajes): cualquiera puede. */
+  async toggleOrderReaction(
+    orderId: string,
+    emoji: string,
+    auth: AuthContext,
+  ): Promise<{ removed: boolean }> {
+    await this.loadAccessibleOrder(orderId, auth);
+    const { tenantId, prisma } = getTenantContext();
+    const key = { orderId, userId: auth.userId, emoji };
+    const existing = await prisma.orderReaction.findUnique({
+      where: { orderId_userId_emoji: key },
+    });
+    if (existing) {
+      await prisma.orderReaction.delete({ where: { id: existing.id } });
+    } else {
+      await prisma.orderReaction.create({ data: { ...key, userName: displayName(auth) } });
+    }
+    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+    return { removed: Boolean(existing) };
+  }
+
+  /**
+   * "Pulso" de la vista: 4 metricas segun donde estes (generales / por
+   * preparar de una sede / facturados de una sede).
+   */
+  async pulse(
+    scope: 'general' | 'pending' | 'invoiced',
+    warehouseId: string | null,
+    auth: AuthContext,
+  ): Promise<OrdersPulse> {
+    const { prisma } = getTenantContext();
+
+    if (scope === 'general') {
+      if (!isAdmin(auth)) throw new ForbiddenException('Solo administradores');
+      // "Hoy" en horario de Colombia (GMT-5, sin DST).
+      const now = new Date();
+      const bogota = new Date(now.getTime() - 5 * 3_600_000);
+      const startToday = new Date(
+        Date.UTC(bogota.getUTCFullYear(), bogota.getUTCMonth(), bogota.getUTCDate(), 5, 0, 0),
+      );
+      const startYesterday = new Date(startToday.getTime() - 24 * 3_600_000);
+      const [today, yesterday, unassigned, addrPending, unclaimed] = await Promise.all([
+        prisma.order.count({ where: { marketplaceCreatedAt: { gte: startToday } } }),
+        prisma.order.count({
+          where: { marketplaceCreatedAt: { gte: startYesterday, lt: startToday } },
+        }),
+        prisma.order.count({ where: { warehouseId: null } }),
+        prisma.order.count({ where: { warehouseId: null, addressStatus: null } }),
+        prisma.order.count({ where: { warehouseId: null, claimedById: null } }),
+      ]);
+      return { scope, a: today, b: unassigned, c: addrPending, d: unclaimed, deltaToday: today - yesterday };
+    }
+
+    if (!warehouseId) throw new BadRequestException('Falta la sede');
+    const allowed = await this.warehouses.accessibleWarehouseIds(auth);
+    if (allowed && !allowed.includes(warehouseId)) {
+      throw new ForbiddenException('No tienes acceso a esta sede');
+    }
+
+    if (scope === 'pending') {
+      const base: Prisma.OrderWhereInput = {
+        warehouseId,
+        events: { none: { type: 'vtex_invoiced' } },
+      };
+      const [total, withPhoto, addrPending, unclaimed] = await Promise.all([
+        prisma.order.count({ where: base }),
+        prisma.order.count({
+          where: { ...base, messages: { some: { kind: { in: ['imei_photo', 'serial_photo'] } } } },
+        }),
+        prisma.order.count({ where: { ...base, addressStatus: null } }),
+        prisma.order.count({ where: { ...base, claimedById: null } }),
+      ]);
+      return { scope, a: total, b: withPhoto, c: addrPending, d: unclaimed, deltaToday: null };
+    }
+
+    const base: Prisma.OrderWhereInput = {
+      warehouseId,
+      events: { some: { type: 'vtex_invoiced' } },
+    };
+    const [total, transit, issues, delivered] = await Promise.all([
+      prisma.order.count({ where: base }),
+      prisma.order.count({ where: { ...base, shippingState: 'en_transito' } }),
+      prisma.order.count({ where: { ...base, shippingState: 'novedad' } }),
+      prisma.order.count({ where: { ...base, shippingState: 'entregado' } }),
+    ]);
+    return { scope, a: total, b: transit, c: issues, d: delivered, deltaToday: null };
   }
 
   /** Asigna / transfiere / devuelve (warehouseId null) pedidos. Solo admins. */
@@ -302,13 +470,20 @@ export class OrdersService {
     const { prisma } = getTenantContext();
     // unreadMap REAL para este usuario: el separador "No leidos" del chat lo
     // necesita tambien al entrar por notificacion/deep-link (antes iba en 0).
-    const [photoCount, unread] = await Promise.all([
+    const [photoCount, unread, reactions] = await Promise.all([
       prisma.orderMessage.count({
         where: { orderId, kind: { in: ['imei_photo', 'serial_photo'] } },
       }),
       this.unreadMap(auth.userId, { orderIds: [orderId] }),
+      this.reactionsMap([orderId], auth.userId),
     ]);
-    return this.toDetail(order, photoCount > 0, unread.get(orderId)?.count ?? 0);
+    return this.toDetail(
+      order,
+      photoCount > 0,
+      unread.get(orderId)?.count ?? 0,
+      auth.userId,
+      reactions.get(orderId) ?? [],
+    );
   }
 
   async listMessages(orderId: string, auth: AuthContext): Promise<OrderMessageDto[]> {
@@ -1589,9 +1764,19 @@ export class OrdersService {
     }
   }
 
-  private toSummary(o: OrderWithItems, hasDevicePhoto = false, unreadCount = 0): OrderSummary {
+  private toSummary(
+    o: OrderWithItems,
+    hasDevicePhoto = false,
+    unreadCount = 0,
+    viewerId?: string,
+    reactions: OrderSummary['reactions'] = [],
+  ): OrderSummary {
     return {
       unreadCount,
+      claimedBy: o.claimedById
+        ? { userId: o.claimedById, name: o.claimedByName ?? '', mine: o.claimedById === viewerId }
+        : null,
+      reactions,
       id: o.id,
       externalId: o.externalId,
       provider: o.provider as OrderSummary['provider'],
@@ -1623,9 +1808,15 @@ export class OrdersService {
     };
   }
 
-  private toDetail(o: OrderWithItems, hasDevicePhoto = false, unreadCount = 0): OrderDetail {
+  private toDetail(
+    o: OrderWithItems,
+    hasDevicePhoto = false,
+    unreadCount = 0,
+    viewerId?: string,
+    reactions: OrderSummary['reactions'] = [],
+  ): OrderDetail {
     return {
-      ...this.toSummary(o, hasDevicePhoto, unreadCount),
+      ...this.toSummary(o, hasDevicePhoto, unreadCount, viewerId, reactions),
       // El correo REAL (el de facturar), nunca el enmascarado @ct.vtex.com.br.
       customerEmail: extractRealEmail(o.rawPayload) ?? pickRealEmail(o.customerEmail),
       customerPhone: o.customerPhone,

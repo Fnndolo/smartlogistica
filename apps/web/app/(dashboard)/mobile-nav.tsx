@@ -110,7 +110,7 @@ export function MobileBottomNav() {
             <span className="relative">
               <Icon className={cn('h-5 w-5', active ? 'text-foreground' : 'text-muted-foreground')} />
               {tab.href === '/mentions' && unread > 0 ? (
-                <span className="absolute -right-2 -top-1.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-primary px-1 text-[9px] font-bold leading-none text-primary-foreground">
+                <span className="absolute -right-2 -top-1.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-accent px-1 text-[9px] font-bold leading-none text-accent-foreground">
                   {unread > 99 ? '99+' : unread}
                 </span>
               ) : null}

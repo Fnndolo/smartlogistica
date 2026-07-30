@@ -40,10 +40,18 @@ function MentionsBadge() {
   const { unread } = useMentions();
   if (unread === 0) return null;
   return (
-    <span className="ml-auto inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground">
+    <span className="ml-auto inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-accent px-1.5 font-mono text-[10px] font-semibold leading-none text-accent-foreground">
       {unread > 99 ? '99+' : unread}
     </span>
   );
+}
+
+/** Iniciales para el avatar (nombre "Ana Pérez" -> "AP"; correo -> primera letra). */
+function initials(nameOrEmail: string): string {
+  const clean = nameOrEmail.split('@')[0] ?? nameOrEmail;
+  const parts = clean.trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0]![0]! + parts[1]![0]!).toUpperCase();
+  return clean.slice(0, 2).toUpperCase();
 }
 
 export function Sidebar() {
@@ -61,8 +69,9 @@ export function Sidebar() {
 
   return (
     // sticky + h-screen + overflow-y-auto: el sidebar queda fijo y con SU propio
-    // scroll, independiente del scroll de la pagina.
-    <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col overflow-y-auto border-r border-border bg-background/40 px-4 py-5 md:flex">
+    // scroll, independiente del scroll de la pagina. Superficie blanca sobre el
+    // lienzo frio (profundidad del rediseño).
+    <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col overflow-y-auto border-r border-border bg-card px-4 py-5 md:flex">
       <div className="mb-6 flex items-center justify-between gap-2">
         <Link href="/dashboard" className="flex min-w-0 items-center gap-2 px-2" prefetch>
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-foreground text-background">
@@ -99,16 +108,20 @@ export function Sidebar() {
               href={item.href}
               prefetch
               className={cn(
-                'group flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors',
+                'group relative flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors',
                 isActive
-                  ? 'bg-muted text-foreground'
+                  ? 'bg-accent/10 text-foreground'
                   : 'text-muted-foreground hover:bg-muted hover:text-foreground',
               )}
             >
+              {/* Riel de acento del item activo */}
+              {isActive ? (
+                <span className="absolute -left-px bottom-1.5 top-1.5 w-[2.5px] rounded-full bg-accent" />
+              ) : null}
               <Icon
                 className={cn(
                   'h-4 w-4 transition-colors',
-                  isActive ? 'text-foreground' : 'text-muted-foreground group-hover:text-foreground',
+                  isActive ? 'text-accent' : 'text-muted-foreground group-hover:text-foreground',
                 )}
               />
               {item.label}
@@ -163,18 +176,21 @@ export function Sidebar() {
                     href={base}
                     prefetch
                     className={cn(
-                      'group flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm font-medium transition-colors',
+                      'group relative flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm font-medium transition-colors',
                       active
-                        ? 'bg-muted text-foreground'
+                        ? 'bg-accent/10 text-foreground'
                         : 'text-muted-foreground hover:bg-muted hover:text-foreground',
                     )}
                   >
+                    {active ? (
+                      <span className="absolute -left-px bottom-1.5 top-1.5 w-[2.5px] rounded-full bg-accent" />
+                    ) : null}
                     <span className="flex min-w-0 items-center gap-2.5">
-                      <Building2 className="h-4 w-4 shrink-0" />
+                      <Building2 className={cn('h-4 w-4 shrink-0', active && 'text-accent')} />
                       <span className="truncate">{w.name}</span>
                     </span>
                     {w.orderCount > 0 ? (
-                      <span className="shrink-0 rounded-full bg-foreground/10 px-1.5 text-[10px] font-semibold tabular-nums">
+                      <span className="shrink-0 rounded-full bg-muted px-1.5 font-mono text-[10px] font-medium tabular-nums text-muted-foreground">
                         {w.orderCount}
                       </span>
                     ) : null}
@@ -211,24 +227,32 @@ export function Sidebar() {
       </div>
 
       <div className="mt-auto border-t border-border pt-3">
-        <div className="mb-2 px-2">
+        <div className="mb-2 flex items-center gap-2.5 px-1">
           {user ? (
             <>
-              <p className="truncate text-xs font-medium">{user.name ?? user.email}</p>
-              <p className="text-[11px] text-muted-foreground">
-                {user.role === 'OWNER'
-                  ? 'Propietario'
-                  : user.role === 'ADMIN'
-                    ? 'Admin'
-                    : user.role === 'OPERATOR'
-                      ? 'Operador'
-                      : 'Sin rol'}
-              </p>
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent/10 text-[10px] font-semibold tracking-wide text-accent">
+                {initials(user.name ?? user.email)}
+              </span>
+              <span className="min-w-0">
+                <p className="truncate text-xs font-medium">{user.name ?? user.email}</p>
+                <p className="text-[11px] text-muted-foreground">
+                  {user.role === 'OWNER'
+                    ? 'Propietario'
+                    : user.role === 'ADMIN'
+                      ? 'Admin'
+                      : user.role === 'OPERATOR'
+                        ? 'Operador'
+                        : 'Sin rol'}
+                </p>
+              </span>
             </>
           ) : (
             <>
-              <div className="h-3 w-32 animate-pulse rounded bg-muted" />
-              <div className="mt-1 h-2.5 w-16 animate-pulse rounded bg-muted" />
+              <div className="h-7 w-7 animate-pulse rounded-full bg-muted" />
+              <div>
+                <div className="h-3 w-32 animate-pulse rounded bg-muted" />
+                <div className="mt-1 h-2.5 w-16 animate-pulse rounded bg-muted" />
+              </div>
             </>
           )}
         </div>

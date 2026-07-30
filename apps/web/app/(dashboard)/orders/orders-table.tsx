@@ -1,17 +1,33 @@
 'use client';
 
-import { Fragment, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns/format';
 import { es } from 'date-fns/locale/es';
-import { Camera, ChevronDown, ChevronRight, ChevronsUpDown, Package } from 'lucide-react';
+import {
+  Camera,
+  ChevronDown,
+  ChevronRight,
+  ChevronsUpDown,
+  Hand,
+  MoreHorizontal,
+  Package,
+  SmilePlus,
+} from 'lucide-react';
 import type { OrderSummary, OrderSortField, SortDir } from '@smartlogistica/shared';
 
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
 
+import { ClaimChip, ClaimSlot, initialsOf } from './claim-chip';
+import { EmojiPicker } from './emoji-picker';
 import { prefetchOrder } from './order-queries';
+import { useOrderActions } from './use-order-actions';
+
+/** Menu contextual de la fila (tomar/soltar) o picker de reacciones, anclado al boton. */
+type RowMenu = { kind: 'claim' | 'react'; order: OrderSummary; x: number; y: number };
 
 interface OrdersTableProps {
   items: OrderSummary[];
@@ -44,6 +60,8 @@ export function OrdersTable({
 }: OrdersTableProps) {
   const qc = useQueryClient();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [menu, setMenu] = useState<RowMenu | null>(null);
+  const actions = useOrderActions();
   const selectable = Boolean(selectedIds && onToggleSelect);
   const colCount = (selectable ? 8 : 7) + (showShipping ? 1 : 0) + (showAddress ? 1 : 0);
   const allSelected = selectable && items.length > 0 && items.every((o) => selectedIds!.has(o.id));
@@ -54,6 +72,12 @@ export function OrdersTable({
       next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
+
+  const openMenu = (kind: RowMenu['kind']) => (order: OrderSummary, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setMenu({ kind, order, x: r.left + r.width / 2, y: kind === 'react' ? r.top : r.bottom });
+  };
 
   return (
     <>
@@ -70,6 +94,9 @@ export function OrdersTable({
             showShipping={showShipping}
             showAddress={showAddress}
             onPrefetch={() => onOpenOrder && prefetchOrder(qc, order.id)}
+            onClaim={openMenu('claim')}
+            onReact={openMenu('react')}
+            onToggleReaction={actions.toggleReaction}
           />
         ))}
       </div>
@@ -110,6 +137,7 @@ export function OrdersTable({
             <Fragment key={order.id}>
               <TableRow
                 className={cn(
+                  'group/row relative transition-colors hover:bg-accent/[0.05]',
                   (onOpenOrder || multi) && 'cursor-pointer',
                   (isOpen || isSelected) && 'bg-muted/30',
                 )}
@@ -126,7 +154,8 @@ export function OrdersTable({
                 onFocus={onOpenOrder ? () => prefetchOrder(qc, order.id) : undefined}
               >
                 {selectable ? (
-                  <TableCell className="w-10" onClick={(e) => e.stopPropagation()}>
+                  <TableCell className="relative w-10" onClick={(e) => e.stopPropagation()}>
+                    <RowRail />
                     <input
                       type="checkbox"
                       className="h-4 w-4 cursor-pointer rounded border-input accent-foreground"
@@ -136,8 +165,20 @@ export function OrdersTable({
                     />
                   </TableCell>
                 ) : null}
-                <TableCell className="whitespace-nowrap font-mono text-xs">
-                  <span className="inline-flex items-center gap-1.5">
+                <TableCell className="relative whitespace-nowrap font-mono text-xs">
+                  {!selectable ? <RowRail /> : null}
+                  <span className="inline-flex items-center gap-2">
+                    {/* Distintivo de "tomado" al INICIO de la fila (hueco reservado
+                        cuando esta libre: los numeros alinean siempre). */}
+                    {order.claimedBy ? (
+                      <ClaimChip
+                        userId={order.claimedBy.userId}
+                        name={order.claimedBy.name}
+                        mine={order.claimedBy.mine}
+                      />
+                    ) : (
+                      <ClaimSlot />
+                    )}
                     {order.externalId}
                     {order.hasDevicePhoto ? (
                       <span
@@ -156,7 +197,7 @@ export function OrdersTable({
                       {order.unreadCount > 0 ? (
                         <span
                           title={`${order.unreadCount} mensaje(s) sin leer`}
-                          className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground"
+                          className="inline-flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-accent px-1 font-mono text-[10px] font-semibold leading-none text-accent-foreground"
                         >
                           {order.unreadCount > 99 ? '99+' : order.unreadCount}
                         </span>
@@ -202,17 +243,22 @@ export function OrdersTable({
                     </span>
                   </div>
                 </TableCell>
-                <TableCell>
+                <TableCell className={cn(!showAddress && !showShipping && 'relative pr-20')}>
                   <StatusBadge status={order.status} />
+                  {!showAddress && !showShipping ? (
+                    <RowActions order={order} onClaim={openMenu('claim')} onReact={openMenu('react')} onToggleReaction={actions.toggleReaction} />
+                  ) : null}
                 </TableCell>
                 {showAddress ? (
-                  <TableCell>
+                  <TableCell className="relative pr-20">
                     <AddressCell order={order} />
+                    <RowActions order={order} onClaim={openMenu('claim')} onReact={openMenu('react')} onToggleReaction={actions.toggleReaction} />
                   </TableCell>
                 ) : null}
                 {showShipping ? (
-                  <TableCell>
+                  <TableCell className="relative pr-20">
                     <ShippingCell order={order} />
+                    <RowActions order={order} onClaim={openMenu('claim')} onReact={openMenu('react')} onToggleReaction={actions.toggleReaction} />
                   </TableCell>
                 ) : null}
               </TableRow>
@@ -255,7 +301,220 @@ export function OrdersTable({
       </TableBody>
         </Table>
       </div>
+
+      {/* Menus anclados: picker COMPLETO de emojis / tomar-soltar pedido. */}
+      {menu?.kind === 'react' ? (
+        <EmojiPicker
+          anchor={{ x: menu.x, y: menu.y }}
+          onPick={(emoji) => {
+            actions.toggleReaction(menu.order.id, emoji);
+            setMenu(null);
+          }}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
+      {menu?.kind === 'claim' ? (
+        <ClaimMenu
+          order={menu.order}
+          meName={actions.me?.name ?? actions.me?.email ?? ''}
+          anchor={{ x: menu.x, y: menu.y }}
+          onClaim={() => {
+            actions.claim(menu.order.id);
+            setMenu(null);
+          }}
+          onUnclaim={() => {
+            actions.unclaim(menu.order.id);
+            setMenu(null);
+          }}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
     </>
+  );
+}
+
+/** Riel de acento en el borde izquierdo de la fila (aparece al pasar el mouse). */
+function RowRail() {
+  return (
+    <span
+      aria-hidden
+      className="pointer-events-none absolute bottom-1 left-0 top-1 w-[2.5px] rounded-full bg-accent opacity-0 transition-opacity group-hover/row:opacity-100"
+    />
+  );
+}
+
+/** Chips de reacciones del pedido (esquina inferior derecha, clic = sumarse/quitarse). */
+function ReactionChips({
+  order,
+  onToggleReaction,
+  className,
+}: {
+  order: OrderSummary;
+  onToggleReaction: (orderId: string, emoji: string) => void;
+  className?: string;
+}) {
+  if (!order.reactions || order.reactions.length === 0) return null;
+  return (
+    <span className={cn('flex flex-wrap justify-end gap-1', className)}>
+      {/* span[role=button]: en movil viven dentro del <button> de la tarjeta
+          (un <button> anidado seria HTML invalido). */}
+      {order.reactions.map((r) => (
+        <span
+          key={r.emoji}
+          role="button"
+          tabIndex={0}
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleReaction(order.id, r.emoji);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              e.stopPropagation();
+              onToggleReaction(order.id, r.emoji);
+            }
+          }}
+          title={r.mine ? 'Tu reacción · clic para quitar' : `Reaccionaron ${r.count} · clic para sumarte`}
+          className={cn(
+            'inline-flex h-[18px] cursor-pointer items-center gap-1 rounded-full border px-1.5 text-[11px] leading-none shadow-card transition-colors',
+            r.mine
+              ? 'border-accent/40 bg-accent/10'
+              : 'border-border bg-card hover:border-accent/40',
+          )}
+        >
+          {r.emoji}
+          <b className={cn('font-mono text-[9.5px] font-medium', r.mine ? 'text-accent' : 'text-muted-foreground')}>
+            {r.count}
+          </b>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/**
+ * Acciones de la fila: carita (reaccionar) y ⋯ (tomar/soltar), flotando a la
+ * derecha SOLO al pasar el mouse; debajo, los chips de reacciones existentes.
+ */
+function RowActions({
+  order,
+  onClaim,
+  onReact,
+  onToggleReaction,
+}: {
+  order: OrderSummary;
+  onClaim: (order: OrderSummary, e: React.MouseEvent) => void;
+  onReact: (order: OrderSummary, e: React.MouseEvent) => void;
+  onToggleReaction: (orderId: string, emoji: string) => void;
+}) {
+  return (
+    <>
+      <ReactionChips order={order} onToggleReaction={onToggleReaction} className="mt-1.5" />
+      <span className="absolute right-2 top-1/2 flex -translate-y-1/2 gap-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover/row:opacity-100">
+        <button
+          type="button"
+          onClick={(e) => onReact(order, e)}
+          aria-label="Reaccionar al pedido"
+          title="Reaccionar"
+          className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-card transition-colors hover:border-accent/40 hover:text-foreground"
+        >
+          <SmilePlus className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={(e) => onClaim(order, e)}
+          aria-label="Opciones del pedido"
+          title={order.claimedBy ? (order.claimedBy.mine ? 'Lo tienes tú' : `Tomado por ${order.claimedBy.name}`) : 'Tomar pedido'}
+          className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-card transition-colors hover:border-accent/40 hover:text-foreground"
+        >
+          <MoreHorizontal className="h-3.5 w-3.5" />
+        </button>
+      </span>
+    </>
+  );
+}
+
+/** Menu de tomar/soltar pedido (portal anclado al boton ⋯). */
+function ClaimMenu({
+  order,
+  meName,
+  anchor,
+  onClaim,
+  onUnclaim,
+  onClose,
+}: {
+  order: OrderSummary;
+  meName: string;
+  anchor: { x: number; y: number };
+  onClaim: () => void;
+  onUnclaim: () => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  if (typeof document === 'undefined') return null;
+
+  const W = 252;
+  const left = Math.min(Math.max(8, anchor.x - W + 20), window.innerWidth - W - 8);
+  const top = Math.min(anchor.y + 6, window.innerHeight - 120);
+  const c = order.claimedBy;
+
+  return createPortal(
+    <div className="fixed inset-0 z-[70]">
+      <div className="absolute inset-0" onClick={onClose} />
+      <div
+        style={{ left, top, width: W }}
+        className="shadow-pop absolute rounded-xl border border-border bg-popover p-1.5"
+      >
+        {!c ? (
+          <>
+            <button
+              type="button"
+              onClick={onClaim}
+              className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-accent/10"
+            >
+              <span className="ring-halo flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-accent text-[8.5px] font-bold uppercase tracking-wider text-accent-foreground">
+                {initialsOf(meName || '·')}
+              </span>
+              Tomar pedido
+            </button>
+            <p className="px-2.5 pb-1.5 pt-0.5 text-[11px] leading-snug text-muted-foreground">
+              Quedará a tu cargo, con tu distintivo junto al pedido. Nadie más podrá tomarlo.
+            </p>
+          </>
+        ) : c.mine ? (
+          <>
+            <button
+              type="button"
+              onClick={onUnclaim}
+              className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-accent/10"
+            >
+              <Hand className="h-4 w-4 text-muted-foreground" />
+              Soltar pedido
+            </button>
+            <p className="px-2.5 pb-1.5 pt-0.5 text-[11px] leading-snug text-muted-foreground">
+              Lo tienes tú. Al soltarlo, cualquier otro podrá tomarlo.
+            </p>
+          </>
+        ) : (
+          <>
+            <div className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm text-muted-foreground">
+              <ClaimChip userId={c.userId} name={c.name} mine={false} />
+              Tomado por {c.name}
+            </div>
+            <p className="px-2.5 pb-1.5 pt-0.5 text-[11px] leading-snug text-muted-foreground">
+              Solo quien lo tomó puede soltarlo.
+            </p>
+          </>
+        )}
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -273,6 +532,9 @@ function OrderCard({
   showShipping,
   showAddress,
   onPrefetch,
+  onClaim,
+  onReact,
+  onToggleReaction,
 }: {
   order: OrderSummary;
   selectable: boolean;
@@ -282,6 +544,9 @@ function OrderCard({
   showShipping: boolean;
   showAddress: boolean;
   onPrefetch: () => void;
+  onClaim: (order: OrderSummary, e: React.MouseEvent) => void;
+  onReact: (order: OrderSummary, e: React.MouseEvent) => void;
+  onToggleReaction: (orderId: string, emoji: string) => void;
 }) {
   const first = order.items[0];
   const extra = order.items.length - 1;
@@ -310,6 +575,14 @@ function OrderCard({
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
           <span className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
+            {order.claimedBy ? (
+              <ClaimChip
+                userId={order.claimedBy.userId}
+                name={order.claimedBy.name}
+                mine={order.claimedBy.mine}
+                className="h-[19px] w-[19px] text-[7.5px]"
+              />
+            ) : null}
             <span className="truncate">{order.externalId}</span>
             {order.hasDevicePhoto ? (
               <Camera className="h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
@@ -321,7 +594,7 @@ function OrderCard({
         <div className="mt-1 flex items-center gap-1.5">
           <span className="truncate font-medium text-foreground">{order.customerName}</span>
           {order.unreadCount > 0 ? (
-            <span className="inline-flex h-4 min-w-[1rem] shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground">
+            <span className="inline-flex h-[17px] min-w-[17px] shrink-0 items-center justify-center rounded-full bg-accent px-1 font-mono text-[10px] font-semibold leading-none text-accent-foreground">
               {order.unreadCount > 99 ? '99+' : order.unreadCount}
             </span>
           ) : null}
@@ -357,6 +630,35 @@ function OrderCard({
             <ShippingCell order={order} />
           </div>
         ) : null}
+
+        {/* Reacciones + acciones (en tactil van siempre visibles, discretas). */}
+        <div className="mt-2 flex items-center justify-end gap-1.5">
+          <ReactionChips order={order} onToggleReaction={onToggleReaction} />
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={(e) => {
+              e.stopPropagation();
+              onReact(order, e as unknown as React.MouseEvent);
+            }}
+            aria-label="Reaccionar al pedido"
+            className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-card"
+          >
+            <SmilePlus className="h-3.5 w-3.5" />
+          </span>
+          <span
+            role="button"
+            tabIndex={0}
+            onClick={(e) => {
+              e.stopPropagation();
+              onClaim(order, e as unknown as React.MouseEvent);
+            }}
+            aria-label="Opciones del pedido"
+            className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-card"
+          >
+            <MoreHorizontal className="h-3.5 w-3.5" />
+          </span>
+        </div>
       </div>
     </button>
   );
@@ -451,28 +753,87 @@ function SortHeader({
 /** Etiquetas del estado de envio (rastreo Coordinadora). */
 export const SHIPPING_LABELS: Record<
   string,
-  { label: string; variant: 'warning' | 'success' | 'secondary' | 'outline' }
+  { label: string; variant: 'warning' | 'success' | 'secondary' | 'outline' | 'info' }
 > = {
   entregado: { label: 'Entregado', variant: 'success' },
   novedad: { label: 'Novedad', variant: 'warning' },
-  en_transito: { label: 'En transito', variant: 'secondary' },
+  en_transito: { label: 'En transito', variant: 'info' },
   sin_movimientos: { label: 'Sin movimientos', variant: 'outline' },
 };
 
 const SHIPPING_FALLBACK = { label: 'Sin movimientos', variant: 'outline' } as const;
 
+/**
+ * Paso del recorrido canonico de Coordinadora (1..6) a partir del texto del
+ * rastreo; si no hay texto, se aproxima por el estado agregado.
+ * 1 A recibir · 2 Terminal origen · 3 En transporte · 4 Terminal destino ·
+ * 5 En reparto · 6 Entregado.
+ */
+function shipStep(order: OrderSummary): number {
+  const t = (order.shippingStatus ?? '').toUpperCase();
+  if (/ENTREGAD/.test(t)) return 6;
+  if (/REPARTO/.test(t)) return 5;
+  if (/TERMINAL\s+(DE\s+)?DESTINO/.test(t)) return 4;
+  if (/TRANSPORTE/.test(t)) return 3;
+  if (/TERMINAL\s+(DE\s+)?ORIGEN/.test(t)) return 2;
+  if (/RECIBIR/.test(t)) return 1;
+  switch (order.shippingState) {
+    case 'entregado':
+      return 6;
+    case 'novedad':
+    case 'en_transito':
+      return 3;
+    default:
+      return 1;
+  }
+}
+
+/** Ruta de puntos del envio: 6 estados canonicos, rellenos hasta el actual. */
+function RouteDots({ order }: { order: OrderSummary }) {
+  const step = shipStep(order);
+  const done = order.shippingState === 'entregado';
+  return (
+    <span className="mt-1.5 flex items-center" aria-hidden title={order.shippingStatus ?? undefined}>
+      {Array.from({ length: 6 }, (_, i) => {
+        const n = i + 1;
+        const on = n <= step;
+        const fill = done ? 'bg-emerald-500' : 'bg-accent';
+        return (
+          <Fragment key={n}>
+            <span
+              className={cn(
+                'h-1.5 w-1.5 shrink-0 rounded-full',
+                on ? fill : 'bg-border',
+                n === step && !done && 'ring-halo',
+              )}
+            />
+            {n < 6 ? (
+              <span className={cn('h-px w-2.5 shrink-0', n < step ? fill : 'bg-border')} />
+            ) : null}
+          </Fragment>
+        );
+      })}
+    </span>
+  );
+}
+
 function ShippingCell({ order }: { order: OrderSummary }) {
   if (!order.guideNumber) {
     return <span className="text-xs text-muted-foreground">Sin guía</span>;
   }
-  // Solo el badge de estado: el detalle textual de Coordinadora repetia lo
-  // mismo ("ENTREGADO / Entregada") y el numero de guia ya vive en el drawer
-  // (aqui queda como tooltip).
+  // Badge + recorrido de 6 puntos + Nº de guia: el estado del envio se lee
+  // de un vistazo sin abrir el pedido.
   const meta = SHIPPING_LABELS[order.shippingState ?? 'sin_movimientos'] ?? SHIPPING_FALLBACK;
   return (
-    <Badge variant={meta.variant} className="whitespace-nowrap" title={order.guideNumber}>
-      {meta.label}
-    </Badge>
+    <div className="flex flex-col items-start">
+      <Badge dot variant={meta.variant} className="whitespace-nowrap">
+        {meta.label}
+      </Badge>
+      <RouteDots order={order} />
+      <span className="mt-1 font-mono text-[10px] text-muted-foreground" title="Número de guía">
+        Guía {order.guideNumber}
+      </span>
+    </div>
   );
 }
 
@@ -489,12 +850,12 @@ const ADDRESS_FALLBACK = { label: 'Confirmada', variant: 'success' } as const;
 
 function AddressCell({ order }: { order: OrderSummary }) {
   if (!order.addressStatus) {
-    return <Badge variant="outline" className="whitespace-nowrap text-muted-foreground">Sin responder</Badge>;
+    return <Badge dot variant="outline" className="whitespace-nowrap">Sin responder</Badge>;
   }
   const meta = ADDRESS_LABELS[order.addressStatus] ?? ADDRESS_FALLBACK;
   // Solo el estado en la tabla; la direccion nueva se ve en el drawer del pedido.
   return (
-    <Badge variant={meta.variant} className="whitespace-nowrap">
+    <Badge dot variant={meta.variant} className="whitespace-nowrap">
       {meta.label}
     </Badge>
   );
@@ -511,7 +872,7 @@ const STATUS_LABELS: Record<string, { label: string; variant: 'warning' | 'succe
 function StatusBadge({ status }: { status: string }) {
   const mapped = STATUS_LABELS[status];
   return (
-    <Badge variant={mapped?.variant ?? 'secondary'} className="whitespace-nowrap">
+    <Badge dot variant={mapped?.variant ?? 'secondary'} className="whitespace-nowrap">
       {mapped?.label ?? status}
     </Badge>
   );

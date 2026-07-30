@@ -19,6 +19,7 @@ import {
   Check,
   ChevronDown,
   Download,
+  Hand,
   Image as ImageIcon,
   Info,
   Loader2,
@@ -60,8 +61,10 @@ import { ApiError, api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 
 import { setActiveChat } from './active-chat';
+import { ClaimChip } from './claim-chip';
 import { GuidePanel } from './guide-panel';
 import { InvoicePanel } from './invoice-panel';
+import { useOrderActions } from './use-order-actions';
 import { compressImage } from '@/lib/compress-image';
 
 import { EmojiPicker } from './emoji-picker';
@@ -228,14 +231,17 @@ function DrawerContent({
             <p className="text-xs text-muted-foreground">CC {order.customerDocument}</p>
           ) : null}
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-          aria-label="Cerrar"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          <DrawerClaim order={detail ?? order} />
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Cerrar"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </header>
 
       {/* Tabs */}
@@ -293,6 +299,48 @@ function DrawerContent({
         ) : null}
       </div>
     </>
+  );
+}
+
+/**
+ * Control de "tomar pedido" del header del drawer: boton si esta libre, ficha
+ * con "Lo tienes tú · Soltar" si es mio, o "Fulano lo tiene" si es de otro.
+ */
+function DrawerClaim({ order }: { order: OrderSummary }) {
+  const { claim, unclaim } = useOrderActions();
+  const c = order.claimedBy;
+  if (!c) {
+    return (
+      <button
+        type="button"
+        onClick={() => claim(order.id)}
+        className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground shadow-card transition-colors hover:border-accent/40 hover:text-foreground"
+      >
+        <Hand className="h-3.5 w-3.5" />
+        Tomar pedido
+      </button>
+    );
+  }
+  return (
+    <span className="flex items-center gap-2">
+      <ClaimChip userId={c.userId} name={c.name} mine={c.mine} />
+      {c.mine ? (
+        <span className="flex items-center gap-1.5 whitespace-nowrap text-[11.5px] text-muted-foreground">
+          Lo tienes tú
+          <button
+            type="button"
+            onClick={() => unclaim(order.id)}
+            className="text-[11px] underline underline-offset-2 hover:text-destructive"
+          >
+            Soltar
+          </button>
+        </span>
+      ) : (
+        <span className="max-w-[110px] truncate whitespace-nowrap text-[11.5px] text-muted-foreground">
+          {c.name} lo tiene
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -2074,6 +2122,7 @@ function EventIcon({ type }: { type: string }) {
   if (type === 'assigned') return <PlusCircle className={cls} />;
   if (type === 'transferred') return <ArrowRightLeft className={cls} />;
   if (type === 'returned') return <Undo2 className={cls} />;
+  if (type === 'claimed' || type === 'unclaimed') return <Hand className={cls} />;
   if (type === 'invoiced') return <ReceiptText className={cls} />;
   if (type === 'guide_generated') return <Truck className={cls} />;
   if (type === 'vtex_invoiced') return <ReceiptText className={cls} />;
@@ -2088,6 +2137,10 @@ function describeEvent(e: OrderEvent): string {
       return 'Transferido a otra sede';
     case 'returned':
       return 'Devuelto a pedidos generales';
+    case 'claimed':
+      return 'Tomó el pedido (quedó a su cargo)';
+    case 'unclaimed':
+      return 'Soltó el pedido';
     case 'status_changed':
       return 'Cambio de estado';
     case 'created':

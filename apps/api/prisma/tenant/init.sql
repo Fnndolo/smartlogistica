@@ -53,6 +53,18 @@ CREATE TABLE "AlegraConnection" (
 );
 
 -- CreateTable
+CREATE TABLE "OrderReaction" (
+    "id" TEXT NOT NULL,
+    "orderId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "userName" TEXT NOT NULL,
+    "emoji" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "OrderReaction_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "AppSetting" (
     "key" TEXT NOT NULL,
     "value" JSONB NOT NULL,
@@ -154,6 +166,9 @@ CREATE TABLE "Order" (
     "addressStatus" TEXT,
     "confirmedAddress" TEXT,
     "addressConfirmedAt" TIMESTAMP(3),
+    "claimedById" TEXT,
+    "claimedByName" TEXT,
+    "claimedAt" TIMESTAMP(3),
     "marketplaceCreatedAt" TIMESTAMP(3) NOT NULL,
     "receivedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -282,6 +297,12 @@ CREATE UNIQUE INDEX "CoordinadoraConnection_warehouseId_key" ON "CoordinadoraCon
 CREATE UNIQUE INDEX "AlegraConnection_warehouseId_key" ON "AlegraConnection"("warehouseId");
 
 -- CreateIndex
+CREATE INDEX "OrderReaction_orderId_idx" ON "OrderReaction"("orderId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "OrderReaction_orderId_userId_emoji_key" ON "OrderReaction"("orderId", "userId", "emoji");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "AlegraSellerPref_warehouseId_userId_key" ON "AlegraSellerPref"("warehouseId", "userId");
 
 -- CreateIndex
@@ -373,6 +394,9 @@ ALTER TABLE "CoordinadoraConnection" ADD CONSTRAINT "CoordinadoraConnection_ware
 
 -- AddForeignKey
 ALTER TABLE "AlegraConnection" ADD CONSTRAINT "AlegraConnection_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "OrderReaction" ADD CONSTRAINT "OrderReaction_orderId_fkey" FOREIGN KEY ("orderId") REFERENCES "Order"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "AlegraSellerPref" ADD CONSTRAINT "AlegraSellerPref_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse"("id") ON DELETE CASCADE ON UPDATE CASCADE;

@@ -94,6 +94,22 @@ model AlegraConnection {
   warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
 }
 
+/// Reaccion de un usuario a un PEDIDO (como las de los mensajes del chat,
+/// pero a nivel de fila). Cualquiera puede reaccionar; un emoji por usuario.
+model OrderReaction {
+  id        String   @id @default(cuid())
+  orderId   String
+  userId    String
+  userName  String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, userId, emoji])
+  @@index([orderId])
+}
+
 /// Ajustes generales del workspace (clave -> JSON). Hoy: 'packagePresets'
 /// (paquetes de guia GLOBALES, ya no por sede).
 model AppSetting {
@@ -221,6 +237,12 @@ model Order {
   confirmedAddress     String? // texto de la nueva direccion cuando modified
   addressConfirmedAt   DateTime?
 
+  // "Tomar pedido": quien lo tomo queda a cargo (nadie mas puede tomarlo).
+  // Nombre denormalizado para pintar la ficha sin joins.
+  claimedById          String?
+  claimedByName        String?
+  claimedAt            DateTime?
+
   marketplaceCreatedAt DateTime
   receivedAt           DateTime @default(now())
   updatedAt            DateTime @updatedAt
@@ -230,6 +252,7 @@ model Order {
   messages  OrderMessage[]
   events    OrderEvent[]
   reads     OrderRead[]
+  reactions OrderReaction[]
   warehouse Warehouse?  @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
 
   @@unique([provider, externalId])

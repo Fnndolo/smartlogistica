@@ -2,67 +2,83 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Tokens del rediseño (propuesta "cobalto señal"):
+ * - Lienzo claro con sesgo frio (ya no blanco plano) y tarjetas blancas.
+ * - Acento cobalto mas electrico (#3d63f5 claro / #6d8bff oscuro) reservado
+ *   para lo vivo: menciones, no leidos, activo, hover de fila.
+ * - primary sigue monocromo (botones negro/blanco, ADN Vercel).
+ */
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222 47% 11%;
+    --background: 220 25% 97%;
+    --foreground: 221 44% 10%;
 
     --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
+    --card-foreground: 221 44% 10%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
+    --popover-foreground: 221 44% 10%;
 
-    --primary: 222 47% 11%;
+    --primary: 221 44% 11%;
     --primary-foreground: 210 40% 98%;
 
-    --secondary: 210 40% 96%;
-    --secondary-foreground: 222 47% 11%;
+    --secondary: 218 30% 95%;
+    --secondary-foreground: 221 44% 10%;
 
-    --muted: 210 40% 96%;
-    --muted-foreground: 215 16% 47%;
+    --muted: 218 30% 95%;
+    --muted-foreground: 219 14% 42%;
 
-    --accent: 217 91% 60%;
+    --accent: 228 90% 60%;
     --accent-foreground: 0 0% 100%;
 
-    --destructive: 0 84% 60%;
+    --destructive: 351 60% 48%;
     --destructive-foreground: 210 40% 98%;
 
-    --border: 214 32% 91%;
-    --input: 214 32% 91%;
-    --ring: 222 47% 11%;
+    --border: 216 30% 91%;
+    --input: 216 30% 91%;
+    --ring: 228 90% 60%;
 
     --radius: 0.5rem;
+
+    /* Sombras suaves por capas (Linear-style) */
+    --shadow-card: 0 1px 2px rgb(14 21 36 / 0.05), 0 0 0 1px rgb(14 21 36 / 0.03);
+    --shadow-float: 0 12px 32px -12px rgb(14 21 36 / 0.18), 0 2px 8px rgb(14 21 36 / 0.06);
+    --shadow-pop: 0 24px 64px -16px rgb(14 21 36 / 0.28), 0 4px 16px rgb(14 21 36 / 0.08);
   }
 
   .dark {
-    --background: 222 47% 6%;
-    --foreground: 210 40% 98%;
+    --background: 222 35% 7%; /* #0b0f17 */
+    --foreground: 218 40% 95%;
 
-    --card: 222 47% 8%;
-    --card-foreground: 210 40% 98%;
+    --card: 219 39% 10%;
+    --card-foreground: 218 40% 95%;
 
-    --popover: 222 47% 8%;
-    --popover-foreground: 210 40% 98%;
+    --popover: 220 34% 13%;
+    --popover-foreground: 218 40% 95%;
 
-    --primary: 210 40% 98%;
-    --primary-foreground: 222 47% 11%;
+    --primary: 218 40% 95%;
+    --primary-foreground: 221 44% 11%;
 
-    --secondary: 217 33% 17%;
-    --secondary-foreground: 210 40% 98%;
+    --secondary: 221 30% 16%;
+    --secondary-foreground: 218 40% 95%;
 
-    --muted: 217 33% 17%;
-    --muted-foreground: 215 20% 65%;
+    --muted: 221 30% 16%;
+    --muted-foreground: 220 16% 66%;
 
-    --accent: 217 91% 60%;
-    --accent-foreground: 0 0% 100%;
+    --accent: 227 100% 71%;
+    --accent-foreground: 222 35% 7%;
 
-    --destructive: 0 63% 31%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 351 80% 62%;
+    --destructive-foreground: 222 35% 7%;
 
-    --border: 217 33% 17%;
-    --input: 217 33% 17%;
-    --ring: 213 27% 84%;
+    --border: 221 26% 19%;
+    --input: 221 26% 19%;
+    --ring: 227 100% 71%;
+
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.35), 0 0 0 1px rgb(255 255 255 / 0.03);
+    --shadow-float: 0 16px 40px -14px rgb(0 0 0 / 0.6), 0 2px 8px rgb(0 0 0 / 0.35);
+    --shadow-pop: 0 28px 80px -18px rgb(0 0 0 / 0.75), 0 4px 18px rgb(0 0 0 / 0.5);
   }
 }
 
@@ -88,5 +104,18 @@
   }
   .text-balance {
     text-wrap: balance;
+  }
+  .shadow-card {
+    box-shadow: var(--shadow-card);
+  }
+  .shadow-float {
+    box-shadow: var(--shadow-float);
+  }
+  .shadow-pop {
+    box-shadow: var(--shadow-pop);
+  }
+  /* Halo del acento (ficha "mia" de tomar pedido, no leidos, etc.) */
+  .ring-halo {
+    box-shadow: 0 0 0 3px hsl(var(--accent) / 0.18);
   }
 }

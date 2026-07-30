@@ -83,11 +83,43 @@ export const orderSummarySchema = z.object({
   addressStatus: addressStatusSchema.nullable(),
   confirmedAddress: z.string().nullable(),
   addressConfirmedAt: z.string().datetime().nullable(),
+  // "Tomar pedido": quien esta a cargo (null = libre). mine = lo tengo yo.
+  claimedBy: z
+    .object({ userId: z.string(), name: z.string(), mine: z.boolean() })
+    .nullable()
+    .default(null),
+  // Reacciones al pedido (agregadas): emoji + cuantos + si yo reaccione.
+  reactions: z
+    .array(z.object({ emoji: z.string(), count: z.number().int(), mine: z.boolean() }))
+    .default([]),
   marketplaceCreatedAt: z.string().datetime(),
   receivedAt: z.string().datetime(),
 });
 
 export type OrderSummary = z.infer<typeof orderSummarySchema>;
+
+/** Reaccionar a un PEDIDO (toggle, como en los mensajes del chat). */
+export const orderReactionInputSchema = z.object({
+  emoji: z.string().trim().min(1).max(16),
+});
+export type OrderReactionInput = z.infer<typeof orderReactionInputSchema>;
+
+/**
+ * "Pulso" de la vista de pedidos: 4 metricas segun donde estes.
+ * general: hoy/sinAsignar/direccionPendiente/sinTomar
+ * pending: porPreparar/conFoto/direccionPendiente/sinTomar
+ * invoiced: facturados/enCamino/novedades/entregados
+ */
+export const ordersPulseSchema = z.object({
+  scope: z.enum(['general', 'pending', 'invoiced']),
+  a: z.number().int(),
+  b: z.number().int(),
+  c: z.number().int(),
+  d: z.number().int(),
+  // Solo en general: diferencia de pedidos de hoy vs ayer.
+  deltaToday: z.number().int().nullable(),
+});
+export type OrdersPulse = z.infer<typeof ordersPulseSchema>;
 
 // Asignar/transferir/devolver pedidos. warehouseId null = devolver a generales.
 export const assignOrdersSchema = z.object({

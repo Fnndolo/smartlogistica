@@ -25,6 +25,7 @@ import {
   toggleReactionSchema,
   devicePhotoKindSchema,
   listOrdersQuerySchema,
+  orderReactionInputSchema,
   processAllSchema,
   type AlegraItem,
   type AssignOrdersInput,
@@ -44,6 +45,8 @@ import {
   type ListOrdersQuery,
   type ListOrdersResponse,
   type OrderDetail,
+  type OrderReactionInput,
+  type OrdersPulse,
   type Inbox,
   type MentionItem,
   type OrderSearchResult,
@@ -96,6 +99,17 @@ export class OrdersController {
   @Get('stats')
   async stats(): Promise<{ readyForHandling: number; handling: number; connections: number }> {
     return this.orders.stats();
+  }
+
+  /** "Pulso" de la vista de pedidos (4 metricas). Ruta literal: antes de :id. */
+  @Get('pulse')
+  async pulse(
+    @Query('scope') scope: string | undefined,
+    @Query('warehouse') warehouse: string | undefined,
+    @CurrentUser() user: AuthContext,
+  ): Promise<OrdersPulse> {
+    const s = scope === 'pending' || scope === 'invoiced' ? scope : 'general';
+    return this.orders.pulse(s, warehouse ?? null, user);
   }
 
   /**
@@ -242,6 +256,31 @@ export class OrdersController {
     @CurrentUser() user: AuthContext,
   ): Promise<OrderMessage> {
     return this.orders.toggleReaction(id, messageId, body.emoji, user);
+  }
+
+  /** "Tomar pedido": queda a mi cargo; nadie mas puede tomarlo. */
+  @Post(':id/claim')
+  @HttpCode(200)
+  async claim(@Param('id') id: string, @CurrentUser() user: AuthContext): Promise<{ ok: true }> {
+    return this.orders.claimOrder(id, user);
+  }
+
+  /** Soltar un pedido tomado (solo quien lo tomo, o un admin). */
+  @Delete(':id/claim')
+  @HttpCode(200)
+  async unclaim(@Param('id') id: string, @CurrentUser() user: AuthContext): Promise<{ ok: true }> {
+    return this.orders.unclaimOrder(id, user);
+  }
+
+  /** Alterna MI reaccion con un emoji sobre el PEDIDO (cualquiera puede). */
+  @Post(':id/reactions')
+  @HttpCode(200)
+  async toggleOrderReaction(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(orderReactionInputSchema)) body: OrderReactionInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ removed: boolean }> {
+    return this.orders.toggleOrderReaction(id, body.emoji, user);
   }
 
   /** Elimina un mensaje del chat (incluidas las fotos). Autor o admin. */
