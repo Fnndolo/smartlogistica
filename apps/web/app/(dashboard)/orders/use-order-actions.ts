@@ -51,13 +51,11 @@ export function useOrderActions() {
         ...o,
         claimedBy: { userId: me.id, name: me.name ?? me.email, mine: true },
       }));
-      api
-        .post(`/v1/orders/${orderId}/claim`)
-        .then(() => toast.success('Pedido tomado — quedó a tu cargo'))
-        .catch((err) => {
-          revert(orderId);
-          toast.error(err instanceof ApiError ? err.message : 'No se pudo tomar el pedido');
-        });
+      // Sin toast de exito: la ficha apareciendo al instante ES la confirmacion.
+      api.post(`/v1/orders/${orderId}/claim`).catch((err) => {
+        revert(orderId);
+        toast.error(err instanceof ApiError ? err.message : 'No se pudo tomar el pedido');
+      });
     },
     [me, patchEverywhere, revert],
   );
@@ -66,13 +64,10 @@ export function useOrderActions() {
   const unclaim = useCallback(
     (orderId: string) => {
       patchEverywhere(orderId, (o) => ({ ...o, claimedBy: null }));
-      api
-        .delete(`/v1/orders/${orderId}/claim`)
-        .then(() => toast.success('Pedido liberado — cualquiera puede tomarlo'))
-        .catch((err) => {
-          revert(orderId);
-          toast.error(err instanceof ApiError ? err.message : 'No se pudo soltar el pedido');
-        });
+      api.delete(`/v1/orders/${orderId}/claim`).catch((err) => {
+        revert(orderId);
+        toast.error(err instanceof ApiError ? err.message : 'No se pudo soltar el pedido');
+      });
     },
     [patchEverywhere, revert],
   );

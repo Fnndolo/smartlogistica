@@ -114,7 +114,7 @@ export function OrdersTable({
             <TableHead className="w-10">
               <input
                 type="checkbox"
-                className="h-4 w-4 cursor-pointer rounded border-input accent-foreground"
+                className="block h-[15px] w-[15px] cursor-pointer rounded-[4px] border-input accent-accent"
                 checked={allSelected}
                 onChange={() => onToggleSelectAll?.()}
                 aria-label="Seleccionar todos"
@@ -126,7 +126,8 @@ export function OrdersTable({
           <TableHead>Producto</TableHead>
           <SortHeader label="Cant." field="quantity" sort={sort} dir={dir} onSort={onSort} align="right" />
           <SortHeader label="Precio de venta" field="price" sort={sort} dir={dir} onSort={onSort} align="right" />
-          <SortHeader label="Fecha" field="date" sort={sort} dir={dir} onSort={onSort} />
+          {/* Fecha desc es el orden POR DEFECTO: no se pinta como filtro aplicado. */}
+          <SortHeader label="Fecha" field="date" sort={sort} dir={dir} onSort={onSort} defaultDesc />
           <TableHead>Estado</TableHead>
           {showAddress ? <TableHead>Dirección</TableHead> : null}
           {showShipping ? <TableHead>Envío</TableHead> : null}
@@ -165,14 +166,14 @@ export function OrdersTable({
                     <RowRail />
                     <input
                       type="checkbox"
-                      className="h-4 w-4 cursor-pointer rounded border-input accent-foreground"
+                      className="block h-[15px] w-[15px] cursor-pointer rounded-[4px] border-input accent-accent"
                       checked={isSelected}
                       onChange={() => onToggleSelect!(order.id)}
                       aria-label={`Seleccionar ${order.externalId}`}
                     />
                   </TableCell>
                 ) : null}
-                <TableCell className="relative whitespace-nowrap font-mono text-xs">
+                <TableCell className="relative whitespace-nowrap font-mono text-[11.5px] text-muted-foreground">
                   {!selectable ? <RowRail /> : null}
                   <span className="inline-flex items-center gap-2">
                     {/* Distintivo de "tomado" al INICIO de la fila (hueco reservado
@@ -576,7 +577,7 @@ function OrderCard({
         <span onClick={(e) => e.stopPropagation()} className="pt-0.5">
           <input
             type="checkbox"
-            className="h-4 w-4 cursor-pointer rounded border-input accent-foreground"
+            className="block h-[15px] w-[15px] cursor-pointer rounded-[4px] border-input accent-accent"
             checked={selected}
             onChange={() => onToggleSelect!(order.id)}
             aria-label={`Seleccionar ${order.externalId}`}
@@ -724,6 +725,7 @@ function SortHeader({
   dir,
   onSort,
   align = 'left',
+  defaultDesc = false,
 }: {
   label: string;
   field: OrderSortField;
@@ -731,8 +733,10 @@ function SortHeader({
   dir: SortDir;
   onSort: (field: OrderSortField) => void;
   align?: 'left' | 'right';
+  /** Este campo en desc ES el orden por defecto: no se marca como aplicado. */
+  defaultDesc?: boolean;
 }) {
-  const active = sort === field;
+  const active = sort === field && !(defaultDesc && dir === 'desc');
   return (
     <TableHead className={cn('whitespace-nowrap', align === 'right' && 'text-right')}>
       <button
