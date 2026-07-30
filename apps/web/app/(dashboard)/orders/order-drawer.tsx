@@ -151,7 +151,8 @@ export function OrderDrawer({
         aria-modal="true"
         className={cn(
           // Movil: pantalla completa. Escritorio (md+): panel lateral de max-w-xl.
-          'absolute right-0 top-0 flex h-full w-full max-w-none flex-col bg-background shadow-2xl transition-transform duration-200 ease-out md:max-w-xl md:border-l md:border-border',
+          // bg-card: el drawer es una SUPERFICIE blanca (el lienzo es gris).
+          'absolute right-0 top-0 flex h-full w-full max-w-none flex-col bg-card shadow-2xl transition-transform duration-200 ease-out md:max-w-xl md:border-l md:border-border',
           shown ? 'translate-x-0' : 'translate-x-full',
         )}
       >
@@ -258,8 +259,11 @@ function DrawerContent({
               type="button"
               onClick={() => setTab(t.id)}
               className={cn(
-                'relative flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-2.5 text-[12.5px] font-medium transition-colors',
-                active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
+                // Inactivas grisaceas y finas; la activa en negrilla suave.
+                'relative flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-2.5 text-[12.5px] transition-colors',
+                active
+                  ? 'font-semibold text-foreground'
+                  : 'font-normal text-muted-foreground/75 hover:text-foreground',
               )}
             >
               <t.icon className="h-3.5 w-3.5" />
@@ -1268,7 +1272,7 @@ function ConversacionTab({
               onClick={() => setAttachOpen((o) => !o)}
               disabled={uploading}
               aria-label="Adjuntar foto"
-              className="h-9 w-9 rounded-full"
+              className="h-9 w-9 rounded-full text-muted-foreground hover:text-foreground"
             >
               {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
             </Button>
@@ -1372,7 +1376,8 @@ function ConversacionTab({
               // h-9 EXACTO (igual que los botones) + block (los textarea son
               // inline por defecto y el baseline los descuadra unos pixeles).
               // Pill redonda estilo WhatsApp (como el mockup aprobado).
-              className="block h-9 w-full resize-none rounded-full border border-input bg-background px-4 py-[7px] text-sm leading-5 outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring"
+              // Pill GRIS que resalta sobre el drawer blanco (mockup).
+              className="block h-9 w-full resize-none rounded-full border border-input bg-muted px-4 py-[7px] text-sm leading-5 outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring"
             />
           </div>
           {/* Enviar: circulo en acento cobalto (mockup). */}
@@ -1525,7 +1530,7 @@ function MentionText({
             className={cn(
               'inline-block max-w-full truncate rounded-md px-1 py-0.5 align-bottom font-medium',
               mine
-                ? 'bg-primary-foreground/25 text-primary-foreground'
+                ? 'bg-accent-foreground/25 text-accent-foreground'
                 : 'bg-accent/10 text-accent',
             )}
           >
@@ -1694,7 +1699,7 @@ function MessageBubble({
         className={cn(
           'mb-1 rounded-lg border-l-2 px-2.5 py-1.5 text-xs',
           mine
-            ? 'border-primary-foreground/50 bg-primary-foreground/10 text-primary-foreground/90'
+            ? 'border-accent-foreground/50 bg-accent-foreground/10 text-accent-foreground/90'
             : 'border-accent/60 bg-background/60 text-muted-foreground',
         )}
       >
@@ -1723,7 +1728,9 @@ function MessageBubble({
         // En cel el texto va un punto mas grande (15px); en escritorio text-sm.
         'px-3.5 py-2 text-[15px] md:text-[13px]',
         radius,
-        mine ? 'bg-primary text-primary-foreground' : 'bg-muted text-foreground',
+        // Mios en AZUL cobalto (pedido del user: nada de negro); otros en gris
+        // que resalta sobre el fondo blanco del drawer.
+        mine ? 'bg-accent text-accent-foreground' : 'bg-muted text-foreground',
       )}
     >
       {quote}
@@ -1739,8 +1746,10 @@ function MessageBubble({
       {...touchHandlers}
       className={cn(
         // touch-manipulation: sin zoom por doble toque (el doble toque es 👍).
-        'group flex touch-manipulation select-none flex-col px-1 py-0.5 first:mt-0 md:select-auto',
-        grouped ? 'mt-0.5' : 'mt-4',
+        // Sin padding vertical extra: los consecutivos del mismo autor quedan
+        // pegaditos (3px), como el mockup.
+        'group flex touch-manipulation select-none flex-col px-1 first:mt-0 md:select-auto',
+        grouped ? 'mt-[3px]' : 'mt-3.5',
         mine ? 'items-end' : 'items-start',
         // El mensaje long-presseado queda resaltado mientras sus acciones
         // estan abiertas (feedback de "lo tengo agarrado", estilo WhatsApp).
@@ -1880,7 +1889,7 @@ function DocumentCard({ message, mine }: { message: OrderMessage; mine: boolean 
     <div
       className={cn(
         'w-64 max-w-[80%] overflow-hidden rounded-2xl border',
-        mine ? 'rounded-br-sm border-primary/20 bg-primary/5' : 'rounded-bl-sm border-border bg-card',
+        mine ? 'rounded-br-sm border-accent/25 bg-accent/5' : 'rounded-bl-sm border-border bg-card',
       )}
     >
       {url && isPdf ? (
@@ -1943,7 +1952,7 @@ function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolea
         rel="noreferrer"
         className={cn(
           'block max-w-[80%] overflow-hidden rounded-2xl border',
-          mine ? 'rounded-br-sm border-primary/20' : 'rounded-bl-sm border-border',
+          mine ? 'rounded-br-sm border-accent/25' : 'rounded-bl-sm border-border',
         )}
         title={name}
       >
@@ -1958,7 +1967,7 @@ function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolea
       <div
         className={cn(
           'max-w-[80%] overflow-hidden rounded-2xl border bg-black',
-          mine ? 'rounded-br-sm border-primary/20' : 'rounded-bl-sm border-border',
+          mine ? 'rounded-br-sm border-accent/25' : 'rounded-bl-sm border-border',
         )}
       >
         <video src={url} controls preload="metadata" className="max-h-72 w-auto" />
@@ -1975,7 +1984,7 @@ function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolea
       rel="noreferrer"
       className={cn(
         'flex w-64 max-w-[80%] items-center gap-3 rounded-2xl border px-3 py-2.5 transition',
-        mine ? 'rounded-br-sm border-primary/20 bg-primary/5' : 'rounded-bl-sm border-border bg-card',
+        mine ? 'rounded-br-sm border-accent/25 bg-accent/5' : 'rounded-bl-sm border-border bg-card',
         url ? 'hover:bg-muted/60' : 'pointer-events-none opacity-70',
       )}
     >
@@ -2009,7 +2018,7 @@ function PhotoCard({
         'max-w-[80%] overflow-hidden rounded-2xl border',
         // Mismo lenguaje que las burbujas: mias = tinte primario + esquina derecha;
         // de otro usuario = neutro + esquina izquierda.
-        mine ? 'rounded-br-sm border-primary/20 bg-primary/5' : 'rounded-bl-sm border-border bg-card',
+        mine ? 'rounded-br-sm border-accent/25 bg-accent/5' : 'rounded-bl-sm border-border bg-card',
         className,
       )}
     >
