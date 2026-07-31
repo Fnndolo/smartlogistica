@@ -689,6 +689,7 @@ function ConversacionTab({
               authorName: String(event.authorName ?? ''),
               kind: 'text',
               body: String(event.body ?? ''),
+              caption: null,
               attachmentUrl: null,
               attachmentMime: null,
               imeis: [],
@@ -910,6 +911,7 @@ function ConversacionTab({
         authorName: me?.name ?? me?.email ?? 'Yo',
         kind: 'text',
         body,
+        caption: null,
         attachmentUrl: null,
         attachmentMime: null,
         imeis: [],
@@ -941,12 +943,19 @@ function ConversacionTab({
 
   const submit = () => {
     const body = text.trim();
-    // Primero salen los adjuntos en staging (cada uno con su burbuja optimista
-    // y su progreso); luego el texto, si lo hay.
+    // Con adjuntos en staging, el texto viaja como CAPTION del ultimo adjunto
+    // (estilo WhatsApp): UNA sola burbuja imagen+texto, que llega junta cuando
+    // la imagen termina de subir. Sin adjuntos, mensaje de texto normal.
     if (staged.length > 0) {
       const toSend = staged;
       setStaged([]);
-      for (const sf of toSend) void sendAttachment(sf);
+      toSend.forEach((sf, i) => {
+        void sendAttachment(sf, i === toSend.length - 1 && body ? body : undefined);
+      });
+      setText('');
+      setMention(null);
+      setReplyTo(null);
+      return;
     }
     if (!body) return;
     send.mutate({ body, mentions: mentionsInText(body, members), replyToId: replyTo?.id });
@@ -1132,7 +1141,6 @@ function ConversacionTab({
   //    de esa burbuja (barra de progreso). Nunca hay un vacio en el chat.
   const [staged, setStaged] = useState<StagedFile[]>([]);
   const [pendingMsgs, setPendingMsgs] = useState<PendingMsg[]>([]);
-  const uploading = pendingMsgs.length > 0;
 
   const stageFiles = useCallback((files: FileList | File[] | null) => {
     if (!files) return;
@@ -1181,6 +1189,7 @@ function ConversacionTab({
     orderId,
     authorId: me?.id ?? '',
     authorName: me?.name ?? me?.email ?? '',
+    caption: null as string | null,
     imeis: [] as string[],
     mentions: [] as string[],
     replyToId: null,
@@ -1189,13 +1198,14 @@ function ConversacionTab({
   });
 
   /** Adjunto normal: burbuja optimista + subida con progreso en la burbuja. */
-  const sendAttachment = async (sf: StagedFile) => {
+  const sendAttachment = async (sf: StagedFile, caption?: string) => {
     const tempId = `temp-${sf.id}`;
     pushPending({
       ...tempBase(),
       id: tempId,
       kind: 'file',
       body: sf.file.name,
+      caption: caption ?? null,
       attachmentUrl: sf.url,
       attachmentMime: sf.file.type || 'application/octet-stream',
       progress: 0,
@@ -1204,6 +1214,7 @@ function ConversacionTab({
       const compact = await compressImage(sf.file);
       const fd = new FormData();
       fd.append('file', compact, compact.name);
+      if (caption) fd.append('caption', caption);
       const msg = await api.uploadWithProgress<OrderMessage>(
         `/v1/orders/${orderId}/attachment`,
         fd,
@@ -1481,16 +1492,12 @@ function ConversacionTab({
               size="icon"
               variant="ghost"
               onClick={() => setAttachOpen((o) => !o)}
-              // Se pueden adjuntar mas cosas mientras otras suben (cada una
-              // muestra su progreso en su propia burbuja).
+              // Sin spinner aqui: el progreso vive en la burbuja del chat.
+              // Se pueden adjuntar mas cosas mientras otras suben.
               aria-label="Adjuntar foto"
               className="h-10 w-10 rounded-full text-muted-foreground hover:text-foreground md:h-9 md:w-9"
             >
-              {uploading ? (
-                <Loader2 className="h-[18px] w-[18px] animate-spin md:h-4 md:w-4" />
-              ) : (
-                <Paperclip className="h-[18px] w-[18px] md:h-4 md:w-4" />
-              )}
+              <Paperclip className="h-[18px] w-[18px] md:h-4 md:w-4" />
             </Button>
             {attachOpen && isDesktop ? (
               <>
@@ -2267,27 +2274,39 @@ function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolea
   // columna de adjuntos queda alineada y ordenada, nada de anchos dispares.
   const pending = message.id.startsWith('temp-');
   const progress = (message as PendingMsg).progress;
+  const caption = message.caption ? (
+    // Texto que acompaña al adjunto (estilo WhatsApp): misma burbuja.
+    <p className="whitespace-pre-wrap break-words px-2.5 py-2 text-[15px] leading-snug md:text-[13px]">
+      {message.caption}
+    </p>
+  ) : null;
+
   if (url && mime.startsWith('image/')) {
     return (
-      <a
-        href={pending ? undefined : url}
-        target="_blank"
-        rel="noreferrer"
+      <div
         className={cn(
-          // bg-muted: las fotos blancas no se funden con el fondo blanco del chat.
-          'relative block w-[230px] max-w-full overflow-hidden rounded-[14px] border bg-muted',
-          mine ? 'rounded-br-sm border-accent/25' : 'rounded-bl-sm border-border',
+          'w-[230px] max-w-full overflow-hidden rounded-[14px] border',
+          mine ? 'rounded-br-sm border-accent/25 bg-accent/5' : 'rounded-bl-sm border-border bg-card',
         )}
-        title={name}
       >
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={url} alt={name} className="h-auto max-h-64 w-full object-cover" loading="lazy" />
-        {pending ? (
-          <span className="absolute inset-x-2.5 bottom-2.5">
-            <UploadBar value={progress} />
-          </span>
-        ) : null}
-      </a>
+        <a
+          href={pending ? undefined : url}
+          target="_blank"
+          rel="noreferrer"
+          // bg-muted: las fotos blancas no se funden con el fondo blanco del chat.
+          className="relative block bg-muted"
+          title={name}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={url} alt={name} className="h-auto max-h-64 w-full object-cover" loading="lazy" />
+          {pending ? (
+            <span className="absolute inset-x-2.5 bottom-2.5">
+              <UploadBar value={progress} />
+            </span>
+          ) : null}
+        </a>
+        {caption}
+      </div>
     );
   }
 
@@ -2295,11 +2314,19 @@ function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolea
     return (
       <div
         className={cn(
-          'w-[230px] max-w-full overflow-hidden rounded-[14px] border bg-black',
-          mine ? 'rounded-br-sm border-accent/25' : 'rounded-bl-sm border-border',
+          'w-[230px] max-w-full overflow-hidden rounded-[14px] border',
+          mine ? 'rounded-br-sm border-accent/25 bg-accent/5' : 'rounded-bl-sm border-border bg-card',
         )}
       >
-        <video src={url} controls preload="metadata" className="max-h-64 w-full" />
+        <div className="bg-black">
+          <video src={url} controls preload="metadata" className="max-h-64 w-full" />
+          {pending ? (
+            <div className="px-2.5 pb-2.5">
+              <UploadBar value={progress} />
+            </div>
+          ) : null}
+        </div>
+        {caption}
       </div>
     );
   }
@@ -2307,13 +2334,18 @@ function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolea
   // Cualquier otro archivo: tarjeta de descarga.
   const ext = (/\.([a-z0-9]{1,6})$/i.exec(name)?.[1] ?? 'file').toUpperCase();
   return (
+    <div
+      className={cn(
+        'w-[230px] max-w-full overflow-hidden rounded-[14px] border',
+        mine ? 'rounded-br-sm border-accent/25 bg-accent/5' : 'rounded-bl-sm border-border bg-card',
+      )}
+    >
     <a
       href={url ?? undefined}
       target="_blank"
       rel="noreferrer"
       className={cn(
-        'flex w-[230px] max-w-full items-center gap-3 rounded-[14px] border px-3 py-2.5 transition',
-        mine ? 'rounded-br-sm border-accent/25 bg-accent/5' : 'rounded-bl-sm border-border bg-card',
+        'flex items-center gap-3 px-3 py-2.5 transition',
         url ? 'hover:bg-muted/60' : 'pointer-events-none opacity-70',
       )}
     >
@@ -2336,6 +2368,8 @@ function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolea
         <Download className="h-4 w-4 shrink-0 text-muted-foreground" />
       )}
     </a>
+    {caption}
+    </div>
   );
 }
 

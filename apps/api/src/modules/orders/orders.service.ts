@@ -1083,6 +1083,7 @@ export class OrdersService {
     orderId: string,
     file: { buffer: Buffer; mimetype: string; originalname?: string },
     auth: AuthContext,
+    caption?: string,
   ): Promise<OrderMessageDto> {
     await this.loadAccessibleOrder(orderId, auth);
     const { tenantId, prisma } = getTenantContext();
@@ -1108,6 +1109,8 @@ export class OrdersService {
         authorName: displayName(auth),
         kind: 'file',
         body: originalName,
+        // Texto que acompaña al adjunto (estilo WhatsApp): mismo mensaje.
+        caption: caption?.trim().slice(0, 2000) || null,
         attachmentKey: key,
         attachmentMime: mime,
         imeis: [],
@@ -1855,6 +1858,7 @@ export class OrdersService {
       authorName: m.authorName,
       kind: m.kind as OrderMessageDto['kind'],
       body: m.body,
+      caption: m.caption ?? null,
       attachmentUrl,
       attachmentMime: m.attachmentMime,
       imeis: m.imeis,

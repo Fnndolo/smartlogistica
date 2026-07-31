@@ -200,6 +200,7 @@ CREATE TABLE "OrderMessage" (
     "attachmentKey" TEXT,
     "attachmentUrl" TEXT,
     "attachmentMime" TEXT,
+    "caption" TEXT,
     "imeis" TEXT[],
     "mentions" TEXT[],
     "replyToId" TEXT,

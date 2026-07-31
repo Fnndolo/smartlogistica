@@ -291,6 +291,9 @@ model OrderMessage {
   attachmentKey  String?
   attachmentUrl  String?
   attachmentMime String?
+  // Texto que acompaña a un adjunto (estilo WhatsApp): viaja EN el mismo
+  // mensaje que la imagen/video/archivo, no como mensaje aparte.
+  caption        String?
   // IMEIs extraidos del adjunto cuando kind='imei_photo' (flujo Foto IMEI, siguiente fase).
   imeis          String[]
   // userIds mencionados en el mensaje (@usuario) -> alimenta notificaciones.

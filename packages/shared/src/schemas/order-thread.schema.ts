@@ -44,6 +44,8 @@ export const orderMessageSchema = z.object({
   authorName: z.string(),
   kind: orderMessageKindSchema,
   body: z.string().nullable(),
+  // Texto que acompaña un adjunto (estilo WhatsApp): viaja EN el mismo mensaje.
+  caption: z.string().nullable().default(null),
   attachmentUrl: z.string().nullable(),
   attachmentMime: z.string().nullable(),
   imeis: z.array(z.string()),

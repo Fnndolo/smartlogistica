@@ -339,10 +339,11 @@ export class OrdersController {
   async attachment(
     @Param('id') id: string,
     @UploadedFile() file: UploadedFile | undefined,
+    @Body('caption') caption: string | undefined,
     @CurrentUser() user: AuthContext,
   ): Promise<OrderMessage> {
     if (!file) throw new BadRequestException('No se recibio ningun archivo');
-    return this.orders.addAttachment(id, file, user);
+    return this.orders.addAttachment(id, file, user, typeof caption === 'string' ? caption : undefined);
   }
 
   /** Busca codigos (IMEI/serial) en el catalogo de compras — para re-mostrar matches. */
