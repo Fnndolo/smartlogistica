@@ -158,13 +158,18 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleStreamEvent = useCallback(
     (event?: { kind: string }) => {
-      // "esta escribiendo" es efimero: no toca las listas.
-      if (event?.kind === 'chat.typing') return;
+      // "esta escribiendo" es efimero y las reacciones a mensajes no tocan la
+      // lista: cero refetch (que nada compita con pintar el chat al instante).
+      if (event?.kind === 'chat.typing' || event?.kind === 'chat.reaction') return;
+      const chatOnly = event?.kind === 'chat.message';
       if (debounceRef.current) clearTimeout(debounceRef.current);
       debounceRef.current = setTimeout(() => {
+        // chat.message solo afecta el badge de no leidos -> solo la lista.
         queryClient.invalidateQueries({ queryKey: ['orders'] });
-        queryClient.invalidateQueries({ queryKey: ['order-stats'] });
-        queryClient.invalidateQueries({ queryKey: ['orders-pulse'] });
+        if (!chatOnly) {
+          queryClient.invalidateQueries({ queryKey: ['order-stats'] });
+          queryClient.invalidateQueries({ queryKey: ['orders-pulse'] });
+        }
       }, SSE_DEBOUNCE_MS);
     },
     [queryClient],

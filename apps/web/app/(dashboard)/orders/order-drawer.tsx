@@ -83,6 +83,11 @@ interface StagedFile {
   id: string;
   file: File;
   url: string;
+  // Pre-compresion en segundo plano (arranca al cargar en la barra): al enviar
+  // ya esta lista -> la burbuja pinta la version liviana AL INSTANTE (una foto
+  // de camara de 10MB tarda segundos en decodificar; la comprimida, nada).
+  compact?: File;
+  compactUrl?: string;
 }
 /** Burbuja optimista de un adjunto subiendo (progress 0..100). */
 type PendingMsg = OrderMessage & { progress?: number };
@@ -1146,22 +1151,34 @@ function ConversacionTab({
     if (!files) return;
     const arr = Array.from(files).filter(Boolean);
     if (arr.length === 0) return;
-    setStaged((s) =>
-      [
-        ...s,
-        ...arr.map((file) => ({
-          id: crypto.randomUUID(),
-          file,
-          url: URL.createObjectURL(file),
-        })),
-      ].slice(0, 8),
-    );
+    const items: StagedFile[] = arr.map((file) => ({
+      id: crypto.randomUUID(),
+      file,
+      url: URL.createObjectURL(file),
+    }));
+    setStaged((s) => [...s, ...items].slice(0, 8));
+    // Pre-comprimir imagenes YA (en segundo plano): al darle enviar, la subida
+    // arranca sin esperar y la vista previa pesa poco (pinta instantaneo).
+    for (const it of items) {
+      if (!it.file.type.startsWith('image/')) continue;
+      void compressImage(it.file)
+        .then((compact) => {
+          const compactUrl = URL.createObjectURL(compact);
+          setStaged((s) =>
+            s.map((x) => (x.id === it.id ? { ...x, compact, compactUrl } : x)),
+          );
+        })
+        .catch(() => undefined);
+    }
   }, []);
 
   const unstage = (id: string) =>
     setStaged((s) => {
       const found = s.find((x) => x.id === id);
-      if (found) URL.revokeObjectURL(found.url);
+      if (found) {
+        URL.revokeObjectURL(found.url);
+        if (found.compactUrl) URL.revokeObjectURL(found.compactUrl);
+      }
       return s.filter((x) => x.id !== id);
     });
 
@@ -1200,18 +1217,20 @@ function ConversacionTab({
   /** Adjunto normal: burbuja optimista + subida con progreso en la burbuja. */
   const sendAttachment = async (sf: StagedFile, caption?: string) => {
     const tempId = `temp-${sf.id}`;
+    // Vista previa LIVIANA si la pre-compresion ya termino (decode al instante).
+    const previewUrl = sf.compactUrl ?? sf.url;
     pushPending({
       ...tempBase(),
       id: tempId,
       kind: 'file',
       body: sf.file.name,
       caption: caption ?? null,
-      attachmentUrl: sf.url,
+      attachmentUrl: previewUrl,
       attachmentMime: sf.file.type || 'application/octet-stream',
       progress: 0,
     });
     try {
-      const compact = await compressImage(sf.file);
+      const compact = sf.compact ?? (await compressImage(sf.file));
       const fd = new FormData();
       fd.append('file', compact, compact.name);
       if (caption) fd.append('caption', caption);
@@ -1220,14 +1239,17 @@ function ConversacionTab({
         fd,
         (p) => bumpPending(tempId, { progress: p }),
       );
-      injectReal({ ...msg, attachmentUrl: msg.attachmentUrl ?? sf.url });
+      injectReal({ ...msg, attachmentUrl: msg.attachmentUrl ?? previewUrl });
       removePending(tempId);
     } catch (err) {
       removePending(tempId);
       toast.error(err instanceof ApiError ? err.message : 'No se pudo subir el archivo');
     } finally {
-      // Darle tiempo al <img> real de cargar antes de soltar la preview local.
-      setTimeout(() => URL.revokeObjectURL(sf.url), 60_000);
+      // Darle tiempo al <img> real de cargar antes de soltar las previews.
+      setTimeout(() => {
+        URL.revokeObjectURL(sf.url);
+        if (sf.compactUrl) URL.revokeObjectURL(sf.compactUrl);
+      }, 60_000);
     }
   };
 
@@ -1244,9 +1266,14 @@ function ConversacionTab({
       attachmentMime: file.type || 'image/jpeg',
       progress: 0,
     });
+    let compactUrl: string | null = null;
     try {
       // Comprimir ANTES de subir: sube en una fraccion y la IA lee mas rapido.
       const compact = await compressImage(file);
+      // Cambiar la preview a la version liviana: la foto cruda de camara puede
+      // tardar segundos en decodificar; la comprimida pinta al toque.
+      compactUrl = URL.createObjectURL(compact);
+      bumpPending(tempId, { attachmentUrl: compactUrl });
       const fd = new FormData();
       fd.append('file', compact, compact.name);
       const res = await api.uploadWithProgress<DevicePhotoResponse>(
@@ -1267,7 +1294,10 @@ function ConversacionTab({
       toast.error(err instanceof ApiError ? err.message : 'No se pudo procesar la foto');
     } finally {
       if (fileRef.current) fileRef.current.value = '';
-      setTimeout(() => URL.revokeObjectURL(localUrl), 60_000);
+      setTimeout(() => {
+        URL.revokeObjectURL(localUrl);
+        if (compactUrl) URL.revokeObjectURL(compactUrl);
+      }, 60_000);
     }
   };
 
@@ -1427,7 +1457,10 @@ function ConversacionTab({
         </button>
       ) : null}
 
-      <div className="border-t border-border p-3">
+      {/* bg-card SOLIDO + safe-area: en iPhone no se ve la franja de atras
+          entre la barra y el teclado; en celus sin barra de navegacion la
+          barra no queda pegada al borde. Mas alto en cel. */}
+      <div className="border-t border-border bg-card px-3 pb-[max(env(safe-area-inset-bottom),14px)] pt-3.5 md:p-3">
         {/* Barra de respuesta (citar): a quien respondo + fragmento + cancelar. */}
         {replyTo ? (
           <div className="mb-2 flex items-start gap-2 rounded-lg border-l-2 border-accent bg-muted/50 px-3 py-1.5">
@@ -1457,8 +1490,9 @@ function ConversacionTab({
                 {s.file.type.startsWith('image/') ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
-                    src={s.url}
+                    src={s.compactUrl ?? s.url}
                     alt={s.file.name}
+                    decoding="async"
                     className="h-20 w-20 rounded-xl border border-border bg-muted object-cover"
                   />
                 ) : s.file.type.startsWith('video/') ? (
@@ -1787,11 +1821,19 @@ function AttachOption({
 }
 
 /** Barra de progreso de subida (dentro de la burbuja optimista). */
-function UploadBar({ value }: { value?: number }) {
+function UploadBar({ value, inverted = false }: { value?: number; inverted?: boolean }) {
   return (
-    <div className="h-1 w-full overflow-hidden rounded-full bg-muted-foreground/20">
+    <div
+      className={cn(
+        'h-1 w-full overflow-hidden rounded-full',
+        inverted ? 'bg-accent-foreground/25' : 'bg-muted-foreground/20',
+      )}
+    >
       <div
-        className="h-full rounded-full bg-accent transition-[width] duration-200"
+        className={cn(
+          'h-full rounded-full transition-[width] duration-200',
+          inverted ? 'bg-accent-foreground' : 'bg-accent',
+        )}
         style={{ width: `${Math.min(100, Math.max(6, value ?? 6))}%` }}
       />
     </div>
@@ -2274,21 +2316,20 @@ function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolea
   // columna de adjuntos queda alineada y ordenada, nada de anchos dispares.
   const pending = message.id.startsWith('temp-');
   const progress = (message as PendingMsg).progress;
+  // MISMO color que un mensaje normal: mia = cobalto con texto claro; de otro
+  // = gris. La imagen va arriba y el texto (caption) debajo, una sola burbuja.
+  const tone = mine
+    ? 'rounded-br-sm border-transparent bg-accent text-accent-foreground'
+    : 'rounded-bl-sm border-transparent bg-muted text-foreground';
   const caption = message.caption ? (
-    // Texto que acompaña al adjunto (estilo WhatsApp): misma burbuja.
-    <p className="whitespace-pre-wrap break-words px-2.5 py-2 text-[15px] leading-snug md:text-[13px]">
+    <p className="whitespace-pre-wrap break-words px-3 py-2 text-[15px] leading-snug md:text-[13px]">
       {message.caption}
     </p>
   ) : null;
 
   if (url && mime.startsWith('image/')) {
     return (
-      <div
-        className={cn(
-          'w-[230px] max-w-full overflow-hidden rounded-[14px] border',
-          mine ? 'rounded-br-sm border-accent/25 bg-accent/5' : 'rounded-bl-sm border-border bg-card',
-        )}
-      >
+      <div className={cn('w-[230px] max-w-full overflow-hidden rounded-[14px] border', tone)}>
         <a
           href={pending ? undefined : url}
           target="_blank"
@@ -2298,7 +2339,12 @@ function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolea
           title={name}
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={url} alt={name} className="h-auto max-h-64 w-full object-cover" loading="lazy" />
+          <img
+            src={url}
+            alt={name}
+            decoding="async"
+            className="h-auto max-h-64 w-full object-cover"
+          />
           {pending ? (
             <span className="absolute inset-x-2.5 bottom-2.5">
               <UploadBar value={progress} />
@@ -2312,12 +2358,7 @@ function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolea
 
   if (url && mime.startsWith('video/')) {
     return (
-      <div
-        className={cn(
-          'w-[230px] max-w-full overflow-hidden rounded-[14px] border',
-          mine ? 'rounded-br-sm border-accent/25 bg-accent/5' : 'rounded-bl-sm border-border bg-card',
-        )}
-      >
+      <div className={cn('w-[230px] max-w-full overflow-hidden rounded-[14px] border', tone)}>
         <div className="bg-black">
           <video src={url} controls preload="metadata" className="max-h-64 w-full" />
           {pending ? (
@@ -2334,38 +2375,48 @@ function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolea
   // Cualquier otro archivo: tarjeta de descarga.
   const ext = (/\.([a-z0-9]{1,6})$/i.exec(name)?.[1] ?? 'file').toUpperCase();
   return (
-    <div
-      className={cn(
-        'w-[230px] max-w-full overflow-hidden rounded-[14px] border',
-        mine ? 'rounded-br-sm border-accent/25 bg-accent/5' : 'rounded-bl-sm border-border bg-card',
-      )}
-    >
+    <div className={cn('w-[230px] max-w-full overflow-hidden rounded-[14px] border', tone)}>
     <a
       href={url ?? undefined}
       target="_blank"
       rel="noreferrer"
       className={cn(
         'flex items-center gap-3 px-3 py-2.5 transition',
-        url ? 'hover:bg-muted/60' : 'pointer-events-none opacity-70',
+        url
+          ? mine
+            ? 'hover:brightness-110'
+            : 'hover:bg-muted-foreground/10'
+          : 'pointer-events-none opacity-70',
       )}
     >
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted text-[9px] font-bold tracking-wide text-muted-foreground">
+      <span
+        className={cn(
+          'flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-[9px] font-bold tracking-wide',
+          mine ? 'bg-accent-foreground/20 text-accent-foreground' : 'bg-muted-foreground/15 text-muted-foreground',
+        )}
+      >
         {ext.slice(0, 4)}
       </span>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium">{name}</p>
         {pending ? (
           <div className="mt-1.5">
-            <UploadBar value={progress} />
+            <UploadBar value={progress} inverted={mine} />
           </div>
         ) : (
-          <p className="text-[11px] text-muted-foreground">Toca para abrir</p>
+          <p className={cn('text-[11px]', mine ? 'text-accent-foreground/70' : 'text-muted-foreground')}>
+            Toca para abrir
+          </p>
         )}
       </div>
       {pending ? (
-        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+        <Loader2
+          className={cn('h-4 w-4 shrink-0 animate-spin', mine ? 'text-accent-foreground/80' : 'text-muted-foreground')}
+        />
       ) : (
-        <Download className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <Download
+          className={cn('h-4 w-4 shrink-0', mine ? 'text-accent-foreground/80' : 'text-muted-foreground')}
+        />
       )}
     </a>
     {caption}

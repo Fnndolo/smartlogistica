@@ -537,17 +537,17 @@ export class OrdersService {
         replyToId: replyTo?.id ?? null,
       },
     });
-    // Quien escribe obviamente ya "leyo" el hilo -> marcar leido para no contarse a si mismo.
-    await this.touchRead(orderId, auth.userId);
-    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
-    // Evento detallado para notificaciones (sonido/notif del navegador): el
-    // cliente decide si le concierne (mencionado, le respondieron, o participa
-    // en la conversacion).
-    const participants = await prisma.orderMessage.findMany({
-      where: { orderId, kind: { not: 'system' } },
-      select: { authorId: true },
-      distinct: ['authorId'],
-    });
+    // AL PESTAÑEO: chat.message se publica PRIMERO (es lo que pinta el mensaje
+    // en el chat abierto del receptor); lo secundario (marcar leido, refresh de
+    // listas) va despues y no puede retrasarlo.
+    const participants = (
+      await prisma.orderMessage.findMany({
+        where: { orderId, kind: { not: 'system' } },
+        select: { authorId: true },
+        distinct: ['authorId'],
+      })
+    ).map((p) => p.authorId);
+    if (!participants.includes(auth.userId)) participants.push(auth.userId);
     await this.realtime.publish(tenantId, {
       kind: 'chat.message',
       orderId,
@@ -563,9 +563,12 @@ export class OrdersService {
       mentions,
       replyToId: replyTo?.id ?? null,
       replyToAuthorId: replyTo?.authorId ?? null,
-      participantIds: participants.map((p) => p.authorId),
+      participantIds: participants,
       createdAt: msg.createdAt.toISOString(),
     });
+    // Quien escribe obviamente ya "leyo" el hilo -> marcar leido para no contarse a si mismo.
+    await this.touchRead(orderId, auth.userId);
+    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
 
     // WEB PUSH (app CERRADA): mencionados con titulo especial; respondido y
     // demas participantes con el generico. Nunca al propio autor. El titulo
@@ -584,7 +587,7 @@ export class OrdersService {
       : 'PEDIDOS GENERALES';
     const mentioned = new Set(mentions.filter((id) => id !== auth.userId));
     const others = new Set(
-      [...participants.map((p) => p.authorId), replyTo?.authorId ?? '']
+      [...participants, replyTo?.authorId ?? '']
         .filter(Boolean)
         .filter((id) => id !== auth.userId && !mentioned.has(id)),
     );
