@@ -1,14 +1,8 @@
 'use client';
 
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import {
-  keepPreviousData,
-  useIsMutating,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns/format';
 import { es } from 'date-fns/locale/es';
 import {
@@ -33,6 +27,7 @@ import {
   PlusCircle,
   ReceiptText,
   Reply,
+  ScanBarcode,
   ScanLine,
   Send,
   SmilePlus,
@@ -82,6 +77,15 @@ import { orderDetailQuery, orderMessagesQuery } from './order-queries';
 import { useOrdersStream } from './use-orders-stream';
 
 type Tab = 'detalle' | 'conversacion' | 'facturar' | 'guia' | 'actividad';
+
+/** Adjunto en STAGING: elegido/pegado/arrastrado, aun sin enviar. */
+interface StagedFile {
+  id: string;
+  file: File;
+  url: string;
+}
+/** Burbuja optimista de un adjunto subiendo (progress 0..100). */
+type PendingMsg = OrderMessage & { progress?: number };
 
 const CLOSE_MS = 200;
 
@@ -606,6 +610,8 @@ function ConversacionTab({
   const pendingKind = useRef<DevicePhotoKind>('imei');
   // Adjunto normal (foto/video/archivo): input aparte con su propio `accept`.
   const attachRef = useRef<HTMLInputElement>(null);
+  // Camara como adjunto normal (staging), distinta de la foto IMEI/serial.
+  const cameraRef = useRef<HTMLInputElement>(null);
   const [attachAccept, setAttachAccept] = useState('image/*,video/*');
   // Menciones (@usuario): dropdown mientras se escribe.
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -935,6 +941,13 @@ function ConversacionTab({
 
   const submit = () => {
     const body = text.trim();
+    // Primero salen los adjuntos en staging (cada uno con su burbuja optimista
+    // y su progreso); luego el texto, si lo hay.
+    if (staged.length > 0) {
+      const toSend = staged;
+      setStaged([]);
+      for (const sf of toSend) void sendAttachment(sf);
+    }
     if (!body) return;
     send.mutate({ body, mentions: mentionsInText(body, members), replyToId: replyTo?.id });
   };
@@ -1105,81 +1118,174 @@ function ConversacionTab({
     setTimeout(() => attachRef.current?.click(), 0);
   };
 
-  // Subidas como mutaciones CON CLAVE: si el usuario cambia de pestaña o
-  // cierra el drawer, la subida sigue y al volver el indicador reaparece
-  // (useIsMutating cuenta las mutaciones en vuelo aunque esto se remonte).
-  const uploadAttachment = useMutation({
-    mutationKey: ['op-attach', orderId],
-    mutationFn: async (file: File) => {
-      const compact = await compressImage(file);
-      const fd = new FormData();
-      fd.append('file', compact, compact.name);
-      return api.upload<OrderMessage>(`/v1/orders/${orderId}/attachment`, fd);
+  // "Camara": toma una foto que queda en la barra (staging), NO se envia sola.
+  const pickCamera = () => {
+    setAttachOpen(false);
+    setTimeout(() => cameraRef.current?.click(), 0);
+  };
+
+  // ============ Adjuntos estilo Google Chat/WhatsApp ============
+  // 1) Elegir de galeria / camara / archivo / pegar / arrastrar NO envia: el
+  //    adjunto queda CARGADO en la barra (staging) y sale junto con el texto.
+  // 2) Al enviar (y en Foto IMEI/serial, al tomar la foto), la burbuja aparece
+  //    AL INSTANTE con la vista previa local; la subida y la IA corren "dentro"
+  //    de esa burbuja (barra de progreso). Nunca hay un vacio en el chat.
+  const [staged, setStaged] = useState<StagedFile[]>([]);
+  const [pendingMsgs, setPendingMsgs] = useState<PendingMsg[]>([]);
+  const uploading = pendingMsgs.length > 0;
+
+  const stageFiles = useCallback((files: FileList | File[] | null) => {
+    if (!files) return;
+    const arr = Array.from(files).filter(Boolean);
+    if (arr.length === 0) return;
+    setStaged((s) =>
+      [
+        ...s,
+        ...arr.map((file) => ({
+          id: crypto.randomUUID(),
+          file,
+          url: URL.createObjectURL(file),
+        })),
+      ].slice(0, 8),
+    );
+  }, []);
+
+  const unstage = (id: string) =>
+    setStaged((s) => {
+      const found = s.find((x) => x.id === id);
+      if (found) URL.revokeObjectURL(found.url);
+      return s.filter((x) => x.id !== id);
+    });
+
+  const pushPending = useCallback((msg: PendingMsg) => {
+    setPendingMsgs((p) => [...p, msg]);
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+    });
+  }, []);
+  const bumpPending = (id: string, patch: Partial<PendingMsg>) =>
+    setPendingMsgs((p) => p.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+  const removePending = (id: string) => setPendingMsgs((p) => p.filter((m) => m.id !== id));
+
+  /** Mete el mensaje REAL del server directo a la cache (sin esperar refetch). */
+  const injectReal = useCallback(
+    (msg: OrderMessage) => {
+      qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) =>
+        old.some((m) => m.id === msg.id) ? old : [...old, msg],
+      );
     },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
-    },
-    onError: (err) =>
-      toast.error(err instanceof ApiError ? err.message : 'No se pudo subir el archivo'),
-    onSettled: () => {
-      if (attachRef.current) attachRef.current.value = '';
-    },
+    [qc, orderId],
+  );
+
+  const tempBase = () => ({
+    orderId,
+    authorId: me?.id ?? '',
+    authorName: me?.name ?? me?.email ?? '',
+    imeis: [] as string[],
+    mentions: [] as string[],
+    replyToId: null,
+    reactions: [] as OrderMessage['reactions'],
+    createdAt: new Date().toISOString(),
   });
 
-  const uploadPhoto = useMutation({
-    mutationKey: ['op-photo', orderId],
-    mutationFn: async ({ file, kind }: { file: File; kind: DevicePhotoKind }) => {
+  /** Adjunto normal: burbuja optimista + subida con progreso en la burbuja. */
+  const sendAttachment = async (sf: StagedFile) => {
+    const tempId = `temp-${sf.id}`;
+    pushPending({
+      ...tempBase(),
+      id: tempId,
+      kind: 'file',
+      body: sf.file.name,
+      attachmentUrl: sf.url,
+      attachmentMime: sf.file.type || 'application/octet-stream',
+      progress: 0,
+    });
+    try {
+      const compact = await compressImage(sf.file);
+      const fd = new FormData();
+      fd.append('file', compact, compact.name);
+      const msg = await api.uploadWithProgress<OrderMessage>(
+        `/v1/orders/${orderId}/attachment`,
+        fd,
+        (p) => bumpPending(tempId, { progress: p }),
+      );
+      injectReal({ ...msg, attachmentUrl: msg.attachmentUrl ?? sf.url });
+      removePending(tempId);
+    } catch (err) {
+      removePending(tempId);
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo subir el archivo');
+    } finally {
+      // Darle tiempo al <img> real de cargar antes de soltar la preview local.
+      setTimeout(() => URL.revokeObjectURL(sf.url), 60_000);
+    }
+  };
+
+  /** Foto IMEI/serial: la burbuja sale YA; subida + lectura de IA, en el chat. */
+  const sendDevicePhoto = async (file: File, kind: DevicePhotoKind) => {
+    const localUrl = URL.createObjectURL(file);
+    const tempId = `temp-${crypto.randomUUID()}`;
+    pushPending({
+      ...tempBase(),
+      id: tempId,
+      kind: kind === 'imei' ? 'imei_photo' : 'serial_photo',
+      body: null,
+      attachmentUrl: localUrl,
+      attachmentMime: file.type || 'image/jpeg',
+      progress: 0,
+    });
+    try {
       // Comprimir ANTES de subir: sube en una fraccion y la IA lee mas rapido.
       const compact = await compressImage(file);
       const fd = new FormData();
       fd.append('file', compact, compact.name);
-      return api.upload<DevicePhotoResponse>(
+      const res = await api.uploadWithProgress<DevicePhotoResponse>(
         `/v1/orders/${orderId}/device-photo?kind=${kind}`,
         fd,
+        (p) => bumpPending(tempId, { progress: p }),
       );
-    },
-    onSuccess: (res, { kind }) => {
-      toast.success(`${kind === 'imei' ? 'IMEI' : 'Serial'} detectado: ${res.message.imeis.join(', ')}`);
-      qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
+      injectReal(res.message);
+      removePending(tempId);
+      toast.success(
+        `${kind === 'imei' ? 'IMEI' : 'Serial'} detectado: ${res.message.imeis.join(', ')}`,
+      );
       qc.invalidateQueries({ queryKey: ['catalog', orderId] });
       // Las lineas de facturar dependen de los codigos: refrescar el preview.
       qc.invalidateQueries({ queryKey: ['invoice-preview', orderId] });
-    },
-    onError: (err) =>
-      toast.error(err instanceof ApiError ? err.message : 'No se pudo procesar la foto'),
-    onSettled: () => {
+    } catch (err) {
+      removePending(tempId);
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo procesar la foto');
+    } finally {
       if (fileRef.current) fileRef.current.value = '';
-    },
-  });
-
-  const photoUploading = useIsMutating({ mutationKey: ['op-photo', orderId] }) > 0;
-  const attachUploading = useIsMutating({ mutationKey: ['op-attach', orderId] }) > 0;
-  const uploading = photoUploading || attachUploading;
-  const uploadLabel = photoUploading
-    ? 'Leyendo la foto y buscando en compras...'
-    : 'Subiendo archivo...';
-
-  // El indicador de subida aparece al fondo: si estaba en el fondo, mantenerlo
-  // a la vista.
-  useEffect(() => {
-    if (!didInitialScroll.current || !uploading) return;
-    if (atBottomRef.current) {
-      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
+      setTimeout(() => URL.revokeObjectURL(localUrl), 60_000);
     }
-  }, [uploading]);
+  };
 
-  const onAttachmentFile = (file: File | null) => {
-    if (!file || uploading) return;
-    uploadAttachment.mutate(file);
+  const onAttachmentFile = (files: FileList | null) => {
+    stageFiles(files);
+    if (attachRef.current) attachRef.current.value = '';
   };
 
   const onFile = (file: File | null) => {
-    if (!file || uploading) return;
-    uploadPhoto.mutate({ file, kind: pendingKind.current });
+    if (!file) return;
+    void sendDevicePhoto(file, pendingKind.current);
   };
 
+  // Mensajes del server + burbujas optimistas (siempre al final).
+  const allMessages = useMemo(
+    () => (pendingMsgs.length ? [...messages, ...pendingMsgs] : messages),
+    [messages, pendingMsgs],
+  );
+
   return (
-    <div className="relative flex h-full flex-col">
+    <div
+      className="relative flex h-full flex-col"
+      // Arrastrar una imagen/video/archivo al chat -> queda en la barra.
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={(e) => {
+        e.preventDefault();
+        if (e.dataTransfer?.files?.length) stageFiles(e.dataTransfer.files);
+      }}
+    >
       {/* flex-col + spacer mt-auto: con pocos mensajes el chat NACE DESDE
           ABAJO (como WhatsApp) y va subiendo; con muchos, scrollea normal. */}
       <div
@@ -1205,7 +1311,7 @@ function ConversacionTab({
             </p>
           </div>
         ) : (
-          messages.map((m, i) => {
+          allMessages.map((m, i) => {
             // Mensajes seguidos del mismo autor (en <5 min) se ven como un
             // conjunto: nombre y hora solo en el primero (estilo Google Chat).
             const joins = (a?: OrderMessage, b?: OrderMessage) =>
@@ -1216,10 +1322,12 @@ function ConversacionTab({
               a.authorId === b.authorId &&
               new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime() < 5 * 60_000;
             const isUnreadBoundary = m.id === unreadBoundaryId;
+            // Burbuja optimista (subiendo): sin acciones hasta confirmarse.
+            const isTemp = m.id.startsWith('temp-');
             // El separador "No leidos" rompe el conjunto: ese mensaje muestra
             // su cabecera (nombre/hora) aunque viniera agrupado.
-            const grouped = !isUnreadBoundary && joins(messages[i - 1], m);
-            const groupedWithNext = joins(m, messages[i + 1]);
+            const grouped = !isUnreadBoundary && joins(allMessages[i - 1], m);
+            const groupedWithNext = joins(m, allMessages[i + 1]);
             return (
               <Fragment key={m.id}>
                 {isUnreadBoundary ? (
@@ -1241,10 +1349,10 @@ function ConversacionTab({
                 }
                 matchByCode={matchByCode}
                 members={members}
-                canDelete={m.kind !== 'system' && (m.authorId === me?.id || isOwner)}
+                canDelete={!isTemp && m.kind !== 'system' && (m.authorId === me?.id || isOwner)}
                 onDelete={() => setConfirmDelete([m.id])}
                 onReply={
-                  m.kind !== 'system'
+                  !isTemp && m.kind !== 'system'
                     ? () => {
                         setReplyTo(m);
                         closeActions();
@@ -1252,7 +1360,7 @@ function ConversacionTab({
                     : undefined
                 }
                 onReact={
-                  m.kind !== 'system'
+                  !isTemp && m.kind !== 'system'
                     ? (e) => setPickerFor({ messageId: m.id, x: e.clientX, y: e.clientY })
                     : undefined
                 }
@@ -1260,12 +1368,12 @@ function ConversacionTab({
                   react.mutate({ messageId: m.id, emoji });
                   closeActions();
                 }}
-                onLongPress={m.kind !== 'system' ? () => onBubbleLongPress(m) : undefined}
+                onLongPress={!isTemp && m.kind !== 'system' ? () => onBubbleLongPress(m) : undefined}
                 actionsOpen={mobileActionsFor === m.id}
                 hoverActions={hoverCapable}
                 flash={flashId === m.id}
                 onDoubleTap={
-                  m.kind === 'text'
+                  !isTemp && m.kind === 'text'
                     ? () => react.mutate({ messageId: m.id, emoji: '👍' })
                     : undefined
                 }
@@ -1286,12 +1394,6 @@ function ConversacionTab({
               <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/60 [animation-delay:-150ms]" />
               <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground/60" />
             </div>
-          </div>
-        ) : null}
-        {uploading ? (
-          <div className="flex items-center gap-2 rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            {uploadLabel}
           </div>
         ) : null}
       </div>
@@ -1335,6 +1437,41 @@ function ConversacionTab({
             </button>
           </div>
         ) : null}
+        {/* Adjuntos en STAGING: quedan cargados aqui (como Google Chat) y
+            salen junto con el mensaje al enviar. X para quitarlos. */}
+        {staged.length > 0 ? (
+          <div className="mb-2 flex flex-wrap gap-2.5">
+            {staged.map((s) => (
+              <div key={s.id} className="relative">
+                {s.file.type.startsWith('image/') ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={s.url}
+                    alt={s.file.name}
+                    className="h-20 w-20 rounded-xl border border-border bg-muted object-cover"
+                  />
+                ) : s.file.type.startsWith('video/') ? (
+                  <video src={s.url} className="h-20 w-20 rounded-xl border border-border bg-black object-cover" />
+                ) : (
+                  <div className="flex h-20 w-20 flex-col items-center justify-center gap-1 rounded-xl border border-border bg-muted px-1.5 text-center">
+                    <Paperclip className="h-4 w-4 text-muted-foreground" />
+                    <span className="line-clamp-2 break-all text-[9px] leading-tight text-muted-foreground">
+                      {s.file.name}
+                    </span>
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => unstage(s.id)}
+                  aria-label={`Quitar ${s.file.name}`}
+                  className="absolute -right-1.5 -top-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-foreground text-background shadow-md"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : null}
         {/* items-end: si el campo crece a varias lineas, los botones quedan
             abajo (como WhatsApp). */}
         <div className="flex items-end gap-2">
@@ -1344,7 +1481,8 @@ function ConversacionTab({
               size="icon"
               variant="ghost"
               onClick={() => setAttachOpen((o) => !o)}
-              disabled={uploading}
+              // Se pueden adjuntar mas cosas mientras otras suben (cada una
+              // muestra su progreso en su propia burbuja).
               aria-label="Adjuntar foto"
               className="h-10 w-10 rounded-full text-muted-foreground hover:text-foreground md:h-9 md:w-9"
             >
@@ -1354,19 +1492,20 @@ function ConversacionTab({
                 <Paperclip className="h-[18px] w-[18px] md:h-4 md:w-4" />
               )}
             </Button>
-            {attachOpen ? (
+            {attachOpen && isDesktop ? (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setAttachOpen(false)} />
                 <div className="absolute bottom-full left-0 z-20 mb-2 w-52 overflow-hidden rounded-lg border border-border bg-popover p-1 shadow-lg">
                   <p className="px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                     Leer codigo
                   </p>
-                  <AttachOption icon={Camera} label="Foto IMEI" onClick={() => pickPhoto('imei')} />
+                  <AttachOption icon={ScanBarcode} label="Foto IMEI" onClick={() => pickPhoto('imei')} />
                   <AttachOption icon={ScanLine} label="Foto serial" onClick={() => pickPhoto('serial')} />
                   <div className="my-1 h-px bg-border" />
                   <p className="px-2 pb-1 pt-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                     Adjuntar
                   </p>
+                  <AttachOption icon={Camera} label="Cámara" onClick={pickCamera} />
                   <AttachOption
                     icon={ImageIcon}
                     label="Foto o video"
@@ -1380,6 +1519,41 @@ function ConversacionTab({
                 </div>
               </>
             ) : null}
+            {/* Cel: hoja inferior estilo Google Chat (opciones grandes). */}
+            {attachOpen && !isDesktop && typeof document !== 'undefined'
+              ? createPortal(
+                  <div className="fixed inset-0 z-[75]">
+                    <div
+                      className="absolute inset-0 bg-[rgba(5,8,14,0.5)]"
+                      onClick={() => setAttachOpen(false)}
+                    />
+                    <div className="shadow-pop absolute inset-x-0 bottom-0 rounded-t-2xl bg-popover pb-[max(env(safe-area-inset-bottom),10px)] pt-2">
+                      <div className="mx-auto mb-1.5 h-1.5 w-12 rounded-full bg-muted-foreground/25" />
+                      <SheetOption
+                        icon={ScanBarcode}
+                        label="Foto IMEI"
+                        hint="Toma la foto y la IA lee el código"
+                        onClick={() => pickPhoto('imei')}
+                      />
+                      <SheetOption
+                        icon={ScanLine}
+                        label="Foto serial"
+                        hint="Toma la foto y la IA lee el serial"
+                        onClick={() => pickPhoto('serial')}
+                      />
+                      <div className="mx-5 my-1 h-px bg-border" />
+                      <SheetOption icon={Camera} label="Cámara" onClick={pickCamera} />
+                      <SheetOption
+                        icon={ImageIcon}
+                        label="Foto o video"
+                        onClick={() => pickAttachment('image/*,video/*')}
+                      />
+                      <SheetOption icon={Paperclip} label="Archivo" onClick={() => pickAttachment('*')} />
+                    </div>
+                  </div>,
+                  document.body,
+                )
+              : null}
           </div>
           <input
             ref={fileRef}
@@ -1389,12 +1563,25 @@ function ConversacionTab({
             className="hidden"
             onChange={(e) => onFile(e.target.files?.[0] ?? null)}
           />
+          {/* Camara como adjunto normal: la foto queda en la barra (staging). */}
+          <input
+            ref={cameraRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => {
+              stageFiles(e.target.files);
+              e.target.value = '';
+            }}
+          />
           <input
             ref={attachRef}
             type="file"
             accept={attachAccept}
+            multiple
             className="hidden"
-            onChange={(e) => onAttachmentFile(e.target.files?.[0] ?? null)}
+            onChange={(e) => onAttachmentFile(e.target.files)}
           />
           <div className="relative flex-1">
             {mention && mentionMatches.length > 0 ? (
@@ -1432,6 +1619,13 @@ function ConversacionTab({
               }}
               onKeyUp={syncMention}
               onClick={syncMention}
+              // Pegar una imagen copiada (Ctrl+V): queda cargada en la barra.
+              onPaste={(e) => {
+                if (e.clipboardData?.files && e.clipboardData.files.length > 0) {
+                  e.preventDefault();
+                  stageFiles(e.clipboardData.files);
+                }
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Escape' && mention) {
                   setMention(null);
@@ -1465,7 +1659,7 @@ function ConversacionTab({
           <button
             type="button"
             onClick={submit}
-            disabled={!text.trim()}
+            disabled={!text.trim() && staged.length === 0}
             aria-label="Enviar"
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground transition-[filter] hover:brightness-110 disabled:pointer-events-none disabled:opacity-40 md:h-9 md:w-9"
           >
@@ -1581,6 +1775,47 @@ function AttachOption({
     >
       <Icon className="h-4 w-4 text-muted-foreground" />
       {label}
+    </button>
+  );
+}
+
+/** Barra de progreso de subida (dentro de la burbuja optimista). */
+function UploadBar({ value }: { value?: number }) {
+  return (
+    <div className="h-1 w-full overflow-hidden rounded-full bg-muted-foreground/20">
+      <div
+        className="h-full rounded-full bg-accent transition-[width] duration-200"
+        style={{ width: `${Math.min(100, Math.max(6, value ?? 6))}%` }}
+      />
+    </div>
+  );
+}
+
+/** Fila grande de la hoja inferior de adjuntar (cel, estilo Google Chat). */
+function SheetOption({
+  icon: Icon,
+  label,
+  hint,
+  onClick,
+}: {
+  icon: typeof Camera;
+  label: string;
+  hint?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-center gap-4 px-5 py-3 text-left active:bg-muted"
+    >
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-muted text-foreground">
+        <Icon className="h-5 w-5" />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-[15px] font-medium">{label}</span>
+        {hint ? <span className="block text-[12px] text-muted-foreground">{hint}</span> : null}
+      </span>
     </button>
   );
 }
@@ -2030,21 +2265,28 @@ function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolea
 
   // TODOS los medios comparten el mismo ancho (230px, como la Foto IMEI): la
   // columna de adjuntos queda alineada y ordenada, nada de anchos dispares.
+  const pending = message.id.startsWith('temp-');
+  const progress = (message as PendingMsg).progress;
   if (url && mime.startsWith('image/')) {
     return (
       <a
-        href={url}
+        href={pending ? undefined : url}
         target="_blank"
         rel="noreferrer"
         className={cn(
           // bg-muted: las fotos blancas no se funden con el fondo blanco del chat.
-          'block w-[230px] max-w-full overflow-hidden rounded-[14px] border bg-muted',
+          'relative block w-[230px] max-w-full overflow-hidden rounded-[14px] border bg-muted',
           mine ? 'rounded-br-sm border-accent/25' : 'rounded-bl-sm border-border',
         )}
         title={name}
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={url} alt={name} className="h-auto max-h-64 w-full object-cover" loading="lazy" />
+        {pending ? (
+          <span className="absolute inset-x-2.5 bottom-2.5">
+            <UploadBar value={progress} />
+          </span>
+        ) : null}
       </a>
     );
   }
@@ -2080,9 +2322,19 @@ function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolea
       </span>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium">{name}</p>
-        <p className="text-[11px] text-muted-foreground">Toca para abrir</p>
+        {pending ? (
+          <div className="mt-1.5">
+            <UploadBar value={progress} />
+          </div>
+        ) : (
+          <p className="text-[11px] text-muted-foreground">Toca para abrir</p>
+        )}
       </div>
-      <Download className="h-4 w-4 shrink-0 text-muted-foreground" />
+      {pending ? (
+        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+      ) : (
+        <Download className="h-4 w-4 shrink-0 text-muted-foreground" />
+      )}
     </a>
   );
 }
@@ -2125,16 +2377,29 @@ function PhotoCard({
           {isSerial ? <ScanLine className="h-3 w-3" /> : <Camera className="h-3 w-3" />}
           {isSerial ? 'Foto serial' : 'Foto IMEI'}
         </p>
-        <div className="space-y-1.5">
-          {message.imeis.map((code) => (
-            <CodeRow
-              key={code}
-              code={code}
-              match={matchByCode?.get(code) ?? null}
-              showMatch={Boolean(matchByCode)}
-            />
-          ))}
-        </div>
+        {message.id.startsWith('temp-') ? (
+          // Burbuja optimista: la subida y la lectura de IA corren AQUI.
+          <div className="space-y-1.5">
+            <UploadBar value={(message as PendingMsg).progress} />
+            <p className="flex items-center gap-1.5 text-[12px] text-muted-foreground md:text-[11px]">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              {((message as PendingMsg).progress ?? 0) < 100
+                ? 'Subiendo foto…'
+                : 'Leyendo códigos con IA…'}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {message.imeis.map((code) => (
+              <CodeRow
+                key={code}
+                code={code}
+                match={matchByCode?.get(code) ?? null}
+                showMatch={Boolean(matchByCode)}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

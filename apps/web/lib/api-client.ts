@@ -118,6 +118,42 @@ export async function apiUpload<T = unknown>(path: string, formData: FormData): 
   return data as T;
 }
 
+/**
+ * Subida con PROGRESO real (XHR: fetch no expone el progreso de upload).
+ * onProgress recibe 0..100. Mismo manejo de credenciales/errores que apiUpload.
+ */
+export function apiUploadWithProgress<T = unknown>(
+  path: string,
+  formData: FormData,
+  onProgress?: (percent: number) => void,
+): Promise<T> {
+  const url = new URL(path.startsWith('/') ? path : `/${path}`, API_URL);
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url.toString());
+    xhr.withCredentials = true;
+    xhr.setRequestHeader('Accept', 'application/json');
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      }
+    };
+    xhr.onload = () => {
+      const data = safeJsonParse(xhr.responseText);
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(data as T);
+      } else {
+        const message =
+          (data as { message?: string } | null)?.message ??
+          `Request failed with status ${xhr.status}`;
+        reject(new ApiError(xhr.status, message, data));
+      }
+    };
+    xhr.onerror = () => reject(new ApiError(0, 'Fallo de red durante la subida'));
+    xhr.send(formData);
+  });
+}
+
 /** Descarga un recurso binario (ej. un PDF) como ArrayBuffer, con credenciales. */
 export async function apiFetchArrayBuffer(path: string): Promise<ArrayBuffer> {
   const url = new URL(path.startsWith('/') ? path : `/${path}`, API_URL);
@@ -140,6 +176,11 @@ export const api = {
     apiFetch<T>(path, { ...options, method: 'GET' }),
   getArrayBuffer: (path: string) => apiFetchArrayBuffer(path),
   upload: <T>(path: string, formData: FormData) => apiUpload<T>(path, formData),
+  uploadWithProgress: <T>(
+    path: string,
+    formData: FormData,
+    onProgress?: (percent: number) => void,
+  ) => apiUploadWithProgress<T>(path, formData, onProgress),
   post: <T>(path: string, body?: unknown, options?: Omit<RequestOptions, 'body' | 'method'>) =>
     apiFetch<T>(path, { ...options, method: 'POST', body }),
   put: <T>(path: string, body?: unknown, options?: Omit<RequestOptions, 'body' | 'method'>) =>
