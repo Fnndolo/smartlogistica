@@ -54,8 +54,11 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  // Permite acercar (accesibilidad) pero evita el zoom accidental al hacer tap.
-  maximumScale: 5,
+  // Escala FIJA (como una app nativa): sin auto-zoom al enfocar campos ni
+  // zoom pegado al reabrir. La legibilidad se resuelve con tamanos moviles
+  // propios, no con pinch.
+  maximumScale: 1,
+  userScalable: false,
   // Pinta bajo el notch/isla en pantalla completa (usar con safe-area-inset).
   viewportFit: 'cover',
   // Teclado del celular: REDIMENSIONA el contenido en vez de empujar toda la

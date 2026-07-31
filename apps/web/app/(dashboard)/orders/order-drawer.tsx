@@ -260,16 +260,16 @@ function DrawerContent({
         </button>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="font-mono text-[12px] text-muted-foreground md:text-[11px]">
+            <span className="font-mono text-[12.5px] text-muted-foreground md:text-[11px]">
               #{order.externalId}
             </span>
             <StatusPill status={order.status} />
           </div>
-          <h2 className="mt-1 truncate text-lg font-semibold tracking-tight md:text-[17px]">
+          <h2 className="mt-1 truncate text-[19px] font-semibold tracking-tight md:text-[17px]">
             {titleCaseName(order.customerName)}
           </h2>
           {order.customerDocument ? (
-            <p className="font-mono text-[11.5px] text-muted-foreground/80 md:text-[11px]">
+            <p className="font-mono text-[12px] text-muted-foreground/80 md:text-[11px]">
               CC {order.customerDocument}
             </p>
           ) : null}
@@ -301,7 +301,7 @@ function DrawerContent({
               className={cn(
                 // Inactivas grisaceas y finas; la activa en negrilla suave.
                 // En cel todo un punto mas grande (proporcional a la pantalla).
-                'relative flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-3 text-[13.5px] transition-colors md:px-2.5 md:py-2.5 md:text-[12.5px]',
+                'relative flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-3 text-[14.5px] transition-colors md:px-2.5 md:py-2.5 md:text-[12.5px]',
                 active
                   ? 'font-semibold text-foreground'
                   : 'font-normal text-muted-foreground/75 hover:text-foreground',
@@ -1193,7 +1193,7 @@ function ConversacionTab({
                 {isUnreadBoundary ? (
                   <div id="chat-unread-divider" className="mt-4 flex items-center gap-3">
                     <span className="h-px flex-1 rounded bg-accent/30" />
-                    <span className="text-[11px] font-semibold tracking-[0.06em] text-accent">
+                    <span className="text-[12px] font-semibold tracking-[0.06em] text-accent md:text-[11px]">
                       No leídos
                     </span>
                     <span className="h-px flex-1 rounded bg-accent/30" />
@@ -1246,7 +1246,7 @@ function ConversacionTab({
             rebotando, como un mensaje entrante en camino. */}
         {typingUsers.size > 0 ? (
           <div className="mt-3 flex flex-col items-start">
-            <span className="mb-1 px-1 text-[10.5px] font-semibold text-muted-foreground">
+            <span className="mb-1 px-1 text-[12px] font-semibold text-muted-foreground md:text-[10.5px]">
               {[...typingUsers.values()].map((t) => t.name).join(', ')}
             </span>
             <div className="flex items-center gap-1 rounded-2xl rounded-bl-md bg-muted px-3.5 py-[11px]">
@@ -1422,7 +1422,9 @@ function ConversacionTab({
               // inline por defecto y el baseline los descuadra unos pixeles).
               // Pill redonda estilo WhatsApp (como el mockup aprobado).
               // Pill GRIS que resalta sobre el drawer blanco (mockup).
-              className="block h-10 w-full resize-none rounded-full border border-input bg-muted px-4 py-2.5 text-[15px] leading-5 outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring md:h-9 md:py-2 md:text-[12.5px]"
+              // 16px en cel: ademas de legible, es el minimo que EVITA el
+              // auto-zoom del navegador al enfocar el campo.
+              className="block h-10 w-full resize-none rounded-full border border-input bg-muted px-4 py-2.5 text-[16px] leading-5 outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring md:h-9 md:py-2 md:text-[12.5px]"
             />
           </div>
           {/* Enviar: circulo en acento cobalto (mockup). */}
@@ -1715,7 +1717,7 @@ function MessageBubble({
   if (message.kind === 'system') {
     return (
       <div id={`msg-${message.id}`} className="mt-3 flex justify-center py-1 first:mt-0">
-        <span className="rounded-full bg-muted px-3 py-1 text-center text-[11px] text-muted-foreground">
+        <span className="rounded-full bg-muted px-3 py-1 text-center text-[12px] text-muted-foreground md:text-[11px]">
           {message.body}
         </span>
       </div>
@@ -1771,7 +1773,7 @@ function MessageBubble({
     <div
       className={cn(
         // En cel el texto va un punto mas grande (15px); en escritorio text-sm.
-        'px-3.5 py-2 text-[15px] md:text-[13px]',
+        'px-3.5 py-2 text-[16px] leading-[1.4] md:text-[13px] md:leading-[1.45]',
         radius,
         // Mios en AZUL cobalto (pedido del user: nada de negro); otros en gris
         // que resalta sobre el fondo blanco del drawer.
@@ -1805,7 +1807,7 @@ function MessageBubble({
     >
       {/* Cabecera del grupo: nombre (otros) + hora, UNA vez por conjunto. */}
       {!grouped ? (
-        <span className="mb-1 px-1 text-[11.5px] text-muted-foreground md:text-[10.5px]">
+        <span className="mb-1 px-1 text-[12.5px] text-muted-foreground md:text-[10.5px]">
           {!mine ? <span className="font-semibold">{author}</span> : null}
           {!mine ? ' · ' : ''}
           {format(new Date(message.createdAt), 'd MMM, HH:mm', { locale: es })}
@@ -1897,14 +1899,16 @@ function MessageBubble({
               title={r.users.join(', ')}
               className={cn(
                 // Chips finos con tinte de acento (mockup), los mios mas marcados.
-                'flex items-center gap-1 rounded-full border px-2 py-px text-[11px] transition-all hover:-translate-y-px',
+                'flex items-center gap-1 rounded-full border px-2 py-[2px] text-[13px] transition-all hover:-translate-y-px md:py-px md:text-[11px]',
                 r.mine
                   ? 'border-accent/60 bg-accent/15 text-accent'
                   : 'border-accent/30 bg-accent/10 hover:border-accent/50',
               )}
             >
-              <span className="text-[11px] leading-none">{r.emoji}</span>
-              <span className="font-mono text-[10.5px] tabular-nums text-accent">{r.count}</span>
+              <span className="text-[13px] leading-none md:text-[11px]">{r.emoji}</span>
+              <span className="font-mono text-[11.5px] tabular-nums text-accent md:text-[10.5px]">
+                {r.count}
+              </span>
             </button>
           ))}
         </div>

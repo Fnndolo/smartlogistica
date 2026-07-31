@@ -103,7 +103,7 @@ export function MobileBottomNav() {
             href={tab.href}
             prefetch
             className={cn(
-              'flex flex-col items-center justify-center gap-0.5 py-2 text-[10px] font-medium transition-colors',
+              'flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] font-medium transition-colors',
               active ? 'text-foreground' : 'text-muted-foreground',
             )}
           >

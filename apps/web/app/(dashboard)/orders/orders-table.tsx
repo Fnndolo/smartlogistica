@@ -587,13 +587,12 @@ function OrderCard({
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
-          <span className="flex min-w-0 items-center gap-1.5 font-mono text-[12px] text-muted-foreground">
+          <span className="flex min-w-0 items-center gap-1.5 font-mono text-[12.5px] text-muted-foreground">
             {order.claimedBy ? (
               <ClaimChip
                 userId={order.claimedBy.userId}
                 name={order.claimedBy.name}
                 mine={order.claimedBy.mine}
-                className="h-[19px] w-[19px] text-[7.5px]"
               />
             ) : null}
             <span className="truncate">{order.externalId}</span>
@@ -605,7 +604,7 @@ function OrderCard({
         </div>
 
         <div className="mt-1 flex items-center gap-1.5">
-          <span className="truncate text-[15px] font-medium text-foreground">
+          <span className="truncate text-[16px] font-medium text-foreground">
             {titleCaseName(order.customerName)}
           </span>
           {order.unreadCount > 0 ? (
@@ -616,13 +615,13 @@ function OrderCard({
         </div>
 
         {first ? (
-          <p className="mt-0.5 truncate text-[13.5px] text-muted-foreground">
+          <p className="mt-0.5 truncate text-[14px] text-muted-foreground">
             {first.name}
             {extra > 0 ? <span className="text-muted-foreground"> +{extra}</span> : null}
           </p>
         ) : null}
 
-        <div className="mt-1.5 flex items-center justify-between gap-2 text-[12px] text-muted-foreground">
+        <div className="mt-1.5 flex items-center justify-between gap-2 text-[12.5px] text-muted-foreground">
           <span className="tabular-nums">
             {order.totalUnits} un &middot;{' '}
             <span className="font-medium text-foreground">

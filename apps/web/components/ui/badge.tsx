@@ -3,8 +3,9 @@ import { cva, type VariantProps } from 'class-variance-authority';
 
 import { cn } from '@/lib/utils';
 
+// En cel las pills van un punto mas grandes (proporcional a la pantalla).
 const badgeVariants = cva(
-  'inline-flex items-center gap-[5px] whitespace-nowrap rounded-full border px-[9px] py-[2.5px] text-[10px] font-semibold uppercase tracking-[0.06em] transition-colors',
+  'inline-flex items-center gap-[5px] whitespace-nowrap rounded-full border px-[10px] py-[3px] text-[10.5px] font-semibold uppercase tracking-[0.06em] transition-colors md:px-[9px] md:py-[2.5px] md:text-[10px]',
   {
     variants: {
       variant: {
