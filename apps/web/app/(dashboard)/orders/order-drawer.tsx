@@ -590,6 +590,17 @@ function ConversacionTab({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
 
+  // El campo CRECE con el texto (estilo WhatsApp) hasta 120px; el scrollbar
+  // solo aparece pasado ese tope. Al enviar (text vacio) vuelve a una linea.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const max = 120;
+    el.style.height = `${Math.min(el.scrollHeight, max)}px`;
+    el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden';
+  }, [text]);
+
   const { data: messages = [], isLoading } = useQuery({
     ...orderMessagesQuery(orderId),
     refetchInterval: 15_000, // respaldo; la inmediatez la da el SSE
@@ -1303,10 +1314,11 @@ function ConversacionTab({
             </button>
           </div>
         ) : null}
-        {/* items-center + h-9 FIJO en los tres: imposible que queden dispares. */}
-        <div className="flex items-center gap-2">
+        {/* items-end: si el campo crece a varias lineas, los botones quedan
+            abajo (como WhatsApp). */}
+        <div className="flex items-end gap-2">
           {/* Adjuntar foto (IMEI / serial) */}
-          <div className="relative h-9">
+          <div className="relative h-10 md:h-9">
             <Button
               size="icon"
               variant="ghost"
@@ -1422,9 +1434,10 @@ function ConversacionTab({
               // inline por defecto y el baseline los descuadra unos pixeles).
               // Pill redonda estilo WhatsApp (como el mockup aprobado).
               // Pill GRIS que resalta sobre el drawer blanco (mockup).
-              // 16px en cel: ademas de legible, es el minimo que EVITA el
-              // auto-zoom del navegador al enfocar el campo.
-              className="block h-10 w-full resize-none rounded-full border border-input bg-muted px-4 py-2.5 text-[16px] leading-5 outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring md:h-9 md:py-2 md:text-[12.5px]"
+              // 16px en cel (minimo anti auto-zoom). Medidas EXACTAS para una
+              // linea (44px cel / 36px pc): sin scrollbar; crece solo (efecto
+              // de abajo) hasta 120px y recien ahi aparece el scroll.
+              className="block max-h-[120px] min-h-[44px] w-full resize-none overflow-hidden rounded-[22px] border border-input bg-muted px-4 py-[11px] text-[16px] leading-[22px] outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring md:min-h-9 md:rounded-[18px] md:py-2 md:text-[12.5px] md:leading-5"
             />
           </div>
           {/* Enviar: circulo en acento cobalto (mockup). */}
