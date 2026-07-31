@@ -248,40 +248,47 @@ function DrawerContent({
   return (
     <>
       {/* Header */}
-      <header className="flex items-start justify-between gap-3 border-b border-border px-4 pb-3 pt-4 md:px-5">
+      <header className="flex items-start justify-between gap-3 border-b border-border px-4 pb-3 pt-3 md:px-5 md:pt-4">
         {/* Cel: flecha de volver (equivale al boton atras del sistema). */}
         <button
           type="button"
           onClick={onClose}
-          className="-ml-1 mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground active:bg-muted md:hidden"
+          className="-ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground active:bg-muted md:hidden"
           aria-label="Volver a los pedidos"
         >
           <ArrowLeft className="h-5 w-5" />
         </button>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-[12.5px] text-muted-foreground md:text-[11px]">
+          {/* Cel: el N° y el estado usan TODO el ancho, centrados (sin partirse
+              en dos lineas por culpa del boton). En pc, a la izquierda. */}
+          <div className="flex items-center justify-center gap-2 md:justify-start">
+            <span className="truncate whitespace-nowrap font-mono text-[12.5px] text-muted-foreground md:text-[11px]">
               #{order.externalId}
             </span>
             <StatusPill status={order.status} />
           </div>
-          <h2 className="mt-1 truncate text-[19px] font-semibold tracking-tight md:text-[17px]">
-            {titleCaseName(order.customerName)}
-          </h2>
+          {/* Cel: el boton de tomar/soltar baja AL LADO del nombre. */}
+          <div className="mt-1.5 flex items-center justify-between gap-3 md:mt-1 md:justify-start">
+            <h2 className="min-w-0 truncate text-[19px] font-semibold tracking-tight md:text-[17px]">
+              {titleCaseName(order.customerName)}
+            </h2>
+            <span className="shrink-0 md:hidden">
+              <DrawerClaim order={detail ?? order} />
+            </span>
+          </div>
           {order.customerDocument ? (
             <p className="font-mono text-[12px] text-muted-foreground/80 md:text-[11px]">
               CC {order.customerDocument}
             </p>
           ) : null}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        {/* Escritorio: tomar/soltar + X grande, separadas para no equivocarse. */}
+        <div className="hidden shrink-0 items-center gap-2 md:flex">
           <DrawerClaim order={detail ?? order} />
-          {/* La X solo en escritorio (en cel: flecha o boton atras), grande y
-              separada del control de tomar/soltar para no equivocarse. */}
           <button
             type="button"
             onClick={onClose}
-            className="ml-1.5 hidden h-9 w-9 items-center justify-center rounded-lg border border-transparent text-muted-foreground hover:border-border hover:bg-muted hover:text-foreground md:flex"
+            className="ml-1.5 flex h-9 w-9 items-center justify-center rounded-lg border border-transparent text-muted-foreground hover:border-border hover:bg-muted hover:text-foreground"
             aria-label="Cerrar"
           >
             <X className="h-[18px] w-[18px]" />
@@ -580,6 +587,15 @@ function ConversacionTab({
   const [hoverCapable] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(hover: hover)').matches,
   );
+  // Placeholder segun pantalla: "Escribe un mensaje" en pc, "Mensaje" en cel.
+  const [isDesktop, setIsDesktop] = useState(true);
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 768px)');
+    const update = () => setIsDesktop(mq.matches);
+    update();
+    mq.addEventListener('change', update);
+    return () => mq.removeEventListener('change', update);
+  }, []);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const pendingKind = useRef<DevicePhotoKind>('imei');
@@ -1429,7 +1445,7 @@ function ConversacionTab({
                 }
               }}
               rows={1}
-              placeholder="Escribe un mensaje... (@ para mencionar)"
+              placeholder={isDesktop ? 'Escribe un mensaje' : 'Mensaje'}
               // h-9 EXACTO (igual que los botones) + block (los textarea son
               // inline por defecto y el baseline los descuadra unos pixeles).
               // Pill redonda estilo WhatsApp (como el mockup aprobado).
@@ -1437,7 +1453,7 @@ function ConversacionTab({
               // 16px en cel (minimo anti auto-zoom). Medidas EXACTAS para una
               // linea (44px cel / 36px pc): sin scrollbar; crece solo (efecto
               // de abajo) hasta 120px y recien ahi aparece el scroll.
-              className="block max-h-[120px] min-h-[44px] w-full resize-none overflow-hidden rounded-[22px] border border-input bg-muted px-4 py-[11px] text-[16px] leading-[22px] outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring md:min-h-9 md:rounded-[18px] md:py-2 md:text-[12.5px] md:leading-5"
+              className="scrollbar-none block max-h-[120px] min-h-[44px] w-full resize-none overflow-hidden rounded-[22px] border border-input bg-muted px-4 py-[11px] text-[16px] leading-[22px] outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring md:min-h-9 md:rounded-[18px] md:py-2 md:text-[12.5px] md:leading-5"
             />
           </div>
           {/* Enviar: circulo en acento cobalto (mockup). */}

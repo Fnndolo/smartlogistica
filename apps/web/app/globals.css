@@ -118,6 +118,15 @@
   .ring-halo {
     box-shadow: 0 0 0 3px hsl(var(--accent) / 0.18);
   }
+  /* Scroll SIN barra visible (campo de mensaje: la barra rompia la pill
+     redondeada). Se sigue scrolleando con dedo/teclado/rueda. */
+  .scrollbar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
   /* Badge de no leidos: aro azul clarito que se desvanece y vuelve (mockup). */
   .animate-unread {
     animation: unread-breathe 3s ease-in-out infinite;
