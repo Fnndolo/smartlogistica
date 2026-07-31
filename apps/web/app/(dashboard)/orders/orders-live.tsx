@@ -272,9 +272,11 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       {/* Encabezado de la vista (mockup): migas + titulo + chip "En vivo" al
           lado + rango en mono a la derecha, con un brillo cobalto sutil. */}
       <div className="relative">
+        {/* w-full max-w: el brillo NUNCA es mas ancho que la pantalla (en cel
+            un ancho fijo creaba paneo horizontal de toda la pagina). */}
         <div
           aria-hidden
-          className="pointer-events-none absolute -left-8 -top-8 h-40 w-[540px] rounded-full bg-accent/[0.07] blur-3xl"
+          className="pointer-events-none absolute -top-8 left-0 h-40 w-full max-w-[540px] rounded-full bg-accent/[0.07] blur-3xl"
         />
         <nav className="relative mb-1.5 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
           {crumbs.map((c, i) => (

@@ -89,6 +89,10 @@
   body {
     @apply bg-background text-foreground antialiased;
     font-feature-settings: 'rlig' 1, 'calt' 1, 'ss01' 1;
+    /* App-like: NUNCA paneo horizontal de la pagina (los anchos scrollean en
+       sus propios contenedores, p. ej. la tabla). */
+    overflow-x: hidden;
+    overscroll-behavior-x: none;
   }
   ::selection {
     background: hsl(var(--accent) / 0.25);

@@ -960,10 +960,12 @@ function ConversacionTab({
       setText('');
       setMention(null);
       setReplyTo(null);
-      return;
+    } else {
+      if (!body) return;
+      send.mutate({ body, mentions: mentionsInText(body, members), replyToId: replyTo?.id });
     }
-    if (!body) return;
-    send.mutate({ body, mentions: mentionsInText(body, members), replyToId: replyTo?.id });
+    // El teclado NO se baja al enviar (como WhatsApp): el campo sigue enfocado.
+    textareaRef.current?.focus();
   };
 
   // Alternar una reaccion. OPTIMISTA: el chip cambia AL INSTANTE (como en
@@ -1700,6 +1702,8 @@ function ConversacionTab({
           <button
             type="button"
             onClick={submit}
+            // Que el boton no ROBE el foco del campo (bajaba el teclado en cel).
+            onPointerDown={(e) => e.preventDefault()}
             disabled={!text.trim() && staged.length === 0}
             aria-label="Enviar"
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground transition-[filter] hover:brightness-110 disabled:pointer-events-none disabled:opacity-40 md:h-9 md:w-9"
