@@ -267,20 +267,23 @@ function DrawerContent({
             </span>
             <StatusPill status={order.status} />
           </div>
-          {/* Cel: el boton de tomar/soltar baja AL LADO del nombre. */}
-          <div className="mt-1.5 flex items-center justify-between gap-3 md:mt-1 md:justify-start">
-            <h2 className="min-w-0 truncate text-[19px] font-semibold tracking-tight md:text-[17px]">
-              {titleCaseName(order.customerName)}
-            </h2>
+          {/* Cel: el boton de tomar/soltar CENTRADO verticalmente contra el
+              bloque nombre + cedula (las filas que haya). */}
+          <div className="mt-1.5 flex items-center justify-between gap-3 md:mt-1">
+            <div className="min-w-0">
+              <h2 className="truncate text-[19px] font-semibold tracking-tight md:text-[17px]">
+                {titleCaseName(order.customerName)}
+              </h2>
+              {order.customerDocument ? (
+                <p className="font-mono text-[12px] text-muted-foreground/80 md:text-[11px]">
+                  CC {order.customerDocument}
+                </p>
+              ) : null}
+            </div>
             <span className="shrink-0 md:hidden">
               <DrawerClaim order={detail ?? order} />
             </span>
           </div>
-          {order.customerDocument ? (
-            <p className="font-mono text-[12px] text-muted-foreground/80 md:text-[11px]">
-              CC {order.customerDocument}
-            </p>
-          ) : null}
         </div>
         {/* Escritorio: tomar/soltar + X grande, separadas para no equivocarse. */}
         <div className="hidden shrink-0 items-center gap-2 md:flex">
@@ -297,7 +300,9 @@ function DrawerContent({
       </header>
 
       {/* Tabs */}
-      <nav className="flex gap-1 overflow-x-auto border-b border-border px-3">
+      {/* overflow-y-hidden: NUNCA scroll vertical aqui (aparecia una barrita
+          sin sentido). El lateral (auto) solo sale si las tabs no caben. */}
+      <nav className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-border px-3">
         {tabs.map((t) => {
           const active = tab === t.id;
           return (
