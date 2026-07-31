@@ -15,6 +15,7 @@ import {
   Activity,
   AlertTriangle,
   ArrowRightLeft,
+  ArrowLeft,
   Camera,
   Check,
   ChevronDown,
@@ -104,6 +105,32 @@ export function OrderDrawer({
   // Mantener el contenido montado durante la animacion de salida.
   const [rendered, setRendered] = useState<OrderSummary | null>(order);
   const [shown, setShown] = useState(false);
+
+  // BOTON ATRAS (cel): al abrir el drawer se agrega una entrada al historial;
+  // "atras" cierra la conversacion y te deja EN la lista de pedidos (antes te
+  // sacaba a Sedes/Resumen). Cerrar por otra via consume esa entrada.
+  const historyOpenRef = useRef(false);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    if (order && !historyOpenRef.current) {
+      historyOpenRef.current = true;
+      window.history.pushState({ slDrawer: true }, '');
+    } else if (!order && historyOpenRef.current) {
+      historyOpenRef.current = false;
+      if (window.history.state?.slDrawer) window.history.back();
+    }
+  }, [order]);
+  useEffect(() => {
+    const onPop = () => {
+      if (historyOpenRef.current) {
+        historyOpenRef.current = false;
+        onCloseRef.current();
+      }
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
   // Portal a <body>: evita que el drawer herede margenes/containing-block de sus
   // contenedores (el `space-y-6` de la pagina le metia margin-top:24px y por eso
   // el overlay `fixed inset-0` arrancaba 24px mas abajo, dejando ver el fondo).
@@ -221,30 +248,43 @@ function DrawerContent({
   return (
     <>
       {/* Header */}
-      <header className="flex items-start justify-between gap-3 border-b border-border px-5 pb-3 pt-4">
-        <div className="min-w-0">
+      <header className="flex items-start justify-between gap-3 border-b border-border px-4 pb-3 pt-4 md:px-5">
+        {/* Cel: flecha de volver (equivale al boton atras del sistema). */}
+        <button
+          type="button"
+          onClick={onClose}
+          className="-ml-1 mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground active:bg-muted md:hidden"
+          aria-label="Volver a los pedidos"
+        >
+          <ArrowLeft className="h-5 w-5" />
+        </button>
+        <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="font-mono text-[11px] text-muted-foreground">#{order.externalId}</span>
+            <span className="font-mono text-[12px] text-muted-foreground md:text-[11px]">
+              #{order.externalId}
+            </span>
             <StatusPill status={order.status} />
           </div>
-          <h2 className="mt-1 truncate text-[17px] font-semibold tracking-tight">
+          <h2 className="mt-1 truncate text-lg font-semibold tracking-tight md:text-[17px]">
             {titleCaseName(order.customerName)}
           </h2>
           {order.customerDocument ? (
-            <p className="font-mono text-[11px] text-muted-foreground/80">
+            <p className="font-mono text-[11.5px] text-muted-foreground/80 md:text-[11px]">
               CC {order.customerDocument}
             </p>
           ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <DrawerClaim order={detail ?? order} />
+          {/* La X solo en escritorio (en cel: flecha o boton atras), grande y
+              separada del control de tomar/soltar para no equivocarse. */}
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="ml-1.5 hidden h-9 w-9 items-center justify-center rounded-lg border border-transparent text-muted-foreground hover:border-border hover:bg-muted hover:text-foreground md:flex"
             aria-label="Cerrar"
           >
-            <X className="h-4 w-4" />
+            <X className="h-[18px] w-[18px]" />
           </button>
         </div>
       </header>
@@ -260,13 +300,14 @@ function DrawerContent({
               onClick={() => setTab(t.id)}
               className={cn(
                 // Inactivas grisaceas y finas; la activa en negrilla suave.
-                'relative flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-2.5 text-[12.5px] transition-colors',
+                // En cel todo un punto mas grande (proporcional a la pantalla).
+                'relative flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-3 text-[13.5px] transition-colors md:px-2.5 md:py-2.5 md:text-[12.5px]',
                 active
                   ? 'font-semibold text-foreground'
                   : 'font-normal text-muted-foreground/75 hover:text-foreground',
               )}
             >
-              <t.icon className="h-3.5 w-3.5" />
+              <t.icon className="h-4 w-4 md:h-3.5 md:w-3.5" />
               {t.label}
               {active ? (
                 <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-accent" />
@@ -1116,7 +1157,7 @@ function ConversacionTab({
           // Tocar fuera cierra las acciones ancladas del long-press.
           if (mobileActionsFor) setMobileActionsFor(null);
         }}
-        className="flex min-h-0 flex-1 flex-col overflow-y-auto px-[18px] pb-2 pt-[18px]"
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden px-3.5 pb-2 pt-[18px] md:px-[18px]"
       >
         <div className="mt-auto" aria-hidden />
         {isLoading ? (
@@ -1272,9 +1313,13 @@ function ConversacionTab({
               onClick={() => setAttachOpen((o) => !o)}
               disabled={uploading}
               aria-label="Adjuntar foto"
-              className="h-9 w-9 rounded-full text-muted-foreground hover:text-foreground"
+              className="h-10 w-10 rounded-full text-muted-foreground hover:text-foreground md:h-9 md:w-9"
             >
-              {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Paperclip className="h-4 w-4" />}
+              {uploading ? (
+                <Loader2 className="h-[18px] w-[18px] animate-spin md:h-4 md:w-4" />
+              ) : (
+                <Paperclip className="h-[18px] w-[18px] md:h-4 md:w-4" />
+              )}
             </Button>
             {attachOpen ? (
               <>
@@ -1377,7 +1422,7 @@ function ConversacionTab({
               // inline por defecto y el baseline los descuadra unos pixeles).
               // Pill redonda estilo WhatsApp (como el mockup aprobado).
               // Pill GRIS que resalta sobre el drawer blanco (mockup).
-              className="block h-9 w-full resize-none rounded-full border border-input bg-muted px-4 py-2 text-[12.5px] leading-5 outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring"
+              className="block h-10 w-full resize-none rounded-full border border-input bg-muted px-4 py-2.5 text-[15px] leading-5 outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring md:h-9 md:py-2 md:text-[12.5px]"
             />
           </div>
           {/* Enviar: circulo en acento cobalto (mockup). */}
@@ -1386,9 +1431,9 @@ function ConversacionTab({
             onClick={submit}
             disabled={!text.trim()}
             aria-label="Enviar"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground transition-[filter] hover:brightness-110 disabled:pointer-events-none disabled:opacity-40"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent text-accent-foreground transition-[filter] hover:brightness-110 disabled:pointer-events-none disabled:opacity-40 md:h-9 md:w-9"
           >
-            <Send className="h-4 w-4" />
+            <Send className="h-[18px] w-[18px] md:h-4 md:w-4" />
           </button>
         </div>
       </div>
@@ -1760,7 +1805,7 @@ function MessageBubble({
     >
       {/* Cabecera del grupo: nombre (otros) + hora, UNA vez por conjunto. */}
       {!grouped ? (
-        <span className="mb-1 px-1 text-[10.5px] text-muted-foreground">
+        <span className="mb-1 px-1 text-[11.5px] text-muted-foreground md:text-[10.5px]">
           {!mine ? <span className="font-semibold">{author}</span> : null}
           {!mine ? ' · ' : ''}
           {format(new Date(message.createdAt), 'd MMM, HH:mm', { locale: es })}
@@ -1889,7 +1934,7 @@ function DocumentCard({ message, mine }: { message: OrderMessage; mine: boolean 
   return (
     <div
       className={cn(
-        'w-64 max-w-[80%] overflow-hidden rounded-2xl border',
+        'w-[230px] max-w-full overflow-hidden rounded-[14px] border',
         mine ? 'rounded-br-sm border-accent/25 bg-accent/5' : 'rounded-bl-sm border-border bg-card',
       )}
     >
@@ -1945,6 +1990,8 @@ function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolea
   const mime = message.attachmentMime ?? '';
   const name = message.body ?? 'archivo';
 
+  // TODOS los medios comparten el mismo ancho (230px, como la Foto IMEI): la
+  // columna de adjuntos queda alineada y ordenada, nada de anchos dispares.
   if (url && mime.startsWith('image/')) {
     return (
       <a
@@ -1952,13 +1999,14 @@ function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolea
         target="_blank"
         rel="noreferrer"
         className={cn(
-          'block max-w-[80%] overflow-hidden rounded-2xl border',
+          // bg-muted: las fotos blancas no se funden con el fondo blanco del chat.
+          'block w-[230px] max-w-full overflow-hidden rounded-[14px] border bg-muted',
           mine ? 'rounded-br-sm border-accent/25' : 'rounded-bl-sm border-border',
         )}
         title={name}
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={url} alt={name} className="max-h-72 w-auto object-cover" loading="lazy" />
+        <img src={url} alt={name} className="h-auto max-h-64 w-full object-cover" loading="lazy" />
       </a>
     );
   }
@@ -1967,11 +2015,11 @@ function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolea
     return (
       <div
         className={cn(
-          'max-w-[80%] overflow-hidden rounded-2xl border bg-black',
+          'w-[230px] max-w-full overflow-hidden rounded-[14px] border bg-black',
           mine ? 'rounded-br-sm border-accent/25' : 'rounded-bl-sm border-border',
         )}
       >
-        <video src={url} controls preload="metadata" className="max-h-72 w-auto" />
+        <video src={url} controls preload="metadata" className="max-h-64 w-full" />
       </div>
     );
   }
@@ -1984,7 +2032,7 @@ function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolea
       target="_blank"
       rel="noreferrer"
       className={cn(
-        'flex w-64 max-w-[80%] items-center gap-3 rounded-2xl border px-3 py-2.5 transition',
+        'flex w-[230px] max-w-full items-center gap-3 rounded-[14px] border px-3 py-2.5 transition',
         mine ? 'rounded-br-sm border-accent/25 bg-accent/5' : 'rounded-bl-sm border-border bg-card',
         url ? 'hover:bg-muted/60' : 'pointer-events-none opacity-70',
       )}
@@ -2017,7 +2065,7 @@ function PhotoCard({
     <div
       className={cn(
         // Tarjeta COMPACTA (230px, mockup): la foto completa se abre al tocarla.
-        'w-[230px] max-w-[80%] overflow-hidden rounded-[14px] border',
+        'w-[230px] max-w-full overflow-hidden rounded-[14px] border',
         // Mismo lenguaje que las burbujas: mias = tinte acento + esquina derecha;
         // de otro usuario = neutro + esquina izquierda.
         mine ? 'rounded-br-sm border-accent/25 bg-accent/5' : 'rounded-bl-sm border-border bg-card',
@@ -2030,7 +2078,7 @@ function PhotoCard({
           <img
             src={message.attachmentUrl}
             alt={isSerial ? 'Foto serial' : 'Foto IMEI'}
-            className="h-[120px] w-full bg-muted object-cover"
+            className="h-[140px] w-full bg-muted object-cover md:h-[120px]"
           />
         </a>
       ) : null}
@@ -2066,14 +2114,14 @@ function CodeRow({
 }) {
   return (
     <div className="space-y-1">
-      <span className="inline-block rounded-md border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[11px] text-emerald-700 dark:text-emerald-400">
+      <span className="inline-block rounded-md border border-emerald-500/20 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[12px] text-emerald-700 dark:text-emerald-400 md:text-[11px]">
         {code}
       </span>
       {showMatch ? (
         match ? (
           // Estilo mockup: linea con check verde + factura/fecha/tienda, y el
           // producto+costo debajo en gris (misma info, sin caja pesada).
-          <div className="space-y-0.5 text-[11px]">
+          <div className="space-y-0.5 text-[12px] md:text-[11px]">
             <p className="flex items-center gap-1 text-muted-foreground">
               <Check className="h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
               <span className="min-w-0 break-words leading-snug">
@@ -2091,7 +2139,7 @@ function CodeRow({
             </p>
           </div>
         ) : (
-          <p className="text-[11px] text-muted-foreground">Sin coincidencia en compras</p>
+          <p className="text-[12px] text-muted-foreground md:text-[11px]">Sin coincidencia en compras</p>
         )
       ) : null}
     </div>
@@ -2134,9 +2182,13 @@ function ActividadTab({ orderId }: { orderId: string }) {
           </div>
           <div className="pb-3">
             <p className="text-sm">{describeEvent(e)}</p>
+            {/* SIEMPRE quien lo hizo: persona, o Sistema/VTEX si fue automatico. */}
             <p className="text-[11px] text-muted-foreground">
+              <span className="font-medium text-muted-foreground">
+                {e.actorName ?? (e.type === 'created' ? 'VTEX' : 'Sistema')}
+              </span>
+              {' · '}
               {format(new Date(e.createdAt), "d MMM yyyy '·' HH:mm", { locale: es })}
-              {e.actorName ? ` · ${e.actorName}` : ''}
             </p>
           </div>
         </li>
@@ -2158,13 +2210,19 @@ function EventIcon({ type }: { type: string }) {
 }
 
 function describeEvent(e: OrderEvent): string {
+  const toName = typeof e.data.toName === 'string' ? e.data.toName : null;
+  const fromName = typeof e.data.fromName === 'string' ? e.data.fromName : null;
   switch (e.type) {
     case 'assigned':
-      return 'Asignado a la sede';
+      return toName ? `Asignado a la sede ${toName}` : 'Asignado a la sede';
     case 'transferred':
-      return 'Transferido a otra sede';
+      return toName
+        ? `Transferido a la sede ${toName}${fromName ? ` (venía de ${fromName})` : ''}`
+        : 'Transferido a otra sede';
     case 'returned':
-      return 'Devuelto a pedidos generales';
+      return fromName
+        ? `Devuelto a pedidos generales (estaba en ${fromName})`
+        : 'Devuelto a pedidos generales';
     case 'claimed':
       return 'Tomó el pedido (quedó a su cargo)';
     case 'unclaimed':

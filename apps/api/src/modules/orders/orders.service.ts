@@ -413,9 +413,11 @@ export class OrdersService {
     if (!isAdmin(auth)) throw new ForbiddenException('Solo administradores pueden asignar pedidos');
     const { tenantId, prisma } = getTenantContext();
 
+    let toName: string | null = null;
     if (input.warehouseId) {
       const w = await prisma.warehouse.findUnique({ where: { id: input.warehouseId } });
       if (!w || w.archived) throw new NotFoundException('Sede no encontrada o archivada');
+      toName = w.name;
     }
 
     // No mover pedidos ya FINALIZADOS (estado "Facturado" = cerrados en VTEX, con
@@ -447,15 +449,27 @@ export class OrdersService {
       },
     });
 
-    // Registrar actividad por pedido.
+    // Registrar actividad por pedido, con NOMBRES de sede (la Actividad debe
+    // decir a cual sede se asigno/transfirio y desde cual venia).
     const to = input.warehouseId;
+    const fromIds = [...new Set(prior.map((o) => o.warehouseId).filter((x): x is string => !!x))];
+    const fromNames = new Map(
+      (
+        await prisma.warehouse.findMany({ where: { id: { in: fromIds } }, select: { id: true, name: true } })
+      ).map((w) => [w.id, w.name]),
+    );
     await prisma.orderEvent.createMany({
       data: prior.map((o) => ({
         orderId: o.id,
         type: to === null ? 'returned' : o.warehouseId === null ? 'assigned' : 'transferred',
         actorId: auth.userId,
         actorName: displayName(auth),
-        data: { from: o.warehouseId, to } as Prisma.InputJsonValue,
+        data: {
+          from: o.warehouseId,
+          to,
+          fromName: o.warehouseId ? (fromNames.get(o.warehouseId) ?? null) : null,
+          toName,
+        } as Prisma.InputJsonValue,
       })),
     });
 

@@ -587,7 +587,7 @@ function OrderCard({
 
       <div className="min-w-0 flex-1">
         <div className="flex items-center justify-between gap-2">
-          <span className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
+          <span className="flex min-w-0 items-center gap-1.5 font-mono text-[12px] text-muted-foreground">
             {order.claimedBy ? (
               <ClaimChip
                 userId={order.claimedBy.userId}
@@ -605,7 +605,9 @@ function OrderCard({
         </div>
 
         <div className="mt-1 flex items-center gap-1.5">
-          <span className="truncate font-medium text-foreground">{titleCaseName(order.customerName)}</span>
+          <span className="truncate text-[15px] font-medium text-foreground">
+            {titleCaseName(order.customerName)}
+          </span>
           {order.unreadCount > 0 ? (
             <span className="animate-unread inline-flex h-[17px] min-w-[17px] shrink-0 items-center justify-center rounded-full bg-accent px-1 font-mono text-[10px] font-semibold leading-none text-accent-foreground">
               {order.unreadCount > 99 ? '99+' : order.unreadCount}
@@ -614,13 +616,13 @@ function OrderCard({
         </div>
 
         {first ? (
-          <p className="mt-0.5 truncate text-[13px] text-muted-foreground">
+          <p className="mt-0.5 truncate text-[13.5px] text-muted-foreground">
             {first.name}
             {extra > 0 ? <span className="text-muted-foreground"> +{extra}</span> : null}
           </p>
         ) : null}
 
-        <div className="mt-1.5 flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
+        <div className="mt-1.5 flex items-center justify-between gap-2 text-[12px] text-muted-foreground">
           <span className="tabular-nums">
             {order.totalUnits} un &middot;{' '}
             <span className="font-medium text-foreground">
@@ -655,9 +657,9 @@ function OrderCard({
               onReact(order, e as unknown as React.MouseEvent);
             }}
             aria-label="Reaccionar al pedido"
-            className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-card"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground shadow-card"
           >
-            <SmilePlus className="h-3.5 w-3.5" />
+            <SmilePlus className="h-4 w-4" />
           </span>
           <span
             role="button"
@@ -667,9 +669,9 @@ function OrderCard({
               onClaim(order, e as unknown as React.MouseEvent);
             }}
             aria-label="Opciones del pedido"
-            className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-card"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground shadow-card"
           >
-            <MoreHorizontal className="h-3.5 w-3.5" />
+            <MoreHorizontal className="h-4 w-4" />
           </span>
         </div>
       </div>
