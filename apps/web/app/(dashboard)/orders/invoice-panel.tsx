@@ -60,21 +60,48 @@ export function InvoicePanel({ orderId }: { orderId: string }) {
     retry: false,
   });
 
+  // Codigos que el usuario QUITO a mano: no se re-agregan al reconciliar.
+  const removedCodes = useRef<Set<string>>(new Set());
+
+  // Sembrar Y RECONCILIAR EN VIVO: si llega una foto IMEI nueva (el preview se
+  // refetchea al leerla), su linea se AGREGA AL INSTANTE — sin pisar lo que el
+  // usuario ya edito y sin resucitar lo que borro. Antes solo se sembraba una
+  // vez y las fotos posteriores no aparecian hasta recargar la pagina.
   useEffect(() => {
-    if (preview && lines === null) {
-      setLines(
-        preview.lines.map((l, i) => ({
-          key: `${l.codes.join('-')}-${i}`,
-          codesText: l.codes.join(', '),
-          itemId: l.itemId,
-          productName: l.productName,
-          price: l.suggestedPrice ?? '',
-          quantity: 1,
-          mismatch: l.mismatch ?? null,
-        })),
-      );
-    }
-  }, [preview, lines]);
+    if (!preview) return;
+    const fromPreview = preview.lines.map((l, i) => ({
+      key: `${l.codes.join('-')}-${i}`,
+      codesText: l.codes.join(', '),
+      itemId: l.itemId,
+      productName: l.productName,
+      price: l.suggestedPrice ?? '',
+      quantity: 1,
+      mismatch: l.mismatch ?? null,
+    }));
+    setLines((prev) => {
+      if (prev === null) return fromPreview;
+      const codesOf = (text: string) =>
+        text.split(/[\s,]+/).map((c) => c.trim()).filter(Boolean);
+      const have = new Set(prev.flatMap((p) => codesOf(p.codesText)));
+      // Lineas del preview cuyos codigos NO estan todavia (fotos nuevas).
+      const missing = fromPreview.filter((l) => {
+        const codes = codesOf(l.codesText);
+        return (
+          codes.length > 0 &&
+          codes.every((c) => !have.has(c)) &&
+          codes.some((c) => !removedCodes.current.has(c))
+        );
+      });
+      // Enriquecer las existentes con el veredicto de la IA (llega despues).
+      const enriched = prev.map((p) => {
+        const match = fromPreview.find((f) => f.codesText === p.codesText);
+        return match && match.mismatch !== p.mismatch ? { ...p, mismatch: match.mismatch } : p;
+      });
+      const changed =
+        missing.length > 0 || enriched.some((p, i) => p !== prev[i]);
+      return changed ? [...enriched, ...missing] : prev;
+    });
+  }, [preview]);
 
   // Persistir el borrador con cada edicion (sobrevive cierre del drawer).
   useEffect(() => {
@@ -83,7 +110,15 @@ export function InvoicePanel({ orderId }: { orderId: string }) {
 
   const patch = (key: string, p: Partial<Line>) =>
     setLines((ls) => (ls ?? []).map((l) => (l.key === key ? { ...l, ...p } : l)));
-  const remove = (key: string) => setLines((ls) => (ls ?? []).filter((l) => l.key !== key));
+  const remove = (key: string) =>
+    setLines((ls) => {
+      const target = (ls ?? []).find((l) => l.key === key);
+      // Recordar los codigos quitados: el reconciliador no los re-agrega.
+      for (const c of (target?.codesText ?? '').split(/[\s,]+/)) {
+        if (c.trim()) removedCodes.current.add(c.trim());
+      }
+      return (ls ?? []).filter((l) => l.key !== key);
+    });
   const addLine = () =>
     setLines((ls) => [
       ...(ls ?? []),
