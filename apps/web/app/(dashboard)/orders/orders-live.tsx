@@ -91,6 +91,12 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
     // Mantener los resultados anteriores mientras carga la nueva busqueda/pagina
     // -> la tabla no parpadea a vacio (se siente fluido al escribir).
     placeholderData: keepPreviousData,
+    // SIEMPRE refetch al montar: el initialData del SSR puede venir del cache
+    // del router de Next (los <Link prefetch> guardan la pagina hasta 5 min).
+    // Sin esto, al transferir un pedido y navegar a la sede se veia la lista
+    // VIEJA hasta el poll de 20s (parecia que "no llegaba" sin F5). Se pinta
+    // lo sembrado al instante y el refetch corrige en milisegundos.
+    refetchOnMount: 'always',
     refetchInterval: FALLBACK_POLL_MS,
     refetchIntervalInBackground: false,
   });
