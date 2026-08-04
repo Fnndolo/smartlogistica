@@ -84,8 +84,9 @@ export class VtexBackfillProcessor extends WorkerHost {
       }
     }
 
-    // 3) Borrar lo que VTEX ya NO lista como relevante (cambio de estado).
-    const removed = await this.removeStale(prisma, tenantId, accountName, listedIds);
+    // 3) Borrar lo que VTEX ya NO lista como relevante (cambio de estado),
+    //    CONSERVANDO los que llegaron a 'invoiced' (facturados por fuera).
+    const removed = await this.removeStale(http, prisma, tenantId, accountName, listedIds);
 
     await prisma.marketplaceConnection.update({
       where: { provider_accountName: { provider: 'vtex', accountName } },
@@ -121,8 +122,14 @@ export class VtexBackfillProcessor extends WorkerHost {
     }
   }
 
-  /** Borra los pedidos cuyo ID ya no esta en el conjunto vivo de VTEX. */
+  /**
+   * Pedidos cuyo ID ya no esta en el conjunto vivo de VTEX: se consulta su
+   * estado REAL. Si llego a 'invoiced' (facturado POR FUERA de SmartLogistica)
+   * se CONSERVA marcado como invoiced (trazabilidad, va a Generales >
+   * Facturados); cualquier otro estado (cancelado, etc.) se borra como antes.
+   */
   private async removeStale(
+    http: AxiosInstance,
     prisma: Parameters<VtexOrderService['upsertFromDetail']>[0],
     tenantId: string,
     accountName: string,
@@ -131,19 +138,65 @@ export class VtexBackfillProcessor extends WorkerHost {
     const ids = [...listedIds];
     // CRITICO: solo podamos pedidos SIN asignar (warehouseId null). Los pedidos
     // ya asignados a una sede estan "reclamados" y tienen ciclo propio — no se
-    // borran aunque VTEX ya no los liste como ready-for-handling.
-    const base = { provider: 'vtex', accountName, warehouseId: null } as const;
+    // borran aunque VTEX ya no los liste como ready-for-handling. Los ya
+    // marcados 'invoiced' (facturados por fuera) tampoco se re-revisan.
+    const base = {
+      provider: 'vtex',
+      accountName,
+      warehouseId: null,
+      status: { not: 'invoiced' },
+    } as const;
     const where = ids.length === 0 ? base : { ...base, externalId: { notIn: ids } };
 
-    const stale = await prisma.order.findMany({ where, select: { externalId: true } });
+    const stale = await prisma.order.findMany({
+      where,
+      select: { id: true, externalId: true },
+    });
     if (stale.length === 0) return 0;
 
-    await prisma.order.deleteMany({ where });
+    let removed = 0;
     for (const s of stale) {
+      let vtexStatus: string | null = null;
+      try {
+        vtexStatus = (await withRetry(() => this.vtex.getOrder(http, s.externalId), 2)).status;
+      } catch (err) {
+        this.logger.warn(
+          { err: extractAxiosErr(err), orderId: s.externalId },
+          'removeStale: no se pudo consultar el estado — se conserva hasta el proximo tick',
+        );
+        continue; // sin estado confirmado NO borramos (red de seguridad)
+      }
+
+      if (vtexStatus === 'invoiced') {
+        // Facturado por fuera: conservar con trazabilidad.
+        await prisma.order.update({ where: { id: s.id }, data: { status: 'invoiced' } });
+        const already = await prisma.orderEvent.findFirst({
+          where: { orderId: s.id, type: 'vtex_invoiced_external' },
+          select: { id: true },
+        });
+        if (!already) {
+          await prisma.orderEvent.create({
+            data: {
+              orderId: s.id,
+              type: 'vtex_invoiced_external',
+              actorId: null,
+              actorName: 'VTEX',
+              data: {},
+            },
+          });
+        }
+        await this.realtime.publish(tenantId, { kind: 'order.upserted', externalId: s.externalId });
+        continue;
+      }
+
+      await prisma.order.delete({ where: { id: s.id } });
       await this.realtime.publish(tenantId, { kind: 'order.removed', externalId: s.externalId });
+      removed++;
     }
-    this.logger.log(`Removed ${stale.length} stale order(s) for account=${accountName}`);
-    return stale.length;
+    if (removed > 0) {
+      this.logger.log(`Removed ${removed} stale order(s) for account=${accountName}`);
+    }
+    return removed;
   }
 }
 

@@ -147,7 +147,7 @@ export function OrdersTable({
                   (isOpen || isSelected) && 'bg-accent/[0.08]',
                   // Con reacciones, la fila crece: los chips tienen su FRANJA
                   // propia abajo y nunca tapan contenido (igual que el mockup).
-                  order.reactions.length > 0 && '[&>td]:pb-7',
+                  order.reactions.length > 0 && '[&>td]:pb-9',
                 )}
                 onClick={
                   onOpenOrder
@@ -382,14 +382,15 @@ function ReactionChips({
           }}
           title={r.mine ? 'Tu reacción · clic para quitar' : `Reaccionaron ${r.count} · clic para sumarte`}
           className={cn(
-            'inline-flex h-[18px] cursor-pointer items-center gap-1 rounded-full border px-1.5 text-[11px] leading-none shadow-card transition-all hover:-translate-y-px',
+            // Mas grandes que las del chat: en la fila deben NOTARSE.
+            'inline-flex h-[24px] cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-[14px] leading-none shadow-card transition-all hover:-translate-y-px',
             r.mine
               ? 'border-accent/40 bg-accent/10'
               : 'border-border bg-card hover:border-accent/40',
           )}
         >
           {r.emoji}
-          <b className={cn('font-mono text-[9.5px] font-medium', r.mine ? 'text-accent' : 'text-muted-foreground')}>
+          <b className={cn('font-mono text-[11px] font-medium', r.mine ? 'text-accent' : 'text-muted-foreground')}>
             {r.count}
           </b>
         </span>

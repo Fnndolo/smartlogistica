@@ -458,6 +458,8 @@ export class AlegraService {
           productName: match?.productName ?? null,
           suggestedPrice,
           matched: Boolean(match?.itemId),
+          // El veredicto de la IA (compra vs pedido) lo agrega OrdersService.
+          mismatch: null,
         };
       }),
     );

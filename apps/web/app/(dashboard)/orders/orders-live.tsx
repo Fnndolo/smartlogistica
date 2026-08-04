@@ -262,10 +262,19 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   );
 
   const sectionLabel = state === 'invoiced' ? 'Facturados' : 'Por preparar';
+  // Generales + invoiced = pedidos FACTURADOS POR FUERA de SmartLogistica
+  // (trazabilidad: sin envio, sin facturar/guia).
+  const externalView = scope.kind === 'general' && state === 'invoiced';
   const viewTitle =
-    scope.kind === 'general' ? 'Pedidos generales' : `${scope.name} · ${sectionLabel}`;
+    scope.kind === 'general'
+      ? externalView
+        ? 'Generales · Facturados'
+        : 'Pedidos generales'
+      : `${scope.name} · ${sectionLabel}`;
   const crumbs =
-    scope.kind === 'general' ? ['Pedidos', 'Generales'] : ['Sedes', scope.name, sectionLabel];
+    scope.kind === 'general'
+      ? ['Pedidos', externalView ? 'Facturados' : 'Generales']
+      : ['Sedes', scope.name, sectionLabel];
 
   return (
     <>
@@ -299,11 +308,19 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
         </div>
       </div>
 
-      {/* Pulso de la vista: 4 metricas operativas acordes a DONDE estas. */}
-      <OrdersPulseRow
-        scope={scope.kind === 'general' ? 'general' : state === 'invoiced' ? 'invoiced' : 'pending'}
-        warehouseId={warehouseId}
-      />
+      {/* Pulso de la vista: 4 metricas operativas acordes a DONDE estas. En la
+          vista de facturados por fuera no aplica (es solo trazabilidad). */}
+      {!externalView ? (
+        <OrdersPulseRow
+          scope={scope.kind === 'general' ? 'general' : state === 'invoiced' ? 'invoiced' : 'pending'}
+          warehouseId={warehouseId}
+        />
+      ) : (
+        <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-[12.5px] text-amber-700 dark:text-amber-400">
+          Estos pedidos fueron facturados <b>por fuera de SmartLogística</b> (cerrados directo en
+          VTEX). Quedan como trazabilidad: sin seguimiento de envío y sin facturar ni generar guía.
+        </p>
+      )}
 
       <div className="flex flex-wrap items-center gap-2">
         <SearchFilter />
@@ -335,7 +352,9 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
               onToggleSelect={canSelect ? toggleSelect : undefined}
               onToggleSelectAll={canSelect ? toggleSelectAll : undefined}
               onOpenOrder={openFromRow}
-              showShipping={state === 'invoiced'}
+              // Envio SOLO en Facturados de sede (los facturados por fuera no
+              // tienen guia ni rastreo).
+              showShipping={state === 'invoiced' && scope.kind === 'warehouse'}
               // Confirmacion de direccion: en General y Por preparar (no en Facturados).
               showAddress={state !== 'invoiced'}
             />

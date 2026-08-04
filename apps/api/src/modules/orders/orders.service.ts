@@ -108,6 +108,12 @@ export class OrdersService {
    * pasaban el chequeo de existingInvoice antes de que la primera terminara.
    */
   private readonly opLocks = new Set<string>();
+  // Veredictos de la IA "producto de la compra vs pedido" (por linea, evita
+  // re-pagar el LLM en cada refetch del preview).
+  private readonly productMatchCache = new Map<
+    string,
+    { expected: string; found: string; note: string } | null
+  >();
 
   private acquireLock(key: string, busyMessage: string): void {
     if (this.opLocks.has(key)) throw new ConflictException(busyMessage);
@@ -143,11 +149,17 @@ export class OrdersService {
       where.warehouseId = query.warehouse;
       // En la sede mostramos todos los pedidos asignados (ya no son espejo de VTEX).
     } else {
-      // Pedidos generales (sin asignar) = espejo de VTEX en ready-for-handling.
-      // Solo admins ven los generales.
+      // Pedidos generales (sin asignar). Solo admins.
       if (!isAdmin(auth)) throw new ForbiddenException('Sin acceso a pedidos generales');
       where.warehouseId = null;
-      where.status = 'ready-for-handling';
+      if (query.state === 'invoiced') {
+        // Trazabilidad: facturados POR FUERA de SmartLogistica (el reconcile los
+        // conserva marcados como invoiced en vez de borrarlos del espejo).
+        where.status = 'invoiced';
+      } else {
+        // Espejo de VTEX en ready-for-handling.
+        where.status = 'ready-for-handling';
+      }
     }
 
     // Etapa (solo en sede): un pedido pasa a "Facturados" cuando se cierra en VTEX
@@ -424,7 +436,10 @@ export class OrdersService {
     // guia + MKT hechos). Un pedido solo facturado en Alegra pero sin cerrar en
     // VTEX todavia se puede mover (sigue en "Por preparar").
     const finalized = await prisma.orderEvent.findMany({
-      where: { orderId: { in: input.orderIds }, type: 'vtex_invoiced' },
+      where: {
+        orderId: { in: input.orderIds },
+        type: { in: ['vtex_invoiced', 'vtex_invoiced_external'] },
+      },
       select: { orderId: true },
       distinct: ['orderId'],
     });
@@ -1161,9 +1176,27 @@ export class OrdersService {
     };
   }
 
+  /**
+   * Facturado POR FUERA de SmartLogistica (cerrado directo en VTEX): no se
+   * factura ni se genera guia desde aqui — solo trazabilidad.
+   */
+  private async ensureNotExternallyInvoiced(orderId: string): Promise<void> {
+    const { prisma } = getTenantContext();
+    const ev = await prisma.orderEvent.findFirst({
+      where: { orderId, type: 'vtex_invoiced_external' },
+      select: { id: true },
+    });
+    if (ev) {
+      throw new BadRequestException(
+        'Este pedido fue facturado POR FUERA de SmartLogística: no permite facturar ni generar guía.',
+      );
+    }
+  }
+
   /** Preview: cliente completo (del pedido) + una linea por FOTO (producto + precio). */
   async invoicePreview(orderId: string, auth: AuthContext): Promise<InvoicePreview> {
     const order = await this.loadAccessibleOrder(orderId, auth);
+    await this.ensureNotExternallyInvoiced(orderId);
     if (!order.warehouseId) {
       throw new BadRequestException('Asigna el pedido a una sede para poder facturar.');
     }
@@ -1195,12 +1228,33 @@ export class OrdersService {
       suggestedPrice: vtexPriceForProduct(l.productName, vtexItems) ?? l.suggestedPrice,
     }));
 
+    // IA experta en celulares: ¿el producto de la COMPRA (por el IMEI leido)
+    // corresponde a ALGUN producto del PEDIDO (modelo + almacenamiento + RAM)?
+    // Solo un AVISO (no bloquea facturar). Best-effort con cache por linea.
+    const orderNames = order.items.map((i) => i.name).filter(Boolean);
+    const withVerdict = await Promise.all(
+      priced.map(async (l) => {
+        if (!l.productName || orderNames.length === 0) return { ...l, mismatch: null };
+        const cacheKey = `${orderId}:${l.productName}`;
+        if (this.productMatchCache.has(cacheKey)) {
+          return { ...l, mismatch: this.productMatchCache.get(cacheKey) ?? null };
+        }
+        const verdict = await this.ai.verifyProductMatch(orderNames, l.productName);
+        const mismatch =
+          verdict && !verdict.match
+            ? { expected: verdict.expected, found: l.productName, note: verdict.note }
+            : null;
+        this.productMatchCache.set(cacheKey, mismatch);
+        return { ...l, mismatch };
+      }),
+    );
+
     const client = extractInvoiceClient(order);
     return {
       invoice: null,
       // Se factura el TOTAL del pedido (envio/recargos incluidos), no solo el
       // valor de los productos: el excedente se reparte entre las lineas.
-      lines: prorateToOrderTotal(priced, Number(order.totalValue)),
+      lines: prorateToOrderTotal(withVerdict, Number(order.totalValue)),
       client: {
         name: client.name,
         identification: client.identification,
@@ -1237,6 +1291,7 @@ export class OrdersService {
     input: CreateInvoiceInput,
     auth: AuthContext,
   ): Promise<InvoiceResult> {
+    await this.ensureNotExternallyInvoiced(orderId);
     const order = await this.loadAccessibleOrder(orderId, auth);
     if (!order.warehouseId) {
       throw new BadRequestException('Asigna el pedido a una sede para facturar.');
@@ -1363,6 +1418,7 @@ export class OrdersService {
    */
   async guidePreview(orderId: string, auth: AuthContext): Promise<GuidePreview> {
     const order = await this.loadAccessibleOrder(orderId, auth);
+    await this.ensureNotExternallyInvoiced(orderId);
     if (!order.warehouseId) {
       throw new BadRequestException('Asigna el pedido a una sede para generar guia.');
     }
@@ -1528,6 +1584,7 @@ export class OrdersService {
     input: CreateGuideInput,
     auth: AuthContext,
   ): Promise<Guide> {
+    await this.ensureNotExternallyInvoiced(orderId);
     const order = await this.loadAccessibleOrder(orderId, auth);
     if (!order.warehouseId) {
       throw new BadRequestException('Asigna el pedido a una sede para generar guia.');

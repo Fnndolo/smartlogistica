@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  AlertTriangle,
   CheckCircle2,
   Loader2,
   Plus,
@@ -35,6 +36,9 @@ interface Line {
   productName: string | null;
   price: string;
   quantity: number;
+  // AVISO de la IA: el producto de la compra no corresponde al del pedido
+  // (modelo/almacenamiento/RAM). Solo informa; se puede facturar igual.
+  mismatch?: { expected: string; found: string; note: string } | null;
 }
 
 export function InvoicePanel({ orderId }: { orderId: string }) {
@@ -66,6 +70,7 @@ export function InvoicePanel({ orderId }: { orderId: string }) {
           productName: l.productName,
           price: l.suggestedPrice ?? '',
           quantity: 1,
+          mismatch: l.mismatch ?? null,
         })),
       );
     }
@@ -353,6 +358,18 @@ function LineRow({
 
   return (
     <div className="space-y-2 rounded-lg border border-border p-2.5">
+      {/* AVISO de la IA (experta en celulares): el IMEI leido trae una compra
+          que NO corresponde al producto del pedido. Solo avisa, no bloquea. */}
+      {line.mismatch ? (
+        <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-2 text-[12px] leading-snug text-amber-800 dark:text-amber-400">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            <b>Aviso de la IA:</b> el IMEI corresponde a «{line.mismatch.found}» y el pedido dice «
+            {line.mismatch.expected}».{line.mismatch.note ? ` ${line.mismatch.note}.` : ''} Verifica
+            antes de facturar (puedes facturar igual).
+          </span>
+        </div>
+      ) : null}
       <div className="flex items-center gap-2">
         <Input
           value={line.codesText}

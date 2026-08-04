@@ -33,6 +33,13 @@ export const invoiceLinePreviewSchema = z.object({
   productName: z.string().nullable(),
   suggestedPrice: z.string().nullable(),
   matched: z.boolean(),
+  // AVISO de la IA (experta en celulares): el producto de la COMPRA no
+  // corresponde al del PEDIDO (modelo/almacenamiento/RAM). Solo informa,
+  // no bloquea facturar. null = coincide o no se pudo verificar.
+  mismatch: z
+    .object({ expected: z.string(), found: z.string(), note: z.string() })
+    .nullable()
+    .default(null),
 });
 export type InvoiceLinePreview = z.infer<typeof invoiceLinePreviewSchema>;
 

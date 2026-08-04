@@ -2,12 +2,12 @@ import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
 import type { ListOrdersResponse } from '@smartlogistica/shared';
 
-import { INTERNAL_API_URL, sanitizeAddressList } from '@/lib/server-api';
+import { INTERNAL_API_URL } from '@/lib/server-api';
 
-import { OrdersLive } from './orders-live';
-import { OrdersTabs } from './orders-tabs';
+import { OrdersLive } from '../orders-live';
+import { OrdersTabs } from '../orders-tabs';
 
-export const metadata: Metadata = { title: 'Pedidos' };
+export const metadata: Metadata = { title: 'Facturados' };
 
 const SESSION_COOKIE_NAME = 'smartlog_session';
 const FALLBACK: ListOrdersResponse = { items: [], total: 0, page: 1, limit: 50, totalPages: 1 };
@@ -20,10 +20,14 @@ interface PageProps {
     q?: string;
     sort?: string;
     dir?: string;
-    address?: string;
   }>;
 }
 
+/**
+ * Pedidos generales FACTURADOS POR FUERA de SmartLogistica: llegaron a
+ * 'invoiced' en VTEX sin pasar por nuestro flujo. Solo trazabilidad: sin
+ * seguimiento de envio y sin facturar/guia.
+ */
 async function fetchOrders(params: {
   page: number;
   from?: string;
@@ -31,7 +35,6 @@ async function fetchOrders(params: {
   q?: string;
   sort?: string;
   dir?: string;
-  address?: string;
 }): Promise<ListOrdersResponse> {
   const cookieStore = await cookies();
   const session = cookieStore.get(SESSION_COOKIE_NAME);
@@ -40,13 +43,12 @@ async function fetchOrders(params: {
   const url = new URL('/v1/orders', INTERNAL_API_URL);
   url.searchParams.set('page', String(params.page));
   url.searchParams.set('limit', '50');
+  url.searchParams.set('state', 'invoiced');
   url.searchParams.set('sort', params.sort === 'quantity' || params.sort === 'price' ? params.sort : 'date');
   url.searchParams.set('dir', params.dir === 'asc' ? 'asc' : 'desc');
   if (params.from) url.searchParams.set('from', params.from);
   if (params.to) url.searchParams.set('to', params.to);
   if (params.q) url.searchParams.set('q', params.q);
-  const address = sanitizeAddressList(params.address);
-  if (address) url.searchParams.set('address', address);
 
   try {
     const res = await fetch(url, {
@@ -60,7 +62,7 @@ async function fetchOrders(params: {
   }
 }
 
-export default async function OrdersPage({ searchParams }: PageProps) {
+export default async function OrdersFacturadosPage({ searchParams }: PageProps) {
   const params = await searchParams;
   const page = Math.max(1, Number(params.page ?? '1') || 1);
   const initialData = await fetchOrders({
@@ -70,14 +72,12 @@ export default async function OrdersPage({ searchParams }: PageProps) {
     q: params.q,
     sort: params.sort,
     dir: params.dir,
-    address: params.address,
   });
 
-  // El encabezado (migas + titulo + "En vivo" + rango) lo pinta OrdersLive.
   return (
     <div className="space-y-5">
       <OrdersTabs />
-      <OrdersLive initialData={initialData} />
+      <OrdersLive initialData={initialData} state="invoiced" />
     </div>
   );
 }

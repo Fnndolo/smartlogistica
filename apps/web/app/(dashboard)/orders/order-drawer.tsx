@@ -225,11 +225,15 @@ function DrawerContent({
 
   const { data: detail } = useQuery(orderDetailQuery(order.id));
 
+  // Facturado POR FUERA de SmartLogistica (cerrado directo en VTEX, sin sede):
+  // solo trazabilidad — sin Facturar ni Guia.
+  const external = !order.warehouseId && order.status === 'invoiced';
+
   // PRECARGAR Facturar y Guia apenas se abre el pedido: cuando el usuario
   // entra a esas pestañas, el contenido ya esta en cache (antes esperaba
   // 4-6s el fetch de Alegra/Coordinadora al abrir la pestaña).
   useEffect(() => {
-    if (!canManage) return;
+    if (!canManage || external) return;
     void qc.prefetchQuery({
       queryKey: ['invoice-preview', order.id],
       queryFn: () => api.get(`/v1/orders/${order.id}/invoice-preview`),
@@ -240,17 +244,25 @@ function DrawerContent({
       queryFn: () => api.get(`/v1/orders/${order.id}/guide-preview`),
       staleTime: 20_000,
     });
-  }, [order.id, canManage, qc]);
+  }, [order.id, canManage, external, qc]);
 
   const tabs: { id: Tab; label: string; icon: typeof Info }[] = [
     { id: 'conversacion', label: 'Conversación', icon: MessageSquare },
     { id: 'detalle', label: 'Detalle', icon: Info },
-    ...(canManage
+    ...(canManage && !external
       ? ([
           { id: 'facturar', label: 'Facturar', icon: ReceiptText },
           { id: 'guia', label: 'Guía', icon: Truck },
-          { id: 'actividad', label: 'Actividad', icon: Activity },
         ] as { id: Tab; label: string; icon: typeof Info }[])
+      : []),
+    // Actividad SIEMPRE para admins (en los facturados por fuera es la
+    // trazabilidad misma).
+    ...(canManage
+      ? ([{ id: 'actividad', label: 'Actividad', icon: Activity }] as {
+          id: Tab;
+          label: string;
+          icon: typeof Info;
+        }[])
       : []),
   ];
 
@@ -354,7 +366,7 @@ function DrawerContent({
         <TabPane active={tab === 'detalle'} scroll>
           <DetalleTab order={order} detail={detail} />
         </TabPane>
-        {canManage ? (
+        {canManage && !external ? (
           <>
             <TabPane active={tab === 'facturar'} scroll>
               <InvoicePanel orderId={order.id} />
@@ -362,10 +374,12 @@ function DrawerContent({
             <TabPane active={tab === 'guia'} scroll>
               <GuidePanel orderId={order.id} />
             </TabPane>
-            <TabPane active={tab === 'actividad'} scroll>
-              <ActividadTab orderId={order.id} />
-            </TabPane>
           </>
+        ) : null}
+        {canManage ? (
+          <TabPane active={tab === 'actividad'} scroll>
+            <ActividadTab orderId={order.id} />
+          </TabPane>
         ) : null}
       </div>
     </>
@@ -474,8 +488,19 @@ function AddressConfirmation({ order }: { order: OrderSummary }) {
 
 function DetalleTab({ order, detail }: { order: OrderSummary; detail: OrderDetail | undefined }) {
   const items = detail?.items ?? order.items;
+  const external = !order.warehouseId && order.status === 'invoiced';
   return (
     <div className="space-y-6 p-5">
+      {external ? (
+        <div className="flex items-start gap-2.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-[12.5px] text-amber-800 dark:text-amber-400">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            Este pedido fue facturado <b>por fuera de SmartLogística</b> (cerrado directamente en
+            VTEX). Queda como trazabilidad: no permite facturar ni generar guía y no tiene
+            seguimiento de envío.
+          </span>
+        </div>
+      ) : null}
       <section className="grid grid-cols-2 gap-3">
         <Stat label="Unidades" value={String(order.totalUnits)} />
         <Stat label="Total" value={formatCurrency(order.totalValue, order.currency)} />
@@ -2095,7 +2120,7 @@ function MessageBubble({
     <div
       className={cn(
         // En cel el texto va un punto mas grande (15px); en escritorio text-sm.
-        'px-3.5 py-2 text-[16px] leading-[1.4] md:text-[13px] md:leading-[1.45]',
+        'px-3.5 py-2 text-[16px] leading-[1.4] md:text-[13.5px] md:leading-[1.45]',
         radius,
         // Mios en AZUL cobalto (pedido del user: nada de negro); otros en gris
         // que resalta sobre el fondo blanco del drawer.
@@ -2220,15 +2245,16 @@ function MessageBubble({
               onClick={() => onToggleReaction?.(r.emoji)}
               title={r.users.join(', ')}
               className={cn(
-                // Chips finos con tinte de acento (mockup), los mios mas marcados.
-                'flex items-center gap-1 rounded-full border px-2 py-[2px] text-[13px] transition-all hover:-translate-y-px md:py-px md:text-[11px]',
+                // Chips con tinte de acento, proporcionales al nuevo tamano de
+                // mensaje (emoji legible sin lupa).
+                'flex items-center gap-1 rounded-full border px-2.5 py-[3px] text-[14px] transition-all hover:-translate-y-px md:py-[2px] md:text-[12.5px]',
                 r.mine
                   ? 'border-accent/60 bg-accent/15 text-accent'
                   : 'border-accent/30 bg-accent/10 hover:border-accent/50',
               )}
             >
-              <span className="text-[13px] leading-none md:text-[11px]">{r.emoji}</span>
-              <span className="font-mono text-[11.5px] tabular-nums text-accent md:text-[10.5px]">
+              <span className="text-[14px] leading-none md:text-[12.5px]">{r.emoji}</span>
+              <span className="font-mono text-[12px] tabular-nums text-accent md:text-[11px]">
                 {r.count}
               </span>
             </button>
@@ -2597,7 +2623,8 @@ function EventIcon({ type }: { type: string }) {
   if (type === 'claimed' || type === 'unclaimed') return <Hand className={cls} />;
   if (type === 'invoiced') return <ReceiptText className={cls} />;
   if (type === 'guide_generated') return <Truck className={cls} />;
-  if (type === 'vtex_invoiced') return <ReceiptText className={cls} />;
+  if (type === 'vtex_invoiced' || type === 'vtex_invoiced_external')
+    return <ReceiptText className={cls} />;
   return <Activity className={cls} />;
 }
 
@@ -2629,6 +2656,8 @@ function describeEvent(e: OrderEvent): string {
       return `Guia ${(e.data.number as string | undefined) ?? ''} generada en Coordinadora`.trim();
     case 'vtex_invoiced':
       return `Facturado en VTEX · MKT ${(e.data.invoiceNumber as string | undefined) ?? ''}`.trim();
+    case 'vtex_invoiced_external':
+      return 'Facturado POR FUERA de SmartLogística (cerrado directamente en VTEX)';
     default:
       return e.type;
   }

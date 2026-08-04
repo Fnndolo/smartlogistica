@@ -183,6 +183,52 @@ export class AiConnectionService {
     }
   }
 
+  /**
+   * IA experta en celulares: ¿el producto COMPRADO (hallado por el IMEI) es el
+   * MISMO telefono que alguno del pedido? Compara modelo + almacenamiento + RAM
+   * (ignora redaccion, color, "reacondicionado" y combos/obsequios). Devuelve
+   * null si no hay IA conectada o falla (best-effort: sin IA no hay aviso).
+   */
+  async verifyProductMatch(
+    orderProducts: string[],
+    purchasedProduct: string,
+  ): Promise<{ match: boolean; expected: string; note: string } | null> {
+    const { tenantId, prisma } = getTenantContext();
+    const conn = await prisma.aiConnection.findFirst({ orderBy: { createdAt: 'desc' } });
+    if (!conn) return null;
+    try {
+      const apiKey = await this.envelope.decryptField(tenantId, conn.encryptedApiKey);
+      const prompt = [
+        'Eres un EXPERTO en celulares y tecnologia. Compara el producto COMPRADO contra los productos del PEDIDO.',
+        'Decide si el COMPRADO es EXACTAMENTE el mismo telefono que ALGUNO del pedido: mismo modelo (ojo: "14" no es "14C", "16" no es "16 Pro"), mismo almacenamiento y misma RAM cuando aparezca.',
+        'IGNORA: mayusculas, orden de palabras, color, la palabra "reacondicionado"/"open box", y los obsequios de combos ("+ audifonos", "+ reloj", "+ smartwatch"): compara SOLO el telefono principal.',
+        'Si el pedido NO trae RAM o almacenamiento explicitos, no lo cuentes como diferencia.',
+        `COMPRADO: ${JSON.stringify(purchasedProduct)}`,
+        `PEDIDO: ${JSON.stringify(orderProducts)}`,
+        'Responde SOLO este JSON, sin nada mas:',
+        '{"match": true|false, "expected": "<producto del pedido mas parecido, textual>", "note": "<si match=false: una frase corta en espanol diciendo la diferencia concreta (modelo/almacenamiento/RAM)>"}',
+      ].join('\n');
+      const raw = await this.client.completeText(
+        { provider: conn.provider as AiProvider, apiKey, model: conn.model },
+        prompt,
+      );
+      const jsonText = raw.replace(/```json|```/g, '').trim();
+      const parsed = JSON.parse(jsonText) as {
+        match?: boolean;
+        expected?: string;
+        note?: string;
+      };
+      if (typeof parsed.match !== 'boolean') return null;
+      return {
+        match: parsed.match,
+        expected: String(parsed.expected ?? orderProducts[0] ?? ''),
+        note: String(parsed.note ?? ''),
+      };
+    } catch {
+      return null;
+    }
+  }
+
   /** Carga la conexion IA del tenant, descifra la key y corre el prompt de vision. */
   private async runVision(imageBase64: string, mimeType: ImageMime, prompt: string): Promise<string> {
     const { tenantId, prisma } = getTenantContext();
