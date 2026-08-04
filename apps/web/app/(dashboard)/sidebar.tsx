@@ -1,5 +1,6 @@
 'use client';
 
+import { Fragment } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
@@ -103,8 +104,8 @@ export function Sidebar() {
             pathname === item.href ||
             (item.href !== '/dashboard' && pathname.startsWith(`${item.href}/`));
           return (
+            <Fragment key={item.href}>
             <Link
-              key={item.href}
               href={item.href}
               prefetch
               className={cn(
@@ -127,37 +128,38 @@ export function Sidebar() {
               {item.label}
               {item.href === '/mentions' ? <MentionsBadge /> : null}
             </Link>
+            {/* Sub-secciones de Pedidos generales, JUSTO debajo de Pedidos
+                (como las sedes): Por preparar y Facturados (por fuera). */}
+            {item.href === '/orders' && isActive ? (
+              <div className="ml-4 mt-0.5 flex flex-col gap-0.5 border-l border-border pl-2">
+                {[
+                  { href: '/orders', label: 'Por preparar', icon: ListChecks },
+                  { href: '/orders/facturados', label: 'Facturados', icon: PackageCheck },
+                ].map((s) => {
+                  const on = pathname === s.href;
+                  const SubIcon = s.icon;
+                  return (
+                    <Link
+                      key={s.href}
+                      href={s.href}
+                      prefetch
+                      className={cn(
+                        'flex items-center gap-2 rounded-md px-2 py-1 text-[12.5px] transition-colors',
+                        on
+                          ? 'bg-accent/10 font-medium text-foreground'
+                          : 'text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      <SubIcon className="h-3.5 w-3.5 shrink-0" />
+                      {s.label}
+                    </Link>
+                  );
+                })}
+              </div>
+            ) : null}
+          </Fragment>
           );
         })}
-        {/* Sub-secciones de Pedidos generales (como las sedes): Por preparar y
-            Facturados (los cerrados POR FUERA de SmartLogistica). */}
-        {isAdminUser && (pathname === '/orders' || pathname.startsWith('/orders/')) ? (
-          <div className="ml-4 mt-0.5 flex flex-col gap-0.5 border-l border-border pl-2">
-            {[
-              { href: '/orders', label: 'Por preparar', icon: ListChecks },
-              { href: '/orders/facturados', label: 'Facturados', icon: PackageCheck },
-            ].map((s) => {
-              const on = pathname === s.href;
-              const Icon = s.icon;
-              return (
-                <Link
-                  key={s.href}
-                  href={s.href}
-                  prefetch
-                  className={cn(
-                    'flex items-center gap-2 rounded-md px-2 py-1 text-[12.5px] transition-colors',
-                    on
-                      ? 'bg-accent/10 font-medium text-foreground'
-                      : 'text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  <Icon className="h-3.5 w-3.5 shrink-0" />
-                  {s.label}
-                </Link>
-              );
-            })}
-          </div>
-        ) : null}
       </nav>
 
       {/* Sedes */}

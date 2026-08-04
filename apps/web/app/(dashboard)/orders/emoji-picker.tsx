@@ -35,8 +35,8 @@ export function EmojiPicker({
 
   if (typeof document === 'undefined') return null;
 
-  const W = 320;
-  const H = 360;
+  const W = 344;
+  const H = 400;
   const pad = 8;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
@@ -68,8 +68,10 @@ export function EmojiPicker({
           ))}
         </div>
 
-        {/* Pestañas de categoria */}
-        <div className="flex items-center justify-between border-b border-border px-1.5 py-1">
+        {/* Pestañas de categoria: DESPLAZABLES (con 11 categorias, apretarlas
+            con justify-between dejaba las ultimas — Simbolos, Banderas —
+            aplastadas e invisibles). */}
+        <div className="scrollbar-none flex items-center gap-0.5 overflow-x-auto border-b border-border px-1.5 py-1">
           {EMOJI_CATEGORIES.map((c) => (
             <button
               key={c.id}
@@ -77,7 +79,7 @@ export function EmojiPicker({
               title={c.label}
               onClick={() => setCategory(c.id)}
               className={cn(
-                'rounded-md px-1.5 py-1 text-base transition-colors',
+                'shrink-0 rounded-md px-1.5 py-1 text-base transition-colors',
                 category === c.id ? 'bg-muted' : 'opacity-60 hover:bg-muted hover:opacity-100',
               )}
             >
