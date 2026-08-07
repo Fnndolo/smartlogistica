@@ -94,6 +94,24 @@ model AlegraConnection {
   warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
 }
 
+/// Alerta de SUPER MENCION (@todos): UNA fila por destinatario. Se muestra
+/// como modal al que esta en la plataforma y, si no estaba, apenas vuelve
+/// (seenAt = null hasta que la cierre o vaya al pedido).
+model SuperMentionAlert {
+  id         String    @id @default(cuid())
+  orderId    String
+  messageId  String
+  userId     String
+  authorName String
+  preview    String
+  createdAt  DateTime  @default(now())
+  seenAt     DateTime?
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([userId, seenAt])
+}
+
 /// Reaccion de un usuario a un PEDIDO (como las de los mensajes del chat,
 /// pero a nivel de fila). Cualquiera puede reaccionar; un emoji por usuario.
 model OrderReaction {
@@ -248,12 +266,13 @@ model Order {
   updatedAt            DateTime @updatedAt
   rawPayload           Json
 
-  items     OrderItem[]
-  messages  OrderMessage[]
-  events    OrderEvent[]
-  reads     OrderRead[]
-  reactions OrderReaction[]
-  warehouse Warehouse?  @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  items         OrderItem[]
+  messages      OrderMessage[]
+  events        OrderEvent[]
+  reads         OrderRead[]
+  reactions     OrderReaction[]
+  superMentions SuperMentionAlert[]
+  warehouse     Warehouse?  @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
 
   @@unique([provider, externalId])
   @@index([status, marketplaceCreatedAt(sort: Desc)])

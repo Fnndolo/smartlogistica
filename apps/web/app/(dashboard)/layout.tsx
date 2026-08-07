@@ -1,6 +1,7 @@
 import { CurrentUserProvider } from '@/components/providers/current-user-provider';
 
 import { ChatNotifications } from './chat-notifications';
+import { SuperMentionAlerts } from './super-mention-alerts';
 import { MobileBottomNav, MobileTopBar } from './mobile-nav';
 import { Sidebar } from './sidebar';
 
@@ -18,6 +19,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   return (
     <CurrentUserProvider>
       <ChatNotifications />
+      <SuperMentionAlerts />
       <div className="flex min-h-screen bg-background">
         <Sidebar />
         <div className="flex min-w-0 flex-1 flex-col">

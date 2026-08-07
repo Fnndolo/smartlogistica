@@ -71,3 +71,25 @@ export function playNotificationSound(): void {
   note(c, 880, t + 0.11, 0.45, 0.18, 'sine'); // A5 (La)
   note(c, 1760, t + 0.11, 0.3, 0.05, 'triangle');
 }
+
+/**
+ * Fanfarria de SUPER MENCION (@todos): tres notas ascendentes Do-Mi-Sol con
+ * brillo y un remate en la octava — inconfundible frente al ding normal.
+ */
+export function playSuperMentionSound(): void {
+  const c = getCtx();
+  if (!c || c.state !== 'running') return;
+  const now = Date.now();
+  if (now - lastPlay < 600) return;
+  lastPlay = now;
+
+  const t = c.currentTime + 0.01;
+  note(c, 523.25, t, 0.3, 0.2, 'sine'); // C5 (Do)
+  note(c, 1046.5, t, 0.2, 0.06, 'triangle');
+  note(c, 659.25, t + 0.12, 0.3, 0.2, 'sine'); // E5 (Mi)
+  note(c, 1318.5, t + 0.12, 0.2, 0.06, 'triangle');
+  note(c, 783.99, t + 0.24, 0.35, 0.22, 'sine'); // G5 (Sol)
+  note(c, 1567.98, t + 0.24, 0.25, 0.07, 'triangle');
+  note(c, 1046.5, t + 0.4, 0.6, 0.2, 'sine'); // C6 remate
+  note(c, 2093, t + 0.4, 0.4, 0.06, 'triangle');
+}

@@ -30,6 +30,7 @@ import type {
   OrderMessage as OrderMessageDto,
   OrderSummary,
   OrdersPulse,
+  SuperMentionAlert as SuperMentionAlertDto,
   ProcessAllInput,
   ProcessAllResult,
   Inbox,
@@ -533,7 +534,34 @@ export class OrdersService {
   ): Promise<OrderMessageDto> {
     const order = await this.loadAccessibleOrder(orderId, auth);
     const { tenantId, prisma } = getTenantContext();
-    const mentions = await this.validMentions(tenantId, input.mentions);
+    let mentions = await this.validMentions(tenantId, input.mentions);
+
+    // SUPER MENCION (@todos): destinatarios = todos los admins + los operadores
+    // con acceso a la sede del pedido (nunca el autor). Se agregan a mentions
+    // (asi cuentan en /mentions y no-leidos) y se crean alertas persistentes.
+    let superRecipients: string[] = [];
+    if (input.mentionAll) {
+      const memberships = await this.control.membership.findMany({
+        where: { tenantId },
+        select: { userId: true, role: true },
+      });
+      const operatorIds = memberships.filter((m) => m.role === 'OPERATOR').map((m) => m.userId);
+      let allowedOperators = new Set<string>();
+      if (order.warehouseId && operatorIds.length > 0) {
+        const links = await prisma.warehouseMember.findMany({
+          where: { warehouseId: order.warehouseId, userId: { in: operatorIds } },
+          select: { userId: true },
+        });
+        allowedOperators = new Set(links.map((l) => l.userId));
+      }
+      superRecipients = memberships
+        .filter(
+          (m) => m.userId !== auth.userId && (m.role !== 'OPERATOR' || allowedOperators.has(m.userId)),
+        )
+        .map((m) => m.userId);
+      mentions = [...new Set([...mentions, ...superRecipients])];
+    }
+
     // La cita solo vale si el mensaje citado es de ESTE pedido.
     const replyTo = input.replyToId
       ? await prisma.orderMessage.findFirst({
@@ -552,6 +580,20 @@ export class OrdersService {
         replyToId: replyTo?.id ?? null,
       },
     });
+    // Alertas de SUPER MENCION: una fila por destinatario. Persisten hasta que
+    // cada quien la cierre — el que no esta en la plataforma la ve al volver.
+    if (input.mentionAll && superRecipients.length > 0) {
+      await prisma.superMentionAlert.createMany({
+        data: superRecipients.map((userId) => ({
+          orderId,
+          messageId: msg.id,
+          userId,
+          authorName: displayName(auth),
+          preview: (input.body ?? '').slice(0, 140),
+        })),
+      });
+    }
+
     // AL PESTAÑEO: chat.message se publica PRIMERO (es lo que pinta el mensaje
     // en el chat abierto del receptor); lo secundario (marcar leido, refresh de
     // listas) va despues y no puede retrasarlo.
@@ -579,6 +621,7 @@ export class OrdersService {
       replyToId: replyTo?.id ?? null,
       replyToAuthorId: replyTo?.authorId ?? null,
       participantIds: participants,
+      superMention: input.mentionAll === true,
       createdAt: msg.createdAt.toISOString(),
     });
     // Quien escribe obviamente ya "leyo" el hilo -> marcar leido para no contarse a si mismo.
@@ -608,7 +651,9 @@ export class OrdersService {
     );
     void Promise.all([
       this.push.sendToUsers([...mentioned], {
-        title: `${sede} · ${order.customerName}`,
+        title: input.mentionAll
+          ? `📢 SÚPER MENCIÓN · ${sede} · ${order.customerName}`
+          : `${sede} · ${order.customerName}`,
         body: preview,
         url,
         author: displayName(auth),
@@ -731,6 +776,61 @@ export class OrdersService {
       include: { reactions: true },
     });
     return this.toMessage(fresh, auth.userId);
+  }
+
+  /** Alertas de SUPER MENCION sin cerrar para el usuario (se muestran al volver). */
+  async pendingSuperMentions(auth: AuthContext): Promise<SuperMentionAlertDto[]> {
+    const { prisma } = getTenantContext();
+    const rows = await prisma.superMentionAlert.findMany({
+      where: { userId: auth.userId, seenAt: null },
+      orderBy: { createdAt: 'desc' },
+      take: 5,
+      include: {
+        order: { select: { externalId: true, customerName: true, warehouseId: true } },
+      },
+    });
+    if (rows.length === 0) return [];
+    const orderIds = [...new Set(rows.map((r) => r.orderId))];
+    const invoiced = new Set(
+      (
+        await prisma.orderEvent.findMany({
+          where: {
+            orderId: { in: orderIds },
+            type: { in: ['vtex_invoiced', 'vtex_invoiced_external'] },
+          },
+          select: { orderId: true },
+          distinct: ['orderId'],
+        })
+      ).map((e) => e.orderId),
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      orderId: r.orderId,
+      messageId: r.messageId,
+      externalId: r.order.externalId,
+      customerName: r.order.customerName,
+      warehouseId: r.order.warehouseId,
+      stage: r.order.warehouseId
+        ? invoiced.has(r.orderId)
+          ? ('invoiced' as const)
+          : ('pending' as const)
+        : ('general' as const),
+      authorName: r.authorName,
+      preview: r.preview,
+      createdAt: r.createdAt.toISOString(),
+    }));
+  }
+
+  /** Cierra (ack) las alertas de super mencion del usuario para esos mensajes. */
+  async ackSuperMentions(messageIds: string[], auth: AuthContext): Promise<{ ok: true }> {
+    const { prisma } = getTenantContext();
+    if (messageIds.length > 0) {
+      await prisma.superMentionAlert.updateMany({
+        where: { userId: auth.userId, messageId: { in: messageIds }, seenAt: null },
+        data: { seenAt: new Date() },
+      });
+    }
+    return { ok: true };
   }
 
   /** Filtra las menciones a userIds que de verdad son miembros del workspace. */

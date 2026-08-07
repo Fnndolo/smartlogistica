@@ -167,6 +167,9 @@ export function ChatNotifications() {
       if (viewingThisChat) return;
 
       if (event.kind === 'chat.message') {
+        // Las SUPER MENCIONES las maneja SuperMentionAlerts (modal + fanfarria):
+        // sin ding ni toast doble aqui.
+        if (event.superMention === true) return;
         const authorId = String(event.authorId ?? '');
         if (authorId === me.id) return; // lo escribi yo
         const mentions = Array.isArray(event.mentions) ? (event.mentions as string[]) : [];

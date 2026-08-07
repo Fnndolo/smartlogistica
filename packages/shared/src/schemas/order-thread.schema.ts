@@ -58,12 +58,30 @@ export const orderMessageSchema = z.object({
 });
 export type OrderMessage = z.infer<typeof orderMessageSchema>;
 
+/** Alerta de SUPER MENCION (@todos) pendiente para el usuario. */
+export const superMentionAlertSchema = z.object({
+  id: z.string(),
+  orderId: z.string(),
+  messageId: z.string(),
+  externalId: z.string(),
+  customerName: z.string(),
+  warehouseId: z.string().nullable(),
+  stage: z.enum(['general', 'pending', 'invoiced']),
+  authorName: z.string(),
+  preview: z.string(),
+  createdAt: z.string().datetime(),
+});
+export type SuperMentionAlert = z.infer<typeof superMentionAlertSchema>;
+
 export const createOrderMessageSchema = z.object({
   body: z.string().trim().min(1, 'Escribe un mensaje').max(2000),
   // userIds mencionados; el server los valida contra el equipo del workspace.
   mentions: z.array(z.string()).max(20).optional(),
   // Mensaje al que se responde (debe ser del mismo pedido).
   replyToId: z.string().optional(),
+  // SUPER MENCION (@todos): alerta modal + sonido a todo el equipo con acceso
+  // al pedido. El server calcula los destinatarios.
+  mentionAll: z.boolean().optional(),
 });
 export type CreateOrderMessageInput = z.infer<typeof createOrderMessageSchema>;
 

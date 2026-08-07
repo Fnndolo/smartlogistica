@@ -152,6 +152,25 @@ export class OrdersController {
     return this.orders.globalSearch(query.slice(0, 120), user);
   }
 
+  /** Alertas de SUPER MENCION (@todos) pendientes. Ruta literal: antes de :id. */
+  @Get('super-mentions/pending')
+  async pendingSuperMentions(@CurrentUser() user: AuthContext) {
+    return this.orders.pendingSuperMentions(user);
+  }
+
+  /** Cierra alertas de super mencion (por messageIds). Ruta literal: antes de :id. */
+  @Post('super-mentions/ack')
+  @HttpCode(200)
+  async ackSuperMentions(
+    @Body('messageIds') messageIds: unknown,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ ok: true }> {
+    const ids = Array.isArray(messageIds)
+      ? messageIds.filter((x): x is string => typeof x === 'string').slice(0, 50)
+      : [];
+    return this.orders.ackSuperMentions(ids, user);
+  }
+
   /** Asignar / transferir / devolver (warehouseId null) pedidos a una sede. */
   @Post('assign')
   @HttpCode(200)

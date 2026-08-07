@@ -20,6 +20,7 @@ import {
   Loader2,
   Mail,
   MapPin,
+  Megaphone,
   MessageSquare,
   Package,
   Paperclip,
@@ -64,6 +65,7 @@ import { useOrderActions } from './use-order-actions';
 import { compressImage } from '@/lib/compress-image';
 
 import { EmojiPicker } from './emoji-picker';
+import { ImageLightbox, type LightboxImage } from './image-lightbox';
 import { bumpReaction, topReactions } from './reaction-frequents';
 import {
   activeMention,
@@ -922,11 +924,22 @@ function ConversacionTab({
   }, [messages, me]);
 
   const send = useMutation({
-    mutationFn: ({ body, mentions, replyToId }: { body: string; mentions: string[]; replyToId?: string }) =>
+    mutationFn: ({
+      body,
+      mentions,
+      replyToId,
+      mentionAll,
+    }: {
+      body: string;
+      mentions: string[];
+      replyToId?: string;
+      mentionAll?: boolean;
+    }) =>
       api.post<OrderMessage>(`/v1/orders/${orderId}/messages`, {
         body,
         mentions,
         ...(replyToId ? { replyToId } : {}),
+        ...(mentionAll ? { mentionAll: true } : {}),
       }),
     // Envio estilo WhatsApp: el mensaje aparece de inmediato (optimista) y NO se
     // refetchea al terminar (se reemplaza el temporal por el real en su sitio, sin
@@ -987,7 +1000,13 @@ function ConversacionTab({
       setReplyTo(null);
     } else {
       if (!body) return;
-      send.mutate({ body, mentions: mentionsInText(body, members), replyToId: replyTo?.id });
+      send.mutate({
+        body,
+        mentions: mentionsInText(body, members),
+        replyToId: replyTo?.id,
+        // "@todos" en el texto = SUPER MENCION (alerta a todo el equipo).
+        mentionAll: /(^|\s)@todos(?=\s|$|[.,!?])/i.test(body),
+      });
     }
     // El teclado NO se baja al enviar (como WhatsApp): el campo sigue enfocado.
     textareaRef.current?.focus();
@@ -1070,6 +1089,25 @@ function ConversacionTab({
   };
 
   const mentionMatches = mention ? matchMembers(mention.query, members) : [];
+
+  // SUPER MENCION: inserta "@todos " (alerta a todo el equipo al enviar).
+  const pickMentionAll = () => {
+    if (!mention) return;
+    const before = text.slice(0, mention.start);
+    const after = text.slice(mention.start + 1 + mention.query.length);
+    const inserted = '@todos ';
+    const next = `${before}${inserted}${after}`;
+    setText(next);
+    setMention(null);
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) {
+        const pos = before.length + inserted.length;
+        el.focus();
+        el.setSelectionRange(pos, pos);
+      }
+    });
+  };
 
   // Eliminar mensaje(s). Optimista: desaparecen al instante; el invalidate
   // final reconcilia (y restaura los que hayan fallado).
@@ -1344,6 +1382,30 @@ function ConversacionTab({
     [messages, pendingMsgs],
   );
 
+  // Visor embebido: TODAS las imagenes de la conversacion, en orden, para
+  // navegar con flechas dentro del lightbox.
+  const gallery = useMemo<LightboxImage[]>(
+    () =>
+      allMessages
+        .filter(
+          (m) =>
+            m.attachmentUrl &&
+            (m.kind === 'imei_photo' ||
+              m.kind === 'serial_photo' ||
+              (m.kind === 'file' && (m.attachmentMime ?? '').startsWith('image/'))),
+        )
+        .map((m) => ({ url: m.attachmentUrl!, name: m.body, caption: m.caption })),
+    [allMessages],
+  );
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const openPreview = useCallback(
+    (url: string) => {
+      const i = gallery.findIndex((g) => g.url === url);
+      if (i >= 0) setLightboxIndex(i);
+    },
+    [gallery],
+  );
+
   return (
     <div
       className="relative flex h-full flex-col"
@@ -1445,6 +1507,7 @@ function ConversacionTab({
                     ? () => react.mutate({ messageId: m.id, emoji: '👍' })
                     : undefined
                 }
+                onPreview={openPreview}
               />
               </Fragment>
             );
@@ -1652,11 +1715,29 @@ function ConversacionTab({
             onChange={(e) => onAttachmentFile(e.target.files)}
           />
           <div className="relative flex-1">
-            {mention && mentionMatches.length > 0 ? (
-              <div className="absolute bottom-full left-0 z-20 mb-2 w-56 overflow-hidden rounded-lg border border-border bg-popover p-1 shadow-lg">
+            {mention && (mentionMatches.length > 0 || 'todos'.startsWith(mention.query.toLowerCase())) ? (
+              <div className="absolute bottom-full left-0 z-20 mb-2 w-64 overflow-hidden rounded-lg border border-border bg-popover p-1 shadow-lg">
                 <p className="px-2 pb-1 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                   Mencionar
                 </p>
+                {/* SUPER MENCION: alerta modal + sonido a TODO el equipo. */}
+                {'todos'.startsWith(mention.query.toLowerCase()) ? (
+                  <button
+                    type="button"
+                    onClick={pickMentionAll}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-amber-500/10"
+                  >
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400">
+                      <Megaphone className="h-3.5 w-3.5" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium">@todos</span>
+                      <span className="block truncate text-[11px] text-muted-foreground">
+                        Súper mención: alerta a todo el equipo
+                      </span>
+                    </span>
+                  </button>
+                ) : null}
                 {mentionMatches.map((m) => (
                   <button
                     key={m.userId}
@@ -1700,11 +1781,17 @@ function ConversacionTab({
                   return;
                 }
                 if (e.key === 'Enter' && !e.shiftKey) {
-                  // Con el dropdown abierto, Enter elige el primer miembro.
+                  // Con el dropdown abierto, Enter elige el primer miembro
+                  // (o @todos si es lo unico que matchea).
                   const first = mentionMatches[0];
                   if (mention && first) {
                     e.preventDefault();
                     pickMention(first);
+                    return;
+                  }
+                  if (mention && 'todos'.startsWith(mention.query.toLowerCase())) {
+                    e.preventDefault();
+                    pickMentionAll();
                     return;
                   }
                   e.preventDefault();
@@ -1737,6 +1824,16 @@ function ConversacionTab({
           </button>
         </div>
       </div>
+
+      {/* Visor de imagenes embebido (estilo Google) */}
+      {lightboxIndex !== null ? (
+        <ImageLightbox
+          images={gallery}
+          index={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+          onNavigate={setLightboxIndex}
+        />
+      ) : null}
 
       {/* Picker de emojis (reacciones) */}
       {pickerFor ? (
@@ -1931,7 +2028,24 @@ function MentionText({
             {part.value}
           </span>
         ) : (
-          <span key={i}>{part.value}</span>
+          // "@todos" (super mencion) se resalta con su chip ambar propio.
+          part.value.split(/(@todos)/gi).map((piece, j) =>
+            /^@todos$/i.test(piece) ? (
+              <span
+                key={`${i}-${j}`}
+                className={cn(
+                  'inline-block max-w-full truncate rounded-[5px] px-[5px] align-bottom font-semibold',
+                  mine
+                    ? 'bg-accent-foreground/25 text-accent-foreground'
+                    : 'bg-amber-500/15 text-amber-700 dark:text-amber-400',
+                )}
+              >
+                📢 {piece}
+              </span>
+            ) : (
+              <span key={`${i}-${j}`}>{piece}</span>
+            ),
+          )
         ),
       )}
     </>
@@ -1956,6 +2070,7 @@ function MessageBubble({
   hoverActions = true,
   onDoubleTap,
   flash = false,
+  onPreview,
 }: {
   message: OrderMessage;
   mine: boolean;
@@ -1982,6 +2097,8 @@ function MessageBubble({
   onDoubleTap?: () => void;
   /** Resaltado temporal (se acaba de saltar a este mensaje desde una mencion). */
   flash?: boolean;
+  /** Abre el visor embebido con esta imagen (lightbox). */
+  onPreview?: (url: string) => void;
 }) {
   const isPhoto = message.kind === 'imei_photo' || message.kind === 'serial_photo';
   const isDoc = message.kind === 'document';
@@ -2111,11 +2228,11 @@ function MessageBubble({
     ) : null;
 
   const bubble = isPhoto ? (
-    <PhotoCard message={message} mine={mine} matchByCode={matchByCode} />
+    <PhotoCard message={message} mine={mine} matchByCode={matchByCode} onPreview={onPreview} />
   ) : isDoc ? (
     <DocumentCard message={message} mine={mine} />
   ) : isFile ? (
-    <AttachmentCard message={message} mine={mine} />
+    <AttachmentCard message={message} mine={mine} onPreview={onPreview} />
   ) : (
     <div
       className={cn(
@@ -2337,7 +2454,15 @@ function DocumentCard({ message, mine }: { message: OrderMessage; mine: boolean 
  * controles, o tarjeta de descarga para cualquier otro archivo. Sin badges de
  * IMEI/serial ni catalogo (eso es exclusivo de las fotos de dispositivo).
  */
-function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolean }) {
+function AttachmentCard({
+  message,
+  mine,
+  onPreview,
+}: {
+  message: OrderMessage;
+  mine: boolean;
+  onPreview?: (url: string) => void;
+}) {
   const url = message.attachmentUrl;
   const mime = message.attachmentMime ?? '';
   const name = message.body ?? 'archivo';
@@ -2361,11 +2486,21 @@ function AttachmentCard({ message, mine }: { message: OrderMessage; mine: boolea
     return (
       <div className={cn('w-[230px] max-w-full overflow-hidden rounded-[14px] border', tone)}>
         <a
-          href={pending ? undefined : url}
+          href={onPreview || pending ? undefined : url}
           target="_blank"
           rel="noreferrer"
+          onClick={
+            onPreview
+              ? (e) => {
+                  // Visor EMBEBIDO (lightbox), nada de abrir otra pestaña.
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onPreview(url);
+                }
+              : undefined
+          }
           // bg-muted: las fotos blancas no se funden con el fondo blanco del chat.
-          className="relative block bg-muted"
+          className={cn('relative block bg-muted', onPreview && 'cursor-zoom-in')}
           title={name}
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -2459,11 +2594,13 @@ function PhotoCard({
   mine = false,
   className,
   matchByCode,
+  onPreview,
 }: {
   message: OrderMessage;
   mine?: boolean;
   className?: string;
   matchByCode?: Map<string, CatalogMatch>;
+  onPreview?: (url: string) => void;
 }) {
   const isSerial = message.kind === 'serial_photo';
   return (
@@ -2478,11 +2615,27 @@ function PhotoCard({
       )}
     >
       {message.attachmentUrl ? (
-        <a href={message.attachmentUrl} target="_blank" rel="noreferrer">
+        <a
+          href={onPreview ? undefined : message.attachmentUrl}
+          target="_blank"
+          rel="noreferrer"
+          onClick={
+            onPreview
+              ? (e) => {
+                  // Visor EMBEBIDO (lightbox), nada de abrir otra pestaña.
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onPreview(message.attachmentUrl!);
+                }
+              : undefined
+          }
+          className={cn(onPreview && 'cursor-zoom-in')}
+        >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={message.attachmentUrl}
             alt={isSerial ? 'Foto serial' : 'Foto IMEI'}
+            decoding="async"
             className="h-[140px] w-full bg-muted object-cover md:h-[120px]"
           />
         </a>

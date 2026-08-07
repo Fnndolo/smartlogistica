@@ -53,6 +53,20 @@ CREATE TABLE "AlegraConnection" (
 );
 
 -- CreateTable
+CREATE TABLE "SuperMentionAlert" (
+    "id" TEXT NOT NULL,
+    "orderId" TEXT NOT NULL,
+    "messageId" TEXT NOT NULL,
+    "userId" TEXT NOT NULL,
+    "authorName" TEXT NOT NULL,
+    "preview" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "seenAt" TIMESTAMP(3),
+
+    CONSTRAINT "SuperMentionAlert_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "OrderReaction" (
     "id" TEXT NOT NULL,
     "orderId" TEXT NOT NULL,
@@ -298,6 +312,9 @@ CREATE UNIQUE INDEX "CoordinadoraConnection_warehouseId_key" ON "CoordinadoraCon
 CREATE UNIQUE INDEX "AlegraConnection_warehouseId_key" ON "AlegraConnection"("warehouseId");
 
 -- CreateIndex
+CREATE INDEX "SuperMentionAlert_userId_seenAt_idx" ON "SuperMentionAlert"("userId", "seenAt");
+
+-- CreateIndex
 CREATE INDEX "OrderReaction_orderId_idx" ON "OrderReaction"("orderId");
 
 -- CreateIndex
@@ -395,6 +412,9 @@ ALTER TABLE "CoordinadoraConnection" ADD CONSTRAINT "CoordinadoraConnection_ware
 
 -- AddForeignKey
 ALTER TABLE "AlegraConnection" ADD CONSTRAINT "AlegraConnection_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "SuperMentionAlert" ADD CONSTRAINT "SuperMentionAlert_orderId_fkey" FOREIGN KEY ("orderId") REFERENCES "Order"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "OrderReaction" ADD CONSTRAINT "OrderReaction_orderId_fkey" FOREIGN KEY ("orderId") REFERENCES "Order"("id") ON DELETE CASCADE ON UPDATE CASCADE;
