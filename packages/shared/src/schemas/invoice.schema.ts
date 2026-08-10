@@ -32,6 +32,9 @@ export const invoiceLinePreviewSchema = z.object({
   itemId: z.string().nullable(),
   productName: z.string().nullable(),
   suggestedPrice: z.string().nullable(),
+  // Cantidad sugerida (los pedidos MONTADOS a mano pueden traer mas de 1 unidad
+  // del producto elegido; las lineas por foto siempre son 1).
+  quantity: z.number().int().min(1).default(1),
   matched: z.boolean(),
   // AVISO de la IA (experta en celulares): el producto de la COMPRA no
   // corresponde al del PEDIDO (modelo/almacenamiento/RAM). Solo informa,
@@ -77,8 +80,37 @@ export const createInvoiceLineSchema = z.object({
 });
 export type CreateInvoiceLine = z.infer<typeof createInvoiceLineSchema>;
 
+/**
+ * Cuenta de banco de Alegra (para elegir el medio de pago en pedidos montados
+ * a mano). Solo id + nombre — nunca saldos ni datos sensibles.
+ */
+export const alegraPaymentAccountSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+export type AlegraPaymentAccount = z.infer<typeof alegraPaymentAccountSchema>;
+
+/** Medios de pago que acepta Alegra al registrar un pago de factura. */
+export const invoicePaymentMethodSchema = z.enum(['transfer', 'cash', 'debit-card', 'credit-card']);
+export type InvoicePaymentMethod = z.infer<typeof invoicePaymentMethodSchema>;
+
+/**
+ * Un pago de la factura (pedidos MONTADOS a mano): cuenta de Alegra + valor.
+ * Como en Alegra, se pueden registrar hasta 3 distintos; si la suma no llega al
+ * total, la factura queda ABIERTA por el resto (p. ej. recaudo contraentrega).
+ */
+export const invoicePaymentSchema = z.object({
+  accountId: z.string().min(1, 'Falta la cuenta'),
+  amount: z.number().positive('Valor invalido'),
+  method: invoicePaymentMethodSchema.default('transfer'),
+});
+export type InvoicePaymentInput = z.infer<typeof invoicePaymentSchema>;
+
 export const createInvoiceSchema = z.object({
   lines: z.array(createInvoiceLineSchema).min(1, 'Agrega al menos un producto').max(50),
+  // SOLO pedidos montados a mano: pagos elegidos (los VTEX siguen saliendo
+  // pagados con la cuenta MARKETPLACE ADDI, como siempre).
+  payments: z.array(invoicePaymentSchema).max(3, 'Maximo 3 pagos').optional(),
 });
 export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>;
 

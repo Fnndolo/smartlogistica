@@ -6,11 +6,13 @@ import type {
   AlegraCredentialsInput,
   AlegraImeiMatch,
   AlegraItem,
+  AlegraPaymentAccount,
   AlegraSeller,
   AlegraSyncResult,
   AlegraTestResult,
   CreateInvoiceLine,
   InvoiceLinePreview,
+  InvoicePaymentInput,
   InvoiceResult,
 } from '@smartlogistica/shared';
 
@@ -370,6 +372,20 @@ export class AlegraService {
     return accounts;
   }
 
+  /**
+   * Cuentas de banco de Alegra de la sede (para elegir los pagos de una factura
+   * de pedido MONTADO a mano). Cualquier miembro con acceso a la sede.
+   */
+  async listPaymentAccounts(warehouseId: string, auth: AuthContext): Promise<AlegraPaymentAccount[]> {
+    await this.assertWarehouseAccess(warehouseId, auth);
+    const { tenantId } = getTenantContext();
+    const http = await this.client.forWarehouse(tenantId, warehouseId);
+    const accounts = await this.listBankAccountsCached(warehouseId, http);
+    return accounts
+      .filter((a) => a.name)
+      .map((a) => ({ id: String(a.id), name: String(a.name) }));
+  }
+
   /** Busca items del catalogo de Alegra (selector manual de producto). */
   async searchItems(warehouseId: string, query: string, auth: AuthContext): Promise<AlegraItem[]> {
     await this.assertWarehouseAccess(warehouseId, auth);
@@ -457,6 +473,7 @@ export class AlegraService {
           itemId: match?.itemId ?? null,
           productName: match?.productName ?? null,
           suggestedPrice,
+          quantity: 1, // una foto = un equipo
           matched: Boolean(match?.itemId),
           // El veredicto de la IA (compra vs pedido) lo agrega OrdersService.
           mismatch: null,
@@ -466,14 +483,20 @@ export class AlegraService {
   }
 
   /**
-   * Crea la factura de venta en Alegra, PAGADA con la cuenta "MARKETPLACE ADDI"
-   * (balance 0 -> queda cerrada/cobrada). Solo admin.
+   * Crea la factura de venta en Alegra. Solo admin.
+   *
+   * - Pedidos de marketplace (default): PAGADA con la cuenta "MARKETPLACE ADDI"
+   *   (balance 0 -> queda cerrada/cobrada) y anotacion "ADDI".
+   * - Pedidos MONTADOS a mano (`opts.manualPayments`): pagos elegidos por el
+   *   usuario (hasta 3 cuentas de Alegra); si la suma no llega al total, la
+   *   factura queda ABIERTA por el resto (p. ej. recaudo contraentrega).
    */
   async createInvoiceForWarehouse(
     warehouseId: string,
     client: InvoiceClient,
     lines: CreateInvoiceLine[],
     auth: AuthContext,
+    opts?: { manualPayments?: InvoicePaymentInput[] },
   ): Promise<{
     result: InvoiceResult;
     /** Forma/medio de pago REALES de la factura (ya traducidos), para el Certificado. */
@@ -483,18 +506,30 @@ export class AlegraService {
     await this.assertWarehouseAccess(warehouseId, auth);
     const { tenantId } = getTenantContext();
     const http = await this.client.forWarehouse(tenantId, warehouseId);
+    const manual = opts?.manualPayments != null;
 
     try {
       // 1. Contacto + cuenta "MARKETPLACE ADDI": son independientes -> en paralelo.
+      //    (En pedidos montados a mano no hay ADDI: las cuentas ya las eligio el
+      //    usuario, solo se valida que existan.)
       const identification = (client.identification ?? '').trim();
       const [existing, accounts] = await Promise.all([
         identification ? this.client.findContactByIdentification(http, identification) : null,
         this.listBankAccountsCached(warehouseId, http),
       ]);
 
-      const addi = accounts.find((a) => AlegraService.ADDI_ACCOUNT_MATCH.test(a.name ?? ''));
-      if (!addi) {
+      const addi = manual
+        ? null
+        : accounts.find((a) => AlegraService.ADDI_ACCOUNT_MATCH.test(a.name ?? ''));
+      if (!manual && !addi) {
         throw new BadRequestException('No se encontro la cuenta "MARKETPLACE ADDI" en tu Alegra');
+      }
+      if (manual) {
+        const known = new Set(accounts.map((a) => String(a.id)));
+        const missing = (opts?.manualPayments ?? []).find((p) => !known.has(p.accountId));
+        if (missing) {
+          throw new BadRequestException('Una de las cuentas de pago ya no existe en Alegra');
+        }
       }
 
       // 2. Contacto: si ya existe (por cedula) se usa tal cual (ya tiene su data);
@@ -545,12 +580,31 @@ export class AlegraService {
         })
         .catch(() => null);
 
-      // 4. Factura con pago -> cerrada/cobrada.
+      // 4. Pagos: ADDI por el total (marketplace) o los elegidos por el usuario
+      //    (montado a mano; la suma no puede superar el total, y puede ser menor
+      //    -> la factura queda abierta por el resto).
+      const manualPayments = opts?.manualPayments ?? [];
+      if (manual) {
+        const paid = manualPayments.reduce((s, p) => s + p.amount, 0);
+        if (paid > total + 0.01) {
+          throw new BadRequestException('Los pagos suman mas que el total de la factura');
+        }
+      }
+      const payments = manual
+        ? manualPayments.map((p) => ({
+            date: today,
+            account: { id: Number(p.accountId) || p.accountId },
+            amount: p.amount,
+            paymentMethod: p.method,
+          }))
+        : [{ date: today, account: { id: addi!.id }, amount: total, paymentMethod: 'transfer' }];
+
       const created = await this.client.createInvoice(http, {
         date: today,
         dueDate: today,
         client: { id: clientId },
-        anotation: 'ADDI', // en "anotaciones" siempre va "ADDI"
+        // En marketplace, "anotaciones" siempre dice ADDI; montado a mano, nada.
+        ...(manual ? {} : { anotation: 'ADDI' }),
         ...(sellerPref ? { seller: Number(sellerPref.sellerId) || sellerPref.sellerId } : {}),
         items: lines.map((l) => ({
           id: l.itemId,
@@ -558,9 +612,7 @@ export class AlegraService {
           quantity: l.quantity,
           ...(l.description ? { description: l.description } : {}),
         })),
-        payments: [
-          { date: today, account: { id: addi.id }, amount: total, paymentMethod: 'transfer' },
-        ],
+        ...(payments.length > 0 ? { payments } : {}),
       });
 
       // El PDF ya NO se descarga aqui: alarga el boton ~1-2s y solo se usa

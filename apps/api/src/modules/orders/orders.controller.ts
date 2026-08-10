@@ -21,6 +21,7 @@ import {
   catalogLookupSchema,
   createGuideSchema,
   createInvoiceSchema,
+  createManualOrderSchema,
   createOrderMessageSchema,
   toggleReactionSchema,
   devicePhotoKindSchema,
@@ -28,12 +29,14 @@ import {
   orderReactionInputSchema,
   processAllSchema,
   type AlegraItem,
+  type AlegraPaymentAccount,
   type AssignOrdersInput,
   type CatalogLookupInput,
   type CatalogMatch,
   type CoordinadoraCity,
   type CreateGuideInput,
   type CreateInvoiceInput,
+  type CreateManualOrderInput,
   type CreateOrderMessageInput,
   type ToggleReactionInput,
   type DevicePhotoResponse,
@@ -169,6 +172,19 @@ export class OrdersController {
       ? messageIds.filter((x): x is string => typeof x === 'string').slice(0, 50)
       : [];
     return this.orders.ackSuperMentions(ids, user);
+  }
+
+  /**
+   * "Montar pedido": crea un pedido EXTERNO a las plataformas directo en una
+   * sede. Ruta literal: va ANTES de las rutas con :id.
+   */
+  @Post('manual')
+  @HttpCode(201)
+  async createManual(
+    @Body(new ZodValidationPipe(createManualOrderSchema)) body: CreateManualOrderInput,
+    @CurrentUser() user: AuthContext,
+  ) {
+    return this.orders.createManualOrder(body, user);
   }
 
   /** Asignar / transferir / devolver (warehouseId null) pedidos a una sede. */
@@ -395,6 +411,15 @@ export class OrdersController {
     @CurrentUser() user: AuthContext,
   ): Promise<AlegraItem[]> {
     return this.orders.searchAlegraItems(id, (q ?? '').trim(), user);
+  }
+
+  /** Cuentas de banco de Alegra (medios de pago de pedidos montados a mano). */
+  @Get(':id/payment-accounts')
+  async paymentAccounts(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<AlegraPaymentAccount[]> {
+    return this.orders.listPaymentAccounts(id, user);
   }
 
   /** Emite la factura de venta en Alegra (cerrada/cobrada, cuenta MARKETPLACE ADDI). */

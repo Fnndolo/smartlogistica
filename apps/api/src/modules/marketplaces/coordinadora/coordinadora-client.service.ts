@@ -123,6 +123,11 @@ export interface GenerarGuiaInput {
   };
   reference?: string;
   observations?: string;
+  /**
+   * Recaudo CONTRAENTREGA (RCE): Coordinadora cobra `valor` al entregar.
+   * `referencia` = con que se cruza el recaudo (Nº de factura o de pedido).
+   */
+  recaudo?: { referencia: string; valor: number };
 }
 
 export interface GuiaResult {
@@ -315,6 +320,21 @@ export class CoordinadoraClient {
           unidades: input.package.units,
         },
       ],
+      // Recaudo contraentrega: array `recaudos` del WSDL (Agw_typeGuiaDetalleRecaudo).
+      // forma_pago 1 = Efectivo (asi lo cobra el mensajero al entregar).
+      ...(input.recaudo
+        ? {
+            recaudos: [
+              {
+                referencia: input.recaudo.referencia,
+                valor: input.recaudo.valor,
+                valor_base_iva: 0,
+                valor_iva: 0,
+                forma_pago: 1,
+              },
+            ],
+          }
+        : {}),
       usuario: creds.usuario,
       clave: this.clave(creds.password),
     });

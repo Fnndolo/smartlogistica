@@ -1,10 +1,11 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query } from '@nestjs/common';
 import {
   alegraCredentialsSchema,
   saveSellerPrefSchema,
   type AlegraConnectionSummary,
   type AlegraCredentialsInput,
   type AlegraImeiMatch,
+  type AlegraItem,
   type AlegraSeller,
   type AlegraSyncResult,
   type AlegraTestResult,
@@ -61,6 +62,21 @@ export class AlegraController {
     @CurrentUser() user: AuthContext,
   ): Promise<void> {
     await this.alegra.disconnect(warehouseId, user);
+  }
+
+  /**
+   * Busca items del catalogo de Alegra de la sede (cualquier miembro). La usa el
+   * form de "Montar pedido" para elegir el producto sin un pedido de por medio.
+   */
+  @Get('items')
+  async items(
+    @Param('warehouseId') warehouseId: string,
+    @Query('q') q: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<AlegraItem[]> {
+    const query = (q ?? '').trim();
+    if (query.length < 2) return [];
+    return this.alegra.searchItems(warehouseId, query, user);
   }
 
   /** Vendedores guardados en la cuenta Alegra de la sede (cualquier miembro). */

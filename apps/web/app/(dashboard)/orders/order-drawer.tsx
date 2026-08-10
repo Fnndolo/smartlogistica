@@ -371,10 +371,14 @@ function DrawerContent({
         {canManage && !external ? (
           <>
             <TabPane active={tab === 'facturar'} scroll>
-              <InvoicePanel orderId={order.id} />
+              <InvoicePanel orderId={order.id} manual={order.provider === 'manual'} />
             </TabPane>
             <TabPane active={tab === 'guia'} scroll>
-              <GuidePanel orderId={order.id} />
+              <GuidePanel
+                orderId={order.id}
+                manual={order.provider === 'manual'}
+                orderTotal={order.totalValue}
+              />
             </TabPane>
           </>
         ) : null}
@@ -2776,7 +2780,7 @@ function EventIcon({ type }: { type: string }) {
   if (type === 'claimed' || type === 'unclaimed') return <Hand className={cls} />;
   if (type === 'invoiced') return <ReceiptText className={cls} />;
   if (type === 'guide_generated') return <Truck className={cls} />;
-  if (type === 'vtex_invoiced' || type === 'vtex_invoiced_external')
+  if (type === 'vtex_invoiced' || type === 'vtex_invoiced_external' || type === 'manual_completed')
     return <ReceiptText className={cls} />;
   return <Activity className={cls} />;
 }
@@ -2802,15 +2806,22 @@ function describeEvent(e: OrderEvent): string {
     case 'status_changed':
       return 'Cambio de estado';
     case 'created':
-      return 'Pedido recibido';
+      // Los pedidos MONTADOS a mano nacen dentro de SmartLogistica (no de VTEX).
+      return e.data.manual === true ? 'Pedido montado a mano (externo a las plataformas)' : 'Pedido recibido';
     case 'invoiced':
       return `Factura ${(e.data.number as string | undefined) ?? ''} emitida en Alegra`.trim();
-    case 'guide_generated':
-      return `Guia ${(e.data.number as string | undefined) ?? ''} generada en Coordinadora`.trim();
+    case 'guide_generated': {
+      const base = `Guia ${(e.data.number as string | undefined) ?? ''} generada en Coordinadora`.trim();
+      return typeof e.data.cod === 'number' && e.data.cod > 0
+        ? `${base} · con recaudo contraentrega`
+        : base;
+    }
     case 'vtex_invoiced':
       return `Facturado en VTEX · MKT ${(e.data.invoiceNumber as string | undefined) ?? ''}`.trim();
     case 'vtex_invoiced_external':
       return 'Facturado POR FUERA de SmartLogística (cerrado directamente en VTEX)';
+    case 'manual_completed':
+      return `Pedido completado · Factura ${(e.data.invoiceNumber as string | undefined) ?? ''} + guía ${(e.data.tracking as string | undefined) ?? ''} (sin MKT)`.trim();
     default:
       return e.type;
   }

@@ -218,6 +218,19 @@ export class CoordinadoraService {
     }
   }
 
+  /**
+   * Busca ciudades para CUALQUIER miembro con acceso a la sede (la usa el form
+   * de "Montar pedido", donde aun no existe un pedido del cual colgarse).
+   */
+  async searchCitiesForMember(
+    warehouseId: string,
+    query: string,
+    auth: AuthContext,
+  ): Promise<CoordinadoraCity[]> {
+    await this.assertWarehouseAccess(warehouseId, auth);
+    return this.searchCities(warehouseId, query);
+  }
+
   /** Busca ciudades (para el selector de destino). Requiere >= 2 letras. */
   async searchCities(warehouseId: string, query: string): Promise<CoordinadoraCity[]> {
     const q = normalizeCity(query);
@@ -296,6 +309,7 @@ export class CoordinadoraService {
     reference: string | null,
     rotuloId: number | undefined,
     auth: AuthContext,
+    recaudo?: { referencia: string; valor: number },
   ): Promise<{ guide: GuiaResult; rotulo: Buffer | null }> {
     this.assertAdmin(auth);
     await this.assertWarehouseAccess(warehouseId, auth);
@@ -315,6 +329,7 @@ export class CoordinadoraService {
         package: pkg,
         reference: reference ?? undefined,
         observations: pkg.observations,
+        recaudo,
       });
       // Rotulo: best-effort (si falla, la guia ya quedo generada). Formato = el
       // elegido al generar o el default de la sede.

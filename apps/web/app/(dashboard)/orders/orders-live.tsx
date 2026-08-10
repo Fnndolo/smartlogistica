@@ -3,7 +3,7 @@
 import { useSearchParams, usePathname } from 'next/navigation';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Building2, Check, ChevronLeft, ChevronRight, MapPin, Truck, Undo2, X } from 'lucide-react';
+import { Building2, Check, ChevronLeft, ChevronRight, MapPin, PackagePlus, Truck, Undo2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type {
   ListOrdersResponse,
@@ -21,6 +21,7 @@ import { OrdersTable } from './orders-table';
 import { OrderDrawer } from './order-drawer';
 import { EmptyState } from './empty-state';
 import { DateRangeFilter } from './date-range-filter';
+import { MountOrderDialog } from './mount-order-dialog';
 import { OrdersPulseRow } from './orders-pulse';
 import { SearchFilter } from './search-filter';
 import { useOrdersStream } from './use-orders-stream';
@@ -120,6 +121,8 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const [openTab, setOpenTab] = useState<'detalle' | 'conversacion'>('conversacion');
   // Mensaje al que hay que SALTAR al abrir (deep-link de una mencion).
   const [openMsg, setOpenMsg] = useState<string | null>(null);
+  // "Montar pedido" (solo en la sede · Por preparar): pedido externo a mano.
+  const [mounting, setMounting] = useState(false);
 
   const openFromRow = useCallback((o: OrderSummary) => {
     setOpenTab('conversacion');
@@ -333,6 +336,14 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
         <DateRangeFilter />
         {state === 'invoiced' && warehouseId ? <ShippingFilter /> : null}
         {state !== 'invoiced' ? <AddressFilter /> : null}
+        {/* Montar pedido: SOLO en la sede (Por preparar) — pedidos externos a
+            las plataformas, escritos a mano (sin MKT: solo factura y guia). */}
+        {scope.kind === 'warehouse' && state !== 'invoiced' ? (
+          <Button size="sm" onClick={() => setMounting(true)} className="ml-auto h-[34px] rounded-lg">
+            <PackagePlus className="h-3.5 w-3.5" />
+            Montar pedido
+          </Button>
+        ) : null}
       </div>
 
       {items.length === 0 ? (
@@ -379,6 +390,22 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
           selectedIds={[...selected]}
           onClear={() => setSelected(new Set())}
           onAssign={handleAssign}
+        />
+      ) : null}
+
+      {mounting && scope.kind === 'warehouse' ? (
+        <MountOrderDialog
+          warehouseId={scope.id}
+          warehouseName={scope.name}
+          onClose={() => setMounting(false)}
+          onCreated={(order) => {
+            setMounting(false);
+            queryClient.invalidateQueries({ queryKey: ['orders'] });
+            queryClient.invalidateQueries({ queryKey: ['orders-pulse'] });
+            queryClient.invalidateQueries({ queryKey: ['warehouses'] });
+            // Abrir el pedido recien montado directo en el drawer.
+            openFromRow(order);
+          }}
         />
       ) : null}
 

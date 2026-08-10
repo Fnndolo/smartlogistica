@@ -3,7 +3,9 @@ import { z } from 'zod';
 export const orderStatusSchema = z.enum(['ready-for-handling']);
 export type OrderStatus = z.infer<typeof orderStatusSchema>;
 
-export const marketplaceProviderSchema = z.enum(['vtex']);
+// 'manual' = pedido MONTADO a mano en una sede (externo a los marketplaces),
+// el reemplazo del "montar pedido" que antes se escribia en Google Chat.
+export const marketplaceProviderSchema = z.enum(['vtex', 'manual']);
 export type MarketplaceProvider = z.infer<typeof marketplaceProviderSchema>;
 
 /**
@@ -120,6 +122,33 @@ export const ordersPulseSchema = z.object({
   deltaToday: z.number().int().nullable(),
 });
 export type OrdersPulse = z.infer<typeof ordersPulseSchema>;
+
+/**
+ * "Montar pedido": pedido EXTERNO a las plataformas, escrito a mano en una sede
+ * (recompras Krediya, ventas directas, etc.). El producto se elige del catalogo
+ * de Alegra de la sede; la ciudad, del catalogo DANE de Coordinadora (asi la
+ * guia sale sin adivinar). Solo existe dentro de una sede (nunca en generales).
+ */
+export const createManualOrderSchema = z.object({
+  warehouseId: z.string().min(1, 'Falta la sede'),
+  customer: z.object({
+    name: z.string().trim().min(2, 'Nombre requerido').max(120),
+    document: z.string().trim().min(3, 'Cedula requerida').max(30),
+    phone: z.string().trim().min(5, 'Telefono requerido').max(30),
+    email: z.string().trim().email('Correo invalido').max(120).nullable().optional(),
+    address: z.string().trim().min(3, 'Direccion requerida').max(300),
+    cityCode: z.string().trim().min(4, 'Ciudad requerida').max(12), // codigo DANE
+    cityName: z.string().trim().max(120).nullable().optional(),
+    cityDepartment: z.string().trim().max(120).nullable().optional(),
+  }),
+  product: z.object({
+    itemId: z.string().min(1, 'Elige el producto de Alegra'),
+    name: z.string().trim().min(1).max(300),
+    price: z.number().positive('Precio invalido'),
+    quantity: z.number().int().min(1).max(50).default(1),
+  }),
+});
+export type CreateManualOrderInput = z.infer<typeof createManualOrderSchema>;
 
 // Asignar/transferir/devolver pedidos. warehouseId null = devolver a generales.
 export const assignOrdersSchema = z.object({

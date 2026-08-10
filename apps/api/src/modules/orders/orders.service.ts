@@ -9,11 +9,13 @@ import { randomUUID } from 'node:crypto';
 import { isAxiosError } from 'axios';
 import type {
   AlegraItem,
+  AlegraPaymentAccount,
   AssignOrdersInput,
   CatalogMatch,
   CreateInvoiceInput,
   CoordinadoraCity,
   CreateGuideInput,
+  CreateManualOrderInput,
   CreateOrderMessageInput,
   DevicePhotoKind,
   DevicePhotoResponse,
@@ -64,6 +66,13 @@ const IMAGE_EXT: Record<ImageMime, string> = {
   'image/gif': 'gif',
   'image/webp': 'webp',
 };
+
+/**
+ * Eventos que marcan un pedido como FINALIZADO (pasa a "Facturados" de la sede):
+ * - vtex_invoiced: cerrado en VTEX (guia + MKT + factura VTEX), pedidos de marketplace.
+ * - manual_completed: pedido MONTADO a mano completado (factura + guia; sin VTEX ni MKT).
+ */
+const FINALIZED_EVENTS = ['vtex_invoiced', 'manual_completed'];
 
 type OrderWithItems = Prisma.OrderGetPayload<{ include: { items: true } }>;
 type OrderMessageRow = Prisma.OrderMessageGetPayload<Record<string, never>>;
@@ -163,15 +172,15 @@ export class OrdersService {
       }
     }
 
-    // Etapa (solo en sede): un pedido pasa a "Facturados" cuando se cierra en VTEX
-    // (evento 'vtex_invoiced' = ya se hizo la guia + MKT y se facturo en VTEX), NO
-    // con solo facturar en Alegra. Asi, un pedido facturado en Alegra pero sin guia
-    // sigue en "Por preparar" hasta completar el flujo.
+    // Etapa (solo en sede): un pedido pasa a "Facturados" cuando se FINALIZA
+    // (vtex_invoiced para marketplace; manual_completed para montados a mano),
+    // NO con solo facturar en Alegra. Asi, un pedido facturado en Alegra pero
+    // sin guia sigue en "Por preparar" hasta completar el flujo.
     if (query.warehouse && query.state) {
       where.events =
         query.state === 'invoiced'
-          ? { some: { type: 'vtex_invoiced' } }
-          : { none: { type: 'vtex_invoiced' } };
+          ? { some: { type: { in: FINALIZED_EVENTS } } }
+          : { none: { type: { in: FINALIZED_EVENTS } } };
     }
 
     // Filtro por estado del envio (Facturados). 'sin_movimientos' incluye los que
@@ -395,7 +404,7 @@ export class OrdersService {
     if (scope === 'pending') {
       const base: Prisma.OrderWhereInput = {
         warehouseId,
-        events: { none: { type: 'vtex_invoiced' } },
+        events: { none: { type: { in: FINALIZED_EVENTS } } },
       };
       const [total, withPhoto, addrPending, unclaimed] = await Promise.all([
         prisma.order.count({ where: base }),
@@ -410,7 +419,7 @@ export class OrdersService {
 
     const base: Prisma.OrderWhereInput = {
       warehouseId,
-      events: { some: { type: 'vtex_invoiced' } },
+      events: { some: { type: { in: FINALIZED_EVENTS } } },
     };
     const [total, transit, issues, delivered] = await Promise.all([
       prisma.order.count({ where: base }),
@@ -433,22 +442,35 @@ export class OrdersService {
       toName = w.name;
     }
 
-    // No mover pedidos ya FINALIZADOS (estado "Facturado" = cerrados en VTEX, con
-    // guia + MKT hechos). Un pedido solo facturado en Alegra pero sin cerrar en
-    // VTEX todavia se puede mover (sigue en "Por preparar").
+    // No mover pedidos ya FINALIZADOS (estado "Facturado" = cerrados en VTEX o
+    // completados a mano). Un pedido solo facturado en Alegra pero sin cerrar
+    // todavia se puede mover (sigue en "Por preparar").
     const finalized = await prisma.orderEvent.findMany({
       where: {
         orderId: { in: input.orderIds },
-        type: { in: ['vtex_invoiced', 'vtex_invoiced_external'] },
+        type: { in: [...FINALIZED_EVENTS, 'vtex_invoiced_external'] },
       },
       select: { orderId: true },
       distinct: ['orderId'],
     });
     if (finalized.length > 0) {
       throw new BadRequestException(
-        `No se pueden mover ${finalized.length} pedido(s) ya facturados (finalizados en VTEX). ` +
+        `No se pueden mover ${finalized.length} pedido(s) ya facturados (finalizados). ` +
           'Estos pedidos ya estan cerrados.',
       );
+    }
+
+    // Los pedidos MONTADOS a mano nacen en una sede y no tienen espejo en VTEX:
+    // no pueden "devolverse a generales" (esa vista es el espejo del marketplace).
+    if (input.warehouseId === null) {
+      const manualCount = await prisma.order.count({
+        where: { id: { in: input.orderIds }, provider: 'manual' },
+      });
+      if (manualCount > 0) {
+        throw new BadRequestException(
+          'Los pedidos montados a mano no van a generales. Si hace falta, transfiérelos a otra sede.',
+        );
+      }
     }
 
     // Estado previo (para clasificar cada cambio como asignado/transferido/devuelto).
@@ -491,6 +513,116 @@ export class OrdersService {
 
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
     return { count: result.count };
+  }
+
+  /**
+   * "MONTAR PEDIDO": crea un pedido EXTERNO a las plataformas directo en una
+   * sede (lo que antes se escribia a mano en Google Chat). El producto viene del
+   * catalogo de Alegra de la sede y la ciudad del catalogo DANE (asi factura y
+   * guia salen sin re-digitar nada). Lo puede montar cualquier miembro con
+   * acceso a la sede. No genera MKT ni toca VTEX: su cierre es manual_completed.
+   */
+  async createManualOrder(input: CreateManualOrderInput, auth: AuthContext): Promise<OrderSummary> {
+    const { tenantId, prisma } = getTenantContext();
+
+    // Acceso: la sede existe y el usuario puede trabajar en ella.
+    const wh = await prisma.warehouse.findUnique({ where: { id: input.warehouseId } });
+    if (!wh || wh.archived) throw new NotFoundException('Sede no encontrada');
+    const allowed = await this.warehouses.accessibleWarehouseIds(auth);
+    if (allowed && !allowed.includes(input.warehouseId)) {
+      throw new ForbiddenException('Sin acceso a esta sede');
+    }
+
+    const c = input.customer;
+    const p = input.product;
+    const phone = c.phone.replace(/\D/g, '') || c.phone;
+    const total = p.price * p.quantity;
+    const nameParts = c.name.trim().split(/\s+/).filter(Boolean);
+    // El rawPayload IMITA la forma de VTEX que ya leen extractInvoiceClient /
+    // extractShippingAddress / extractRealEmail: cero ramas nuevas en factura y
+    // guia. `manual` guarda ademas la ciudad DANE elegida (sin re-resolver).
+    const rawPayload = {
+      manual: {
+        cityCode: c.cityCode,
+        cityName: c.cityName ?? null,
+        createdBy: displayName(auth),
+      },
+      clientProfileData: {
+        firstName: nameParts.slice(0, Math.max(1, nameParts.length - 2)).join(' ') || c.name,
+        lastName: nameParts.slice(Math.max(1, nameParts.length - 2)).join(' '),
+        document: c.document,
+        phone,
+        email: c.email ?? null,
+      },
+      shippingData: {
+        address: {
+          street: c.address,
+          city: c.cityName ?? null,
+          state: c.cityDepartment ?? null,
+        },
+      },
+    } as Prisma.InputJsonValue;
+
+    // Nº propio y legible: MP-0001, MP-0002... (reintenta si dos personas montan
+    // a la vez y chocan en el unique provider+externalId).
+    let order: OrderWithItems | null = null;
+    const base = await prisma.order.count({ where: { provider: 'manual' } });
+    for (let attempt = 0; attempt < 5 && !order; attempt++) {
+      const externalId = `MP-${String(base + 1 + attempt).padStart(4, '0')}`;
+      try {
+        order = await prisma.order.create({
+          data: {
+            externalId,
+            provider: 'manual',
+            accountName: 'manual',
+            customerName: c.name.trim().toUpperCase(),
+            customerEmail: c.email ?? null,
+            customerDocument: c.document,
+            customerPhone: phone,
+            status: 'ready-for-handling',
+            totalValue: total,
+            currency: 'COP',
+            totalUnits: p.quantity,
+            warehouseId: input.warehouseId,
+            assignedAt: new Date(),
+            marketplaceCreatedAt: new Date(),
+            rawPayload,
+            items: {
+              // sku = id del item de Alegra: el preview de factura lo usa para
+              // sembrar la linea sin foto IMEI de por medio.
+              create: [{ sku: p.itemId, name: p.name, quantity: p.quantity, unitPrice: p.price }],
+            },
+          },
+          include: { items: { orderBy: { name: 'asc' } } },
+        });
+      } catch (err) {
+        // P2002 = choco el unique provider+externalId (dos montando a la vez).
+        const conflict =
+          typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'P2002';
+        if (!conflict || attempt === 4) throw err;
+      }
+    }
+    if (!order) throw new BadRequestException('No se pudo crear el pedido, intenta de nuevo');
+
+    await Promise.all([
+      prisma.orderEvent.create({
+        data: {
+          orderId: order.id,
+          type: 'created',
+          actorId: auth.userId,
+          actorName: displayName(auth),
+          data: { manual: true, warehouseName: wh.name } as Prisma.InputJsonValue,
+        },
+      }),
+      this.systemMessage(
+        order.id,
+        auth,
+        `Pedido montado a mano: ${p.quantity} × ${p.name} · ${formatCop(total)}.`,
+      ),
+    ]);
+
+    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+    return this.toSummary(order, false, 0, auth.userId, []);
   }
 
   // === Drawer por pedido: detalle + conversacion + actividad ===
@@ -796,7 +928,7 @@ export class OrdersService {
         await prisma.orderEvent.findMany({
           where: {
             orderId: { in: orderIds },
-            type: { in: ['vtex_invoiced', 'vtex_invoiced_external'] },
+            type: { in: [...FINALIZED_EVENTS, 'vtex_invoiced_external'] },
           },
           select: { orderId: true },
           distinct: ['orderId'],
@@ -1016,7 +1148,7 @@ export class OrdersService {
         select: { orderId: true, lastReadAt: true },
       }),
       prisma.orderEvent.findMany({
-        where: { orderId: { in: orderIds }, type: 'vtex_invoiced' },
+        where: { orderId: { in: orderIds }, type: { in: FINALIZED_EVENTS } },
         select: { orderId: true },
         distinct: ['orderId'],
       }),
@@ -1076,7 +1208,7 @@ export class OrdersService {
     const invoiced = new Set(
       (
         await prisma.orderEvent.findMany({
-          where: { orderId: { in: rows.map((r) => r.id) }, type: 'vtex_invoiced' },
+          where: { orderId: { in: rows.map((r) => r.id) }, type: { in: FINALIZED_EVENTS } },
           select: { orderId: true },
           distinct: ['orderId'],
         })
@@ -1319,6 +1451,33 @@ export class OrdersService {
     }
 
     const groups = await this.orderCodeGroups(orderId);
+
+    // Pedido MONTADO a mano sin fotos aun: la linea se siembra directo del
+    // producto elegido al montarlo (sku = id del item de Alegra). Ya es exacta:
+    // sin prorrateo ni veredicto de IA (el producto ES el del pedido).
+    if (order.provider === 'manual' && groups.length === 0) {
+      const client = extractInvoiceClient(order);
+      return {
+        invoice: null,
+        lines: order.items.map((i) => ({
+          codes: [],
+          itemId: i.sku,
+          productName: i.name,
+          suggestedPrice: i.unitPrice.toString(),
+          quantity: i.quantity,
+          matched: true,
+          mismatch: null,
+        })),
+        client: {
+          name: client.name,
+          identification: client.identification,
+          email: client.email,
+          phone: client.phone,
+          address: client.address?.street ?? null,
+        },
+      };
+    }
+
     const lines = await this.alegra.invoicePreviewLines(order.warehouseId, groups, auth);
 
     // El precio de venta viene del PEDIDO (VTEX), no del precio de lista de Alegra.
@@ -1372,6 +1531,16 @@ export class OrdersService {
     return this.alegra.searchItems(order.warehouseId, query, auth);
   }
 
+  /**
+   * Cuentas de banco de Alegra de la sede del pedido — para elegir los pagos de
+   * la factura de un pedido MONTADO a mano.
+   */
+  async listPaymentAccounts(orderId: string, auth: AuthContext): Promise<AlegraPaymentAccount[]> {
+    const order = await this.loadAccessibleOrder(orderId, auth);
+    if (!order.warehouseId) throw new BadRequestException('Asigna el pedido a una sede.');
+    return this.alegra.listPaymentAccounts(order.warehouseId, auth);
+  }
+
   /** Emite la factura de venta en Alegra y la registra en el pedido. */
   async createInvoice(
     orderId: string,
@@ -1407,12 +1576,25 @@ export class OrdersService {
 
     const { tenantId, prisma } = getTenantContext();
 
+    // Pagos elegidos: SOLO para pedidos montados a mano. Los de marketplace
+    // siguen saliendo pagados con MARKETPLACE ADDI, como siempre.
+    const manual = order.provider === 'manual';
+    if (!manual && input.payments && input.payments.length > 0) {
+      throw new BadRequestException(
+        'Los pagos personalizados solo aplican a pedidos montados a mano.',
+      );
+    }
+    if (manual && !input.payments) {
+      throw new BadRequestException('Elige el/los medios de pago de la factura.');
+    }
+
     const client = extractInvoiceClient(order);
     const { result, payment } = await this.alegra.createInvoiceForWarehouse(
       order.warehouseId,
       client,
       input.lines,
       auth,
+      manual ? { manualPayments: input.payments ?? [] } : undefined,
     );
 
     // Registrar en el pedido: mensaje de sistema + evento en la actividad.
@@ -1488,6 +1670,9 @@ export class OrdersService {
         } as Prisma.InputJsonValue,
       },
     });
+    // Pedido montado a mano: si la guia ya existia, con la factura queda COMPLETO
+    // (pasa a Facturados). Best-effort: la factura ya quedo emitida igual.
+    if (manual) await this.finalizeManual(order, auth).catch(() => null);
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
     return result;
   }
@@ -1525,10 +1710,15 @@ export class OrdersService {
 
     const sender = await this.coordinadora.senderFor(order.warehouseId);
     const client = extractInvoiceClient(order);
+    // Pedido montado a mano: la ciudad se eligio del catalogo DANE al montarlo
+    // (guardada en rawPayload.manual) — no hay nada que resolver.
+    const manualCity = manualCityOf(order);
     const [city, packagePresets] = await Promise.all([
-      this.coordinadora
-        .resolveCity(order.warehouseId, client.address?.city ?? null, client.address?.department ?? null)
-        .catch(() => null),
+      manualCity
+        ? Promise.resolve(manualCity)
+        : this.coordinadora
+            .resolveCity(order.warehouseId, client.address?.city ?? null, client.address?.department ?? null)
+            .catch(() => null),
       this.warehouses.getGlobalPackagePresets(),
     ]);
 
@@ -1699,6 +1889,21 @@ export class OrdersService {
     }
 
     const { tenantId, prisma } = getTenantContext();
+
+    // Recaudo CONTRAENTREGA: solo pedidos montados a mano (los de marketplace ya
+    // estan pagados via Addi). Referencia del recaudo = Nº de factura de Alegra
+    // si ya existe; si no, el Nº del pedido.
+    let recaudo: { referencia: string; valor: number } | undefined;
+    if (input.codValue != null) {
+      if (order.provider !== 'manual') {
+        throw new BadRequestException(
+          'El recaudo contraentrega solo aplica a pedidos montados a mano.',
+        );
+      }
+      const inv = await this.existingInvoice(orderId);
+      recaudo = { referencia: inv?.number || order.externalId, valor: input.codValue };
+    }
+
     // referencia = null: en el portal de Coordinadora esa columna va vacia (el
     // numero de guia ya identifica el envio; el user no quiere el MKT ahi).
     const { guide, rotulo } = await this.coordinadora.generateGuideForWarehouse(
@@ -1708,6 +1913,7 @@ export class OrdersService {
       null,
       input.rotuloId,
       auth,
+      recaudo,
     );
 
     // Mensaje de sistema + evento + denormalizado del envio: tres escrituras
@@ -1720,7 +1926,9 @@ export class OrdersService {
           authorId: auth.userId,
           authorName: displayName(auth),
           kind: 'system',
-          body: `Guia ${guide.number} generada en Coordinadora.`,
+          body: recaudo
+            ? `Guia ${guide.number} generada en Coordinadora · recaudo contraentrega ${formatCop(recaudo.valor)}.`
+            : `Guia ${guide.number} generada en Coordinadora.`,
           imeis: [],
         },
       }),
@@ -1730,7 +1938,12 @@ export class OrdersService {
           type: 'guide_generated',
           actorId: auth.userId,
           actorName: displayName(auth),
-          data: { number: guide.number, id: guide.id, url: guide.url } as Prisma.InputJsonValue,
+          data: {
+            number: guide.number,
+            id: guide.id,
+            url: guide.url,
+            cod: recaudo?.valor ?? null,
+          } as Prisma.InputJsonValue,
         },
       }),
       // Denormalizar el Nº de guia + estado inicial (para listar/filtrar el envio).
@@ -1745,12 +1958,15 @@ export class OrdersService {
       }),
     ]);
 
-    // Adjuntar el rotulo al chat y cerrar en VTEX (start-handling + invoice +
-    // tracking + MKT) solo dependen de la guia y no entre si -> en paralelo.
-    // Ambos best-effort: si fallan, la guia ya quedo y se avisa en el chat.
+    // Adjuntar el rotulo al chat y CERRAR el pedido solo dependen de la guia y
+    // no entre si -> en paralelo. El cierre segun el origen: marketplace = VTEX
+    // (start-handling + invoice + tracking + MKT); montado a mano = cierre local
+    // (sin VTEX ni MKT). Ambos best-effort: si fallan, la guia ya quedo.
     await Promise.all([
       this.attachRotulo(orderId, order, guide, rotulo, auth),
-      this.finalizeVtex(order, auth).catch(() => null),
+      order.provider === 'manual'
+        ? this.finalizeManual(order, auth).catch(() => null)
+        : this.finalizeVtex(order, auth).catch(() => null),
     ]);
 
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
@@ -1883,6 +2099,46 @@ export class OrdersService {
         // no bloquear por un fallo al adjuntar el MKT
       }
     }
+    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+  }
+
+  /**
+   * Cierre de un pedido MONTADO a mano: cuando ya tiene factura de Alegra y guia
+   * de Coordinadora, pasa a "Facturados" (evento manual_completed + status
+   * invoiced). Sin VTEX y sin MKT — este pedido no existe en el marketplace.
+   * Idempotente y best-effort (se llama tras facturar y tras generar la guia).
+   */
+  private async finalizeManual(order: OrderWithItems, auth: AuthContext): Promise<void> {
+    if (!order.warehouseId) return;
+    const { tenantId, prisma } = getTenantContext();
+
+    const done = await prisma.orderEvent.findFirst({
+      where: { orderId: order.id, type: 'manual_completed' },
+    });
+    if (done) return;
+
+    const [invoice, guide] = await Promise.all([
+      this.existingInvoice(order.id),
+      this.existingGuide(order.id),
+    ]);
+    // Aun falta una de las dos patas: se completara en el otro paso.
+    if (!invoice || !guide) return;
+
+    await prisma.order.update({ where: { id: order.id }, data: { status: 'invoiced' } });
+    await prisma.orderEvent.create({
+      data: {
+        orderId: order.id,
+        type: 'manual_completed',
+        actorId: auth.userId,
+        actorName: displayName(auth),
+        data: { invoiceNumber: invoice.number, tracking: guide.number } as Prisma.InputJsonValue,
+      },
+    });
+    await this.systemMessage(
+      order.id,
+      auth,
+      `Pedido completado · Factura ${invoice.number} + guia ${guide.number} (montado a mano, sin MKT).`,
+    );
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
   }
 
@@ -2144,6 +2400,35 @@ function vtexErrorMessage(err: unknown): string {
     return `${status ?? ''} ${detail ?? err.message}`.trim();
   }
   return err instanceof Error ? err.message : 'error desconocido';
+}
+
+/**
+ * Ciudad DANE elegida al MONTAR el pedido a mano (guardada en rawPayload.manual).
+ * null para pedidos de marketplace (su ciudad se resuelve contra el catalogo).
+ */
+function manualCityOf(order: OrderWithItems): CoordinadoraCity | null {
+  if (order.provider !== 'manual') return null;
+  const m = (order.rawPayload as { manual?: { cityCode?: unknown; cityName?: unknown } } | null)
+    ?.manual;
+  if (!m || typeof m.cityCode !== 'string' || !m.cityCode) return null;
+  return {
+    code: m.cityCode,
+    name: typeof m.cityName === 'string' ? m.cityName : '',
+    department: '',
+  };
+}
+
+/** "$1.600.000" para mensajes de sistema (es-CO, sin decimales). */
+function formatCop(value: number): string {
+  try {
+    return new Intl.NumberFormat('es-CO', {
+      style: 'currency',
+      currency: 'COP',
+      maximumFractionDigits: 0,
+    }).format(value);
+  } catch {
+    return `$${Math.round(value)}`;
+  }
 }
 
 /** Telefono colombiano sin el prefijo +57 (para la factura). "+573137097919" -> "3137097919". */

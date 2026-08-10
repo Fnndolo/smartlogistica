@@ -52,9 +52,22 @@ interface GuideDraft {
   recipient: Recipient;
   pkg: Pkg;
   rotuloId: number | null;
+  // Recaudo contraentrega (solo pedidos montados a mano).
+  codOn?: boolean;
+  codValue?: string;
 }
 
-export function GuidePanel({ orderId }: { orderId: string }) {
+export function GuidePanel({
+  orderId,
+  manual = false,
+  orderTotal,
+}: {
+  orderId: string;
+  /** Pedido MONTADO a mano: habilita la opcion de recaudo contraentrega. */
+  manual?: boolean;
+  /** Total del pedido (default del valor a recaudar). */
+  orderTotal?: string;
+}) {
   const qc = useQueryClient();
   // Arrancar del borrador si el usuario ya habia editado aqui (cerro el drawer
   // o navego y volvio); si no, se llena desde el preview.
@@ -62,6 +75,8 @@ export function GuidePanel({ orderId }: { orderId: string }) {
   const [recipient, setRecipient] = useState<Recipient | null>(draft?.recipient ?? null);
   const [pkg, setPkg] = useState<Pkg | null>(draft?.pkg ?? null);
   const [rotuloId, setRotuloId] = useState<number | null>(draft?.rotuloId ?? null);
+  const [codOn, setCodOn] = useState<boolean>(draft?.codOn ?? false);
+  const [codValue, setCodValue] = useState<string>(draft?.codValue ?? orderTotal ?? '');
   const [result, setResult] = useState<Guide | null>(null);
 
   const {
@@ -100,8 +115,10 @@ export function GuidePanel({ orderId }: { orderId: string }) {
 
   // Persistir el borrador con cada edicion (sobrevive cierre del drawer).
   useEffect(() => {
-    if (recipient && pkg) setDraft<GuideDraft>(`guide:${orderId}`, { recipient, pkg, rotuloId });
-  }, [recipient, pkg, rotuloId, orderId]);
+    if (recipient && pkg) {
+      setDraft<GuideDraft>(`guide:${orderId}`, { recipient, pkg, rotuloId, codOn, codValue });
+    }
+  }, [recipient, pkg, rotuloId, codOn, codValue, orderId]);
 
   const generate = useMutation({
     // Con clave: si cierran el drawer con la guia EN CURSO, al volver el boton
@@ -127,6 +144,9 @@ export function GuidePanel({ orderId }: { orderId: string }) {
           ...(pkg!.observations.trim() ? { observations: pkg!.observations.trim() } : {}),
         },
         ...(rotuloId ? { rotuloId } : {}),
+        // Recaudo contraentrega (solo montados a mano): Coordinadora cobra este
+        // valor al entregar.
+        ...(manual && codOn && Number(codValue) > 0 ? { codValue: Number(codValue) } : {}),
       }),
     onSuccess: (g) => {
       setResult(g);
@@ -135,6 +155,9 @@ export function GuidePanel({ orderId }: { orderId: string }) {
       qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
       qc.invalidateQueries({ queryKey: ['order-events', orderId] });
       qc.invalidateQueries({ queryKey: ['guide-preview', orderId] });
+      // Montado a mano: con factura + guia el pedido queda COMPLETO -> cambia
+      // de seccion en la lista de la sede.
+      if (manual) qc.invalidateQueries({ queryKey: ['orders'] });
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo generar la guia'),
   });
@@ -186,7 +209,8 @@ export function GuidePanel({ orderId }: { orderId: string }) {
     recipient.cityCode.trim().length >= 4 &&
     recipient.phone.trim().length >= 5 &&
     Number(pkg.weight) > 0 &&
-    pkg.content.trim().length >= 1;
+    pkg.content.trim().length >= 1 &&
+    (!codOn || Number(codValue) > 0);
 
   const patchR = (p: Partial<Recipient>) => setRecipient((r) => (r ? { ...r, ...p } : r));
   const patchP = (p: Partial<Pkg>) => setPkg((v) => (v ? { ...v, ...p } : v));
@@ -329,6 +353,49 @@ export function GuidePanel({ orderId }: { orderId: string }) {
           </Field>
         </div>
       </section>
+
+      {/* Recaudo contraentrega: SOLO pedidos montados a mano. Coordinadora
+          cobra el valor al entregar (los de marketplace ya van pagados). */}
+      {manual ? (
+        <section className="space-y-3">
+          <SectionTitle>Cobro del envio</SectionTitle>
+          <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5">
+            <button
+              type="button"
+              onClick={() => setCodOn(false)}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                !codOn ? 'bg-card text-foreground shadow-card' : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Normal (ya pagado)
+            </button>
+            <button
+              type="button"
+              onClick={() => setCodOn(true)}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                codOn ? 'bg-card text-foreground shadow-card' : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Recaudo contraentrega
+            </button>
+          </div>
+          {codOn ? (
+            <div className="max-w-xs">
+              <Field label="Valor a recaudar (COP) — lo cobra Coordinadora al entregar">
+                <Input
+                  inputMode="numeric"
+                  value={codValue}
+                  onChange={(e) => setCodValue(e.target.value.replace(/[^\d.]/g, ''))}
+                  className="tabular-nums"
+                />
+              </Field>
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                Si hubo un abono inicial, pon aqui solo lo que falta por cobrar.
+              </p>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
 
       <div className="flex items-center justify-between border-t border-border pt-3">
         <p className="text-[11px] text-muted-foreground">

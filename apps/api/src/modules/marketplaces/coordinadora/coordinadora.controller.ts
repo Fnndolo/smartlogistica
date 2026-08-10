@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query } from '@nestjs/common';
 import {
   coordinadoraCitySearchSchema,
   coordinadoraConnectSchema,
@@ -60,6 +60,19 @@ export class CoordinadoraController {
     @CurrentUser() user: AuthContext,
   ): Promise<void> {
     await this.coordinadora.disconnect(warehouseId, user);
+  }
+
+  /**
+   * Busca ciudades (codigo DANE) para CUALQUIER miembro con acceso a la sede.
+   * La usa el form de "Montar pedido" (ciudad del cliente, sin pedido aun).
+   */
+  @Get('city-search')
+  async citySearch(
+    @Param('warehouseId') warehouseId: string,
+    @Query('q') q: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<CoordinadoraCity[]> {
+    return this.coordinadora.searchCitiesForMember(warehouseId, (q ?? '').trim(), user);
   }
 
   /** Busca ciudades (codigo DANE) para el selector de ORIGEN del form. */

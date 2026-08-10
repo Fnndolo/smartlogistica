@@ -188,6 +188,8 @@ export function OrdersTable({
                       <ClaimSlot />
                     ) : null}
                     {order.externalId}
+                    {/* Montado a mano: externo a las plataformas (sin MKT). */}
+                    {order.provider === 'manual' ? <ManualChip /> : null}
                     {order.hasDevicePhoto ? (
                       <span
                         title="Tiene foto de IMEI/serial"
@@ -597,6 +599,7 @@ function OrderCard({
               />
             ) : null}
             <span className="truncate">{order.externalId}</span>
+            {order.provider === 'manual' ? <ManualChip /> : null}
             {order.hasDevicePhoto ? (
               <Camera className="h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
             ) : null}
@@ -891,6 +894,21 @@ function StatusBadge({ status }: { status: string }) {
     <Badge dot variant={mapped?.variant ?? 'secondary'} className="whitespace-nowrap">
       {mapped?.label ?? status}
     </Badge>
+  );
+}
+
+/**
+ * Distintivo de pedido MONTADO a mano (externo a las plataformas, sin MKT).
+ * Chip chiquito y tenue: identifica sin gritar (el Nº MP-#### ya lo insinua).
+ */
+function ManualChip() {
+  return (
+    <span
+      title="Montado a mano (externo a las plataformas, sin MKT)"
+      className="inline-flex shrink-0 items-center rounded-[5px] border border-border bg-muted/60 px-1 py-px font-sans text-[9.5px] font-medium uppercase tracking-[0.05em] text-muted-foreground"
+    >
+      Manual
+    </span>
   );
 }
 

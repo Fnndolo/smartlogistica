@@ -15,8 +15,10 @@ import {
 import { toast } from 'sonner';
 import type {
   AlegraItem,
+  AlegraPaymentAccount,
   CatalogMatch,
   GuidePreview,
+  InvoicePaymentMethod,
   InvoicePreview,
   InvoiceResult,
   ProcessAllResult,
@@ -41,12 +43,31 @@ interface Line {
   mismatch?: { expected: string; found: string; note: string } | null;
 }
 
-export function InvoicePanel({ orderId }: { orderId: string }) {
+/** Un pago elegido (pedidos MONTADOS a mano): cuenta de Alegra + medio + valor. */
+interface Payment {
+  key: string;
+  accountId: string;
+  method: InvoicePaymentMethod;
+  amount: string;
+}
+
+const PAYMENT_METHODS: { value: InvoicePaymentMethod; label: string }[] = [
+  { value: 'transfer', label: 'Transferencia' },
+  { value: 'cash', label: 'Efectivo' },
+  { value: 'debit-card', label: 'Tarjeta débito' },
+  { value: 'credit-card', label: 'Tarjeta crédito' },
+];
+
+export function InvoicePanel({ orderId, manual = false }: { orderId: string; manual?: boolean }) {
   const qc = useQueryClient();
   // Items editados: arrancan del borrador si el usuario ya habia trabajado aqui
   // (cerro el drawer o navego y volvio); si no, se llenan desde el preview.
   const [lines, setLines] = useState<Line[] | null>(
     () => getDraft<Line[]>(`invoice:${orderId}`) ?? null,
+  );
+  // Pagos (solo pedidos montados a mano). Arranca con una fila vacia.
+  const [payments, setPayments] = useState<Payment[]>(
+    () => getDraft<Payment[]>(`invoice-pay:${orderId}`) ?? [emptyPayment()],
   );
   const [result, setResult] = useState<InvoiceResult | null>(null);
 
@@ -75,7 +96,8 @@ export function InvoicePanel({ orderId }: { orderId: string }) {
       itemId: l.itemId,
       productName: l.productName,
       price: l.suggestedPrice ?? '',
-      quantity: 1,
+      // Los montados a mano pueden traer mas de 1 unidad del producto elegido.
+      quantity: l.quantity ?? 1,
       mismatch: l.mismatch ?? null,
     }));
     setLines((prev) => {
@@ -107,6 +129,17 @@ export function InvoicePanel({ orderId }: { orderId: string }) {
   useEffect(() => {
     if (lines !== null) setDraft(`invoice:${orderId}`, lines);
   }, [lines, orderId]);
+  useEffect(() => {
+    if (manual) setDraft(`invoice-pay:${orderId}`, payments);
+  }, [payments, orderId, manual]);
+
+  // Cuentas de banco de Alegra (solo pedidos montados a mano).
+  const { data: accounts = [] } = useQuery({
+    queryKey: ['payment-accounts', orderId],
+    queryFn: () => api.get<AlegraPaymentAccount[]>(`/v1/orders/${orderId}/payment-accounts`),
+    enabled: manual,
+    staleTime: 5 * 60_000,
+  });
 
   const patch = (key: string, p: Partial<Line>) =>
     setLines((ls) => (ls ?? []).map((l) => (l.key === key ? { ...l, ...p } : l)));
@@ -127,8 +160,21 @@ export function InvoicePanel({ orderId }: { orderId: string }) {
 
   const current = lines ?? [];
   const total = current.reduce((s, l) => s + (Number(l.price) || 0) * l.quantity, 0);
+
+  // Pagos (montados a mano): filas con datos completos; la suma no puede pasar
+  // el total. Si queda saldo, la factura sale ABIERTA por el resto (p. ej.
+  // recaudo contraentrega).
+  const filledPayments = payments.filter((p) => p.accountId && Number(p.amount) > 0);
+  const paidTotal = filledPayments.reduce((s, p) => s + Number(p.amount), 0);
+  const paymentsValid =
+    !manual ||
+    (payments.every((p) => (!p.accountId && !(Number(p.amount) > 0)) || (p.accountId && Number(p.amount) > 0)) &&
+      paidTotal <= total + 0.01);
+
   const canInvoice =
-    current.length > 0 && current.every((l) => l.itemId && Number(l.price) > 0 && l.quantity >= 1);
+    current.length > 0 &&
+    current.every((l) => l.itemId && Number(l.price) > 0 && l.quantity >= 1) &&
+    paymentsValid;
 
   /** Lineas listas para el API. Descripcion = solo el/los codigo(s), uno por linea. */
   const buildLines = () =>
@@ -148,16 +194,32 @@ export function InvoicePanel({ orderId }: { orderId: string }) {
     qc.invalidateQueries({ queryKey: ['invoice-preview', orderId] });
   };
 
+  /** Pagos listos para el API (solo filas completas; siempre presente si es manual). */
+  const buildPayments = () =>
+    filledPayments.map((p) => ({
+      accountId: p.accountId,
+      amount: Number(p.amount),
+      method: p.method,
+    }));
+
   const invoice = useMutation({
     // Con clave: si el usuario cierra el drawer con la facturacion EN CURSO, al
     // volver el boton sigue "cargando" (useIsMutating) y no se puede re-enviar.
     mutationKey: ['op-invoice', orderId],
-    mutationFn: () => api.post<InvoiceResult>(`/v1/orders/${orderId}/invoice`, { lines: buildLines() }),
+    mutationFn: () =>
+      api.post<InvoiceResult>(`/v1/orders/${orderId}/invoice`, {
+        lines: buildLines(),
+        ...(manual ? { payments: buildPayments() } : {}),
+      }),
     onSuccess: (r) => {
       setResult(r);
       clearDraft(`invoice:${orderId}`);
+      clearDraft(`invoice-pay:${orderId}`);
       toast.success(`Factura ${r.number} emitida`);
       refreshOrder();
+      // Montado a mano: si la guia ya estaba, el pedido queda COMPLETO -> la
+      // lista de la sede cambia de seccion.
+      if (manual) qc.invalidateQueries({ queryKey: ['orders'] });
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo facturar'),
   });
@@ -311,26 +373,135 @@ export function InvoicePanel({ orderId }: { orderId: string }) {
         )}
       </div>
 
+      {/* Medios de pago (solo pedidos MONTADOS a mano): como en Alegra, hasta 3
+          cuentas distintas. Si la suma no llega al total, la factura queda
+          ABIERTA por el resto (p. ej. lo que se recauda contraentrega). */}
+      {manual ? (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <h3 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Medios de pago
+            </h3>
+            {payments.length < 3 ? (
+              <button
+                type="button"
+                onClick={() => setPayments((ps) => [...ps, emptyPayment()])}
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <Plus className="h-3 w-3" />
+                Agregar pago
+              </button>
+            ) : null}
+          </div>
+
+          {payments.map((p) => (
+            <div key={p.key} className="flex items-center gap-2">
+              <select
+                value={p.accountId}
+                onChange={(e) =>
+                  setPayments((ps) =>
+                    ps.map((x) => (x.key === p.key ? { ...x, accountId: e.target.value } : x)),
+                  )
+                }
+                className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <option value="">Cuenta de Alegra...</option>
+                {accounts.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+              <select
+                value={p.method}
+                onChange={(e) =>
+                  setPayments((ps) =>
+                    ps.map((x) =>
+                      x.key === p.key ? { ...x, method: e.target.value as Payment['method'] } : x,
+                    ),
+                  )
+                }
+                className="h-8 w-[118px] shrink-0 rounded-md border border-input bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {PAYMENT_METHODS.map((m) => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+              <Input
+                inputMode="numeric"
+                value={p.amount}
+                onChange={(e) =>
+                  setPayments((ps) =>
+                    ps.map((x) =>
+                      x.key === p.key
+                        ? { ...x, amount: e.target.value.replace(/[^\d.]/g, '') }
+                        : x,
+                    ),
+                  )
+                }
+                placeholder="Valor"
+                className="h-8 w-24 shrink-0 tabular-nums"
+              />
+              {payments.length > 1 ? (
+                <button
+                  type="button"
+                  onClick={() => setPayments((ps) => ps.filter((x) => x.key !== p.key))}
+                  className="shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive"
+                  aria-label="Quitar pago"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </div>
+          ))}
+
+          {paidTotal > total + 0.01 ? (
+            <p className="text-[11px] text-destructive">
+              Los pagos ({formatCOP(paidTotal)}) superan el total ({formatCOP(total)}).
+            </p>
+          ) : (
+            <p className="text-[11px] text-muted-foreground">
+              Pagado {formatCOP(paidTotal)} de {formatCOP(total)}
+              {total - paidTotal > 0.01 ? (
+                <>
+                  {' '}
+                  · quedan <b className="text-foreground/80">{formatCOP(total - paidTotal)}</b> — la
+                  factura sale abierta por ese saldo (ej. recaudo contraentrega).
+                </>
+              ) : (
+                ' · queda cerrada/cobrada.'
+              )}
+            </p>
+          )}
+        </div>
+      ) : null}
+
       <div className="flex items-end justify-between gap-3 border-t border-border pt-3">
         <div>
           <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Total</p>
           <p className="text-lg font-semibold tabular-nums">{formatCOP(total)}</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            onClick={() => processAll.mutate()}
-            loading={doingAll}
-            disabled={!canInvoice || !guideReady || busy}
-            title={
-              guideReady
-                ? 'Factura + guia + MKT en un solo paso, con la direccion tal cual viene de VTEX'
-                : 'Faltan datos del destinatario: verificalos en la pestana Guia'
-            }
-          >
-            <Zap className="h-4 w-4" />
-            Hacer todo
-          </Button>
+          {/* "Hacer todo" solo en pedidos de marketplace: en los montados a mano
+              la guia tiene decision propia (recaudo contraentrega) -> por pasos. */}
+          {!manual ? (
+            <Button
+              variant="outline"
+              onClick={() => processAll.mutate()}
+              loading={doingAll}
+              disabled={!canInvoice || !guideReady || busy}
+              title={
+                guideReady
+                  ? 'Factura + guia + MKT en un solo paso, con la direccion tal cual viene de VTEX'
+                  : 'Faltan datos del destinatario: verificalos en la pestana Guia'
+              }
+            >
+              <Zap className="h-4 w-4" />
+              Hacer todo
+            </Button>
+          ) : null}
           <Button
             onClick={() => invoice.mutate()}
             loading={invoicing}
@@ -341,17 +512,38 @@ export function InvoicePanel({ orderId }: { orderId: string }) {
           </Button>
         </div>
       </div>
-      <p className="text-[11px] text-muted-foreground">
-        Se emite pagada con la cuenta &laquo;MARKETPLACE ADDI&raquo; y queda cerrada/cobrada.{' '}
-        <span className="text-foreground/70">
-          &laquo;Hacer todo&raquo; encadena factura + guia + MKT usando la direccion tal cual viene de
-          VTEX
-          {guidePrev?.recipient.cityName ? ` (${guidePrev.recipient.cityName})` : ''}. Si necesitas
-          corregirla, usa la pestana Guia.
-        </span>
-      </p>
+      {manual ? (
+        <p className="text-[11px] text-muted-foreground">
+          Pedido montado a mano: la factura sale con los medios de pago que elijas (hasta 3, como en
+          Alegra).{' '}
+          <span className="text-foreground/70">
+            Luego genera la guia en la pestana Guia — ahi decides si va normal o con recaudo
+            contraentrega. Este pedido no genera MKT.
+          </span>
+        </p>
+      ) : (
+        <p className="text-[11px] text-muted-foreground">
+          Se emite pagada con la cuenta &laquo;MARKETPLACE ADDI&raquo; y queda cerrada/cobrada.{' '}
+          <span className="text-foreground/70">
+            &laquo;Hacer todo&raquo; encadena factura + guia + MKT usando la direccion tal cual viene
+            de VTEX
+            {guidePrev?.recipient.cityName ? ` (${guidePrev.recipient.cityName})` : ''}. Si necesitas
+            corregirla, usa la pestana Guia.
+          </span>
+        </p>
+      )}
     </div>
   );
+}
+
+/** Fila de pago vacia (key unica para React). */
+function emptyPayment(): Payment {
+  return {
+    key: `p-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    accountId: '',
+    method: 'transfer',
+    amount: '',
+  };
 }
 
 function LineRow({

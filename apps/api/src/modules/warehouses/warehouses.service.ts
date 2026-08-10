@@ -17,6 +17,10 @@ import type { AuthContext } from '../../common/types/authenticated-request';
 import { isAdmin } from '../../common/rbac';
 import { getTenantContext } from '../../infrastructure/tenant-context';
 
+// Eventos que FINALIZAN un pedido (mismo criterio que OrdersService): cerrado
+// en VTEX (marketplace) o completado a mano (pedido montado).
+const FINALIZED_EVENTS = ['vtex_invoiced', 'manual_completed'];
+
 function slugify(input: string): string {
   return (
     input
@@ -60,13 +64,13 @@ export class WarehousesService {
     });
     if (warehouses.length === 0) return [];
 
-    // El contador de la sede = pedidos por PREPARAR (sin cerrar en VTEX). Los ya
-    // facturados/finalizados no cuentan (viven en la seccion "Facturados").
+    // El contador de la sede = pedidos por PREPARAR (sin finalizar: ni cerrados
+    // en VTEX ni completados a mano). Los finalizados viven en "Facturados".
     const counts = await prisma.order.groupBy({
       by: ['warehouseId'],
       where: {
         warehouseId: { in: warehouses.map((w) => w.id) },
-        events: { none: { type: 'vtex_invoiced' } },
+        events: { none: { type: { in: FINALIZED_EVENTS } } },
       },
       _count: { _all: true },
     });
@@ -85,7 +89,7 @@ export class WarehousesService {
       data: { name: input.name, invoicePrefix: input.invoicePrefix || null },
     });
     const count = await prisma.order.count({
-      where: { warehouseId: id, events: { none: { type: 'vtex_invoiced' } } },
+      where: { warehouseId: id, events: { none: { type: { in: FINALIZED_EVENTS } } } },
     });
     return this.toSummary(w, count);
   }
