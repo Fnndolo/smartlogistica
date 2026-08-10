@@ -7,12 +7,13 @@ import { VtexModule } from '../marketplaces/vtex/vtex.module';
 import { WarehousesModule } from '../warehouses/warehouses.module';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
+import { PlatformsController } from './platforms.controller';
 import { ShippingRefreshProcessor } from './shipping-refresh.processor';
 import { ShippingRefreshScheduler } from './shipping-refresh.scheduler';
 
 @Module({
   imports: [WarehousesModule, AiModule, AlegraModule, CoordinadoraModule, VtexModule],
-  controllers: [OrdersController],
+  controllers: [OrdersController, PlatformsController],
   providers: [OrdersService, ShippingRefreshProcessor, ShippingRefreshScheduler],
 })
 export class OrdersModule {}

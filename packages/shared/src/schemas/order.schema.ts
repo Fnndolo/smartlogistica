@@ -85,6 +85,10 @@ export const orderSummarySchema = z.object({
   addressStatus: addressStatusSchema.nullable(),
   confirmedAddress: z.string().nullable(),
   addressConfirmedAt: z.string().datetime().nullable(),
+  // Plataforma de origen de un pedido MONTADO a mano (Krediya, Mercado Libre...).
+  // null en los de marketplace (su plataforma es el provider: VTEX). El color
+  // del badge se resuelve contra el catalogo de plataformas (Ajustes).
+  platform: z.object({ id: z.string(), name: z.string() }).nullable().default(null),
   // "Tomar pedido": quien esta a cargo (null = libre). mine = lo tengo yo.
   claimedBy: z
     .object({ userId: z.string(), name: z.string(), mine: z.boolean() })
@@ -131,6 +135,9 @@ export type OrdersPulse = z.infer<typeof ordersPulseSchema>;
  */
 export const createManualOrderSchema = z.object({
   warehouseId: z.string().min(1, 'Falta la sede'),
+  // Plataforma de origen (Krediya, Mercado Libre... — del catalogo de Ajustes).
+  // VTEX no aplica aqui: esos llegan solos por la integracion.
+  platformId: z.string().min(1, 'Elige la plataforma').max(40),
   customer: z.object({
     name: z.string().trim().min(2, 'Nombre requerido').max(120),
     document: z.string().trim().min(3, 'Cedula requerida').max(30),

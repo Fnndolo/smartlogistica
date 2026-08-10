@@ -256,6 +256,13 @@ export class OrdersController {
     return this.orders.getDetail(id, user);
   }
 
+  /** Elimina DEL TODO un pedido montado a mano (los de marketplace no se tocan). */
+  @Delete(':id')
+  @HttpCode(204)
+  async deleteOrder(@Param('id') id: string, @CurrentUser() user: AuthContext): Promise<void> {
+    await this.orders.deleteOrder(id, user);
+  }
+
   @Get(':id/messages')
   async messages(
     @Param('id') id: string,

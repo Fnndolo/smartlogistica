@@ -12,6 +12,9 @@ import { CityPicker } from '@/components/city-picker';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, api } from '@/lib/api-client';
+import { cn } from '@/lib/utils';
+
+import { BADGE_COLOR_CLASSES, usePlatforms } from './platform-badge';
 
 /**
  * "MONTAR PEDIDO": pedido EXTERNO a las plataformas escrito a mano en la sede
@@ -34,6 +37,7 @@ export function MountOrderDialog({
   onClose: () => void;
   onCreated: (order: OrderSummary) => void;
 }) {
+  const [platformId, setPlatformId] = useState('');
   const [name, setName] = useState('');
   const [cedula, setCedula] = useState('');
   const [phone, setPhone] = useState('');
@@ -43,6 +47,10 @@ export function MountOrderDialog({
   const [item, setItem] = useState<AlegraItem | null>(null);
   const [price, setPrice] = useState('');
   const [quantity, setQuantity] = useState('1');
+
+  // Plataformas elegibles (VTEX no: esos pedidos llegan solos por la integracion).
+  const platformsQuery = usePlatforms();
+  const platforms = (platformsQuery.data ?? []).filter((p) => p.id !== 'vtex');
 
   // Esc cierra + scroll del fondo bloqueado mientras el dialogo esta abierto.
   useEffect(() => {
@@ -61,6 +69,7 @@ export function MountOrderDialog({
   const qty = Math.max(1, Number(quantity) || 1);
   const total = (Number(price) || 0) * qty;
   const canSubmit =
+    platformId.length > 0 &&
     name.trim().length >= 2 &&
     cedula.trim().length >= 3 &&
     phone.trim().length >= 5 &&
@@ -73,6 +82,7 @@ export function MountOrderDialog({
     mutationFn: () =>
       api.post<OrderSummary>('/v1/orders/manual', {
         warehouseId,
+        platformId,
         customer: {
           name: name.trim(),
           document: cedula.trim(),
@@ -132,6 +142,56 @@ export function MountOrderDialog({
 
         {/* Formulario */}
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 md:p-5">
+          {/* Plataforma de origen: pills con el color real de su badge. */}
+          <section className="space-y-3">
+            <h3 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Plataforma
+            </h3>
+            {platformsQuery.isPending ? (
+              <p className="rounded-lg border border-dashed border-border px-3 py-3 text-sm text-muted-foreground">
+                Cargando plataformas...
+              </p>
+            ) : platformsQuery.isError ? (
+              <p className="rounded-lg border border-dashed border-border px-3 py-3 text-sm text-muted-foreground">
+                No se pudieron cargar las plataformas.{' '}
+                <button
+                  type="button"
+                  onClick={() => platformsQuery.refetch()}
+                  className="font-medium text-foreground underline underline-offset-2"
+                >
+                  Reintentar
+                </button>
+              </p>
+            ) : platforms.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-border px-3 py-3 text-sm text-muted-foreground">
+                No hay plataformas creadas. Un administrador puede crearlas en Ajustes.
+              </p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {platforms.map((p) => {
+                  const active = platformId === p.id;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setPlatformId(p.id)}
+                      className={cn(
+                        'inline-flex items-center gap-[6px] rounded-full border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] transition-all',
+                        BADGE_COLOR_CLASSES[p.color],
+                        active
+                          ? 'ring-2 ring-accent ring-offset-2 ring-offset-card'
+                          : 'opacity-60 hover:opacity-100',
+                      )}
+                    >
+                      <span aria-hidden className="h-[6px] w-[6px] shrink-0 rounded-full bg-current" />
+                      {p.name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
           <section className="space-y-3">
             <h3 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
               Cliente

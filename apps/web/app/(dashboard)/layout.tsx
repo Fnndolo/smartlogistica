@@ -26,9 +26,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <MobileTopBar />
           <main className="flex-1">
             {/* pb extra en movil: deja espacio para la barra inferior de pestañas.
-                max-w-7xl: la tabla de pedidos (9 columnas con "Direccion") necesita
-                ~1230px; con 6xl (1152px) se desbordaba dentro de la tarjeta. */}
-            <div className="mx-auto w-full max-w-7xl px-4 py-5 pb-24 sm:px-6 md:py-8 md:pb-8">
+                max-w-[84rem] (1344px): la tabla de la sede llego a 10 columnas
+                (con "Plataforma"); con 7xl (1280px) volvia a desbordarse dentro
+                de la tarjeta. En pantallas mas angostas la tabla scrollea DENTRO
+                de su tarjeta (wrapper overflow-auto), nunca se corta. */}
+            <div className="mx-auto w-full max-w-[84rem] px-4 py-5 pb-24 sm:px-6 md:py-8 md:pb-8">
               {children}
             </div>
           </main>

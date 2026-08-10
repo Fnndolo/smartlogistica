@@ -61,6 +61,7 @@ import { setActiveChat } from './active-chat';
 import { ClaimChip } from './claim-chip';
 import { GuidePanel } from './guide-panel';
 import { InvoicePanel } from './invoice-panel';
+import { platformOf, usePlatforms } from './platform-badge';
 import { useOrderActions } from './use-order-actions';
 import { compressImage } from '@/lib/compress-image';
 
@@ -366,7 +367,7 @@ function DrawerContent({
           />
         </TabPane>
         <TabPane active={tab === 'detalle'} scroll>
-          <DetalleTab order={order} detail={detail} />
+          <DetalleTab order={order} detail={detail} onDeleted={onClose} />
         </TabPane>
         {canManage && !external ? (
           <>
@@ -492,9 +493,23 @@ function AddressConfirmation({ order }: { order: OrderSummary }) {
   );
 }
 
-function DetalleTab({ order, detail }: { order: OrderSummary; detail: OrderDetail | undefined }) {
+function DetalleTab({
+  order,
+  detail,
+  onDeleted,
+}: {
+  order: OrderSummary;
+  detail: OrderDetail | undefined;
+  /** Cerrar el drawer tras eliminar el pedido (montados a mano). */
+  onDeleted?: () => void;
+}) {
   const items = detail?.items ?? order.items;
   const external = !order.warehouseId && order.status === 'invoiced';
+  const me = useCurrentUser();
+  const isAdminRole = me?.role === 'OWNER' || me?.role === 'ADMIN';
+  // Nombre de plataforma contra el CATALOGO (igual que el badge de la tabla):
+  // si la renombran en Ajustes, aqui tambien cambia.
+  const { data: platforms = [] } = usePlatforms();
   return (
     <div className="space-y-6 p-5">
       {external ? (
@@ -514,7 +529,7 @@ function DetalleTab({ order, detail }: { order: OrderSummary; detail: OrderDetai
           label="Creado"
           value={format(new Date(order.marketplaceCreatedAt), "d MMM yyyy '·' HH:mm", { locale: es })}
         />
-        <Stat label="Marketplace" value={order.provider.toUpperCase()} />
+        <Stat label="Plataforma" value={platformOf(order, platforms).name} />
       </section>
 
       {/* Contacto */}
@@ -555,7 +570,92 @@ function DetalleTab({ order, detail }: { order: OrderSummary; detail: OrderDetai
           ))}
         </div>
       </section>
+
+      {/* Eliminar (solo pedidos MONTADOS a mano): se borra TODO el pedido.
+          Un pedido ya COMPLETADO (factura + guia) solo lo elimina un admin —
+          a un operador ni se le ofrece (el server igual lo bloquearia). */}
+      {order.provider === 'manual' && (isAdminRole || order.status !== 'invoiced') ? (
+        <DeleteOrderZone order={order} onDeleted={onDeleted} />
+      ) : null}
     </div>
+  );
+}
+
+/**
+ * Zona de peligro del pedido montado a mano: eliminarlo DEL TODO (chat, fotos,
+ * documentos y actividad). Con confirmacion explicita — no hay deshacer.
+ */
+function DeleteOrderZone({ order, onDeleted }: { order: OrderSummary; onDeleted?: () => void }) {
+  const qc = useQueryClient();
+  const [confirming, setConfirming] = useState(false);
+
+  const del = useMutation({
+    mutationFn: () => api.delete(`/v1/orders/${order.id}`),
+    onSuccess: () => {
+      toast.success(`Pedido ${order.externalId} eliminado`);
+      setConfirming(false);
+      onDeleted?.();
+      qc.invalidateQueries({ queryKey: ['orders'] });
+      qc.invalidateQueries({ queryKey: ['orders-pulse'] });
+      qc.invalidateQueries({ queryKey: ['warehouses'] });
+    },
+    onError: (err) =>
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo eliminar el pedido'),
+  });
+
+  return (
+    <section className="space-y-2">
+      <SectionTitle>Zona de peligro</SectionTitle>
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/25 bg-destructive/[0.04] px-3 py-2.5">
+        <p className="text-xs text-muted-foreground">
+          Este pedido fue montado a mano: puedes eliminarlo del todo.
+        </p>
+        <Button variant="outline" size="sm" onClick={() => setConfirming(true)} className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive">
+          <Trash2 className="h-3.5 w-3.5" />
+          Eliminar pedido
+        </Button>
+      </div>
+
+      {confirming && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              className="fixed inset-0 z-[120] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]"
+              onClick={() => (del.isPending ? null : setConfirming(false))}
+            >
+              <div
+                className="shadow-pop w-full max-w-sm rounded-2xl border border-border bg-card p-5"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-start gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+                    <AlertTriangle className="h-[18px] w-[18px]" />
+                  </span>
+                  <div className="min-w-0">
+                    <h3 className="text-[15px] font-semibold leading-tight">
+                      ¿Eliminar el pedido {order.externalId}?
+                    </h3>
+                    <p className="mt-1.5 text-[12.5px] leading-relaxed text-muted-foreground">
+                      Se perderá <b className="text-foreground">todo</b>: la conversación, las fotos,
+                      los documentos y la actividad. Esta acción{' '}
+                      <b className="text-foreground">no se puede deshacer</b>.
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-4 flex justify-end gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setConfirming(false)} disabled={del.isPending}>
+                    Cancelar
+                  </Button>
+                  <Button variant="destructive" size="sm" onClick={() => del.mutate()} loading={del.isPending}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Sí, eliminar
+                  </Button>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+    </section>
   );
 }
 

@@ -59,6 +59,7 @@ import type { RastreoResult } from '../marketplaces/coordinadora/coordinadora-cl
 import { MktDocumentService } from '../marketplaces/vtex/mkt-document.service';
 import { VtexClient } from '../marketplaces/vtex/vtex-client.service';
 import { WarehousesService } from '../warehouses/warehouses.service';
+import { loadPlatforms } from './platforms.store';
 
 const IMAGE_EXT: Record<ImageMime, string> = {
   'image/jpeg': 'jpg',
@@ -533,6 +534,14 @@ export class OrdersService {
       throw new ForbiddenException('Sin acceso a esta sede');
     }
 
+    // Plataforma de origen (Krediya, Mercado Libre...): debe existir en el
+    // catalogo. VTEX no es elegible aqui — esos pedidos llegan solos.
+    const platforms = await loadPlatforms();
+    const platform = platforms.find((pl) => pl.id === input.platformId && pl.id !== 'vtex');
+    if (!platform) {
+      throw new BadRequestException('Plataforma no valida. Elige una del catalogo (o creala en Ajustes).');
+    }
+
     const c = input.customer;
     const p = input.product;
     const phone = c.phone.replace(/\D/g, '') || c.phone;
@@ -540,9 +549,11 @@ export class OrdersService {
     const nameParts = c.name.trim().split(/\s+/).filter(Boolean);
     // El rawPayload IMITA la forma de VTEX que ya leen extractInvoiceClient /
     // extractShippingAddress / extractRealEmail: cero ramas nuevas en factura y
-    // guia. `manual` guarda ademas la ciudad DANE elegida (sin re-resolver).
+    // guia. `manual` guarda ademas la ciudad DANE elegida (sin re-resolver) y
+    // la plataforma de origen (el color del badge vive en el catalogo).
     const rawPayload = {
       manual: {
+        platform: { id: platform.id, name: platform.name },
         cityCode: c.cityCode,
         cityName: c.cityName ?? null,
         createdBy: displayName(auth),
@@ -585,6 +596,10 @@ export class OrdersService {
             totalUnits: p.quantity,
             warehouseId: input.warehouseId,
             assignedAt: new Date(),
+            // La direccion la dicto el cliente al montar el pedido: nace
+            // CONFIRMADA (no pasa por la confirmacion de WhatsApp).
+            addressStatus: 'confirmed',
+            addressConfirmedAt: new Date(),
             marketplaceCreatedAt: new Date(),
             rawPayload,
             items: {
@@ -611,18 +626,94 @@ export class OrdersService {
           type: 'created',
           actorId: auth.userId,
           actorName: displayName(auth),
-          data: { manual: true, warehouseName: wh.name } as Prisma.InputJsonValue,
+          data: {
+            manual: true,
+            warehouseName: wh.name,
+            platform: platform.name,
+          } as Prisma.InputJsonValue,
         },
       }),
       this.systemMessage(
         order.id,
         auth,
-        `Pedido montado a mano: ${p.quantity} × ${p.name} · ${formatCop(total)}.`,
+        `Pedido montado a mano (${platform.name}): ${p.quantity} × ${p.name} · ${formatCop(total)}.`,
       ),
     ]);
 
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
     return this.toSummary(order, false, 0, auth.userId, []);
+  }
+
+  /**
+   * ELIMINA del todo un pedido MONTADO a mano (chat, fotos, actividad — todo).
+   * Los de marketplace no se tocan (son el espejo de VTEX). Si ya tiene factura
+   * o guia, solo un admin puede eliminarlo (esos documentos existen en Alegra/
+   * Coordinadora: eliminar aqui no los anula). Los adjuntos de storage se
+   * borran en background (best-effort).
+   */
+  async deleteOrder(orderId: string, auth: AuthContext): Promise<void> {
+    // Tomar los MISMOS candados de facturar/guia: si hay una factura o guia EN
+    // CURSO (la llamada a Alegra/Coordinadora tarda segundos y su evento se
+    // escribe al final), borrar en esa ventana dejaria el documento emitido
+    // afuera sin ningun rastro aca. Con los locks, el borrado espera su turno
+    // (o falla claro) y el chequeo de eventos de abajo ya ve la realidad.
+    this.acquireLock(`${orderId}:invoice`, 'Hay una facturación en curso: espera a que termine.');
+    try {
+      // Si este segundo candado falla, el finally de afuera libera el primero.
+      this.acquireLock(`${orderId}:guide`, 'Hay una guía en curso: espera a que termine.');
+      try {
+        await this.deleteOrderLocked(orderId, auth);
+      } finally {
+        this.opLocks.delete(`${orderId}:guide`);
+      }
+    } finally {
+      this.opLocks.delete(`${orderId}:invoice`);
+    }
+  }
+
+  private async deleteOrderLocked(orderId: string, auth: AuthContext): Promise<void> {
+    const order = await this.loadAccessibleOrder(orderId, auth);
+    if (order.provider !== 'manual') {
+      throw new BadRequestException('Solo los pedidos montados a mano se pueden eliminar.');
+    }
+
+    const { tenantId, prisma } = getTenantContext();
+    const hasDocs = await prisma.orderEvent.findFirst({
+      where: { orderId, type: { in: ['invoiced', 'guide_generated', 'manual_completed'] } },
+      select: { id: true },
+    });
+    if (hasDocs && !isAdmin(auth)) {
+      throw new ForbiddenException(
+        'Este pedido ya tiene factura o guía: solo un administrador puede eliminarlo (y debe anularlas en Alegra/Coordinadora aparte).',
+      );
+    }
+
+    // Keys de adjuntos ANTES de borrar (la cascada se lleva los mensajes).
+    const attachments = await prisma.orderMessage.findMany({
+      where: { orderId, attachmentKey: { not: null } },
+      select: { attachmentKey: true },
+    });
+
+    // La cascada de FKs borra items, mensajes, eventos, lecturas, reacciones y
+    // alertas de super mencion. P2025 = otro lo borro primero -> 404, no 500.
+    try {
+      await prisma.order.delete({ where: { id: orderId } });
+    } catch (err) {
+      if (typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'P2025') {
+        throw new NotFoundException('El pedido ya fue eliminado');
+      }
+      throw err;
+    }
+
+    if (this.storage.isConfigured()) {
+      void (async () => {
+        for (const a of attachments) {
+          if (a.attachmentKey) await this.storage.delete(a.attachmentKey).catch(() => null);
+        }
+      })();
+    }
+
+    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
   }
 
   // === Drawer por pedido: detalle + conversacion + actividad ===
@@ -2206,6 +2297,8 @@ export class OrdersService {
   ): OrderSummary {
     return {
       unreadCount,
+      // Plataforma de origen (solo montados a mano; en VTEX el provider basta).
+      platform: manualPlatformOf(o),
       claimedBy: o.claimedById
         ? { userId: o.claimedById, name: o.claimedByName ?? '', mine: o.claimedById === viewerId }
         : null,
@@ -2400,6 +2493,19 @@ function vtexErrorMessage(err: unknown): string {
     return `${status ?? ''} ${detail ?? err.message}`.trim();
   }
   return err instanceof Error ? err.message : 'error desconocido';
+}
+
+/**
+ * Plataforma de origen de un pedido MONTADO a mano (rawPayload.manual.platform).
+ * null para los de marketplace y para manuales viejos sin plataforma guardada.
+ */
+function manualPlatformOf(order: OrderWithItems): { id: string; name: string } | null {
+  if (order.provider !== 'manual') return null;
+  const p = (
+    order.rawPayload as { manual?: { platform?: { id?: unknown; name?: unknown } } } | null
+  )?.manual?.platform;
+  if (!p || typeof p.id !== 'string' || typeof p.name !== 'string' || !p.id || !p.name) return null;
+  return { id: p.id, name: p.name };
 }
 
 /**

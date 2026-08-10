@@ -15,7 +15,7 @@ import {
   Package,
   SmilePlus,
 } from 'lucide-react';
-import type { OrderSummary, OrderSortField, SortDir } from '@smartlogistica/shared';
+import type { OrderSummary, OrderSortField, Platform, SortDir } from '@smartlogistica/shared';
 
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -24,6 +24,7 @@ import { cn, titleCaseName } from '@/lib/utils';
 import { ClaimChip, ClaimSlot, initialsOf } from './claim-chip';
 import { EmojiPicker } from './emoji-picker';
 import { prefetchOrder } from './order-queries';
+import { PlatformBadge, usePlatforms } from './platform-badge';
 import { useOrderActions } from './use-order-actions';
 
 /** Menu contextual de la fila (tomar/soltar) o picker de reacciones, anclado al boton. */
@@ -44,6 +45,8 @@ interface OrdersTableProps {
   showShipping?: boolean;
   /** Muestra la columna "Direccion" (confirmacion por WhatsApp). General + Por preparar. */
   showAddress?: boolean;
+  /** Muestra la columna "Plataforma" (VTEX / Krediya / Mercado Libre...). Solo en sede. */
+  showPlatform?: boolean;
 }
 
 export function OrdersTable({
@@ -57,13 +60,20 @@ export function OrdersTable({
   onOpenOrder,
   showShipping = false,
   showAddress = false,
+  showPlatform = false,
 }: OrdersTableProps) {
   const qc = useQueryClient();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [menu, setMenu] = useState<RowMenu | null>(null);
   const actions = useOrderActions();
+  // Catalogo de plataformas (colores de los badges). Un solo fetch cacheado.
+  const { data: platforms = [] } = usePlatforms();
   const selectable = Boolean(selectedIds && onToggleSelect);
-  const colCount = (selectable ? 8 : 7) + (showShipping ? 1 : 0) + (showAddress ? 1 : 0);
+  const colCount =
+    (selectable ? 8 : 7) +
+    (showShipping ? 1 : 0) +
+    (showAddress ? 1 : 0) +
+    (showPlatform ? 1 : 0);
   const allSelected = selectable && items.length > 0 && items.every((o) => selectedIds!.has(o.id));
 
   const toggle = (id: string) =>
@@ -97,6 +107,8 @@ export function OrdersTable({
             onOpenOrder={onOpenOrder}
             showShipping={showShipping}
             showAddress={showAddress}
+            showPlatform={showPlatform}
+            platforms={platforms}
             onPrefetch={() => onOpenOrder && prefetchOrder(qc, order.id)}
             onClaim={openMenu('claim')}
             onReact={openMenu('react')}
@@ -125,9 +137,11 @@ export function OrdersTable({
           <TableHead>Cliente</TableHead>
           <TableHead>Producto</TableHead>
           <SortHeader label="Cant." field="quantity" sort={sort} dir={dir} onSort={onSort} align="right" />
-          <SortHeader label="Precio de venta" field="price" sort={sort} dir={dir} onSort={onSort} align="right" />
+          {/* "Precio" a secas: reclama ancho para la columna Plataforma. */}
+          <SortHeader label="Precio" field="price" sort={sort} dir={dir} onSort={onSort} align="right" />
           {/* Fecha desc es el orden POR DEFECTO: no se pinta como filtro aplicado. */}
           <SortHeader label="Fecha" field="date" sort={sort} dir={dir} onSort={onSort} defaultDesc />
+          {showPlatform ? <TableHead>Plataforma</TableHead> : null}
           <TableHead>Estado</TableHead>
           {showAddress ? <TableHead>Dirección</TableHead> : null}
           {showShipping ? <TableHead>Envío</TableHead> : null}
@@ -188,8 +202,6 @@ export function OrdersTable({
                       <ClaimSlot />
                     ) : null}
                     {order.externalId}
-                    {/* Montado a mano: externo a las plataformas (sin MKT). */}
-                    {order.provider === 'manual' ? <ManualChip /> : null}
                     {order.hasDevicePhoto ? (
                       <span
                         title="Tiene foto de IMEI/serial"
@@ -223,7 +235,7 @@ export function OrdersTable({
 
                 {/* Producto: 1 -> nombre; varios -> nombre + pildora "+N" debajo.
                     El nombre SIEMPRE se muestra completo (envuelve en lineas). */}
-                <TableCell className="min-w-[200px] max-w-[340px]">
+                <TableCell className="min-w-[176px] max-w-[340px]">
                   <ProductCell
                     order={order}
                     multi={multi}
@@ -257,6 +269,11 @@ export function OrdersTable({
                     </span>
                   </div>
                 </TableCell>
+                {showPlatform ? (
+                  <TableCell className="whitespace-nowrap">
+                    <PlatformBadge order={order} platforms={platforms} />
+                  </TableCell>
+                ) : null}
                 <TableCell className={cn(!showAddress && !showShipping && 'relative pr-16')}>
                   <StatusBadge status={order.status} />
                   {!showAddress && !showShipping ? (
@@ -547,6 +564,8 @@ function OrderCard({
   onOpenOrder,
   showShipping,
   showAddress,
+  showPlatform,
+  platforms,
   onPrefetch,
   onClaim,
   onReact,
@@ -559,6 +578,8 @@ function OrderCard({
   onOpenOrder?: (order: OrderSummary) => void;
   showShipping: boolean;
   showAddress: boolean;
+  showPlatform: boolean;
+  platforms: Platform[];
   onPrefetch: () => void;
   onClaim: (order: OrderSummary, e: React.MouseEvent) => void;
   onReact: (order: OrderSummary, e: React.MouseEvent) => void;
@@ -599,12 +620,14 @@ function OrderCard({
               />
             ) : null}
             <span className="truncate">{order.externalId}</span>
-            {order.provider === 'manual' ? <ManualChip /> : null}
             {order.hasDevicePhoto ? (
               <Camera className="h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
             ) : null}
           </span>
-          <StatusBadge status={order.status} />
+          <span className="flex shrink-0 items-center gap-1.5">
+            {showPlatform ? <PlatformBadge order={order} platforms={platforms} /> : null}
+            <StatusBadge status={order.status} />
+          </span>
         </div>
 
         <div className="mt-1 flex items-center gap-1.5">
@@ -894,21 +917,6 @@ function StatusBadge({ status }: { status: string }) {
     <Badge dot variant={mapped?.variant ?? 'secondary'} className="whitespace-nowrap">
       {mapped?.label ?? status}
     </Badge>
-  );
-}
-
-/**
- * Distintivo de pedido MONTADO a mano (externo a las plataformas, sin MKT).
- * Chip chiquito y tenue: identifica sin gritar (el Nº MP-#### ya lo insinua).
- */
-function ManualChip() {
-  return (
-    <span
-      title="Montado a mano (externo a las plataformas, sin MKT)"
-      className="inline-flex shrink-0 items-center rounded-[5px] border border-border bg-muted/60 px-1 py-px font-sans text-[9.5px] font-medium uppercase tracking-[0.05em] text-muted-foreground"
-    >
-      Manual
-    </span>
   );
 }
 

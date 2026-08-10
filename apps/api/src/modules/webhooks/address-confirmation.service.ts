@@ -105,10 +105,13 @@ export class AddressConfirmationService {
 
     // Candidatos: pedidos pendientes (no finalizados: ni cerrados en VTEX ni
     // completados a mano) cuyo telefono contiene esos digitos. Se refina por
-    // coincidencia exacta de los ultimos 10.
+    // coincidencia exacta de los ultimos 10. Los MONTADOS a mano se excluyen:
+    // su direccion nace confirmada (la dicto el cliente) y no debe cambiarla
+    // una respuesta de WhatsApp dirigida a otro pedido del mismo telefono.
     const candidates = await prisma.order.findMany({
       where: {
         customerPhone: { contains: digits },
+        provider: { not: 'manual' },
         events: { none: { type: { in: ['vtex_invoiced', 'manual_completed'] } } },
       },
       select: { id: true, customerPhone: true },

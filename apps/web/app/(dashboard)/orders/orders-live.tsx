@@ -374,6 +374,8 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
               showShipping={state === 'invoiced' && scope.kind === 'warehouse'}
               // Confirmacion de direccion: en General y Por preparar (no en Facturados).
               showAddress={state !== 'invoiced'}
+              // Plataforma (VTEX / Krediya / Mercado Libre...): solo en la sede.
+              showPlatform={scope.kind === 'warehouse'}
             />
           </div>
 
@@ -388,6 +390,9 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
           scope={scope}
           warehouses={warehouses}
           selectedIds={[...selected]}
+          // Los MONTADOS a mano nunca estuvieron en generales: si hay alguno en
+          // la seleccion, "Devolver a generales" ni se ofrece.
+          canReturn={!items.some((o) => selected.has(o.id) && o.provider === 'manual')}
           onClear={() => setSelected(new Set())}
           onAssign={handleAssign}
         />
@@ -686,12 +691,15 @@ function AssignmentBar({
   scope,
   warehouses,
   selectedIds,
+  canReturn = true,
   onClear,
   onAssign,
 }: {
   scope: OrdersScope;
   warehouses: WarehouseSummary[];
   selectedIds: string[];
+  /** false si la seleccion incluye pedidos montados a mano (no van a generales). */
+  canReturn?: boolean;
   onClear: () => void;
   onAssign: (orderIds: string[], warehouseId: string | null, label: string) => void;
 }) {
@@ -709,7 +717,7 @@ function AssignmentBar({
         </span>
         <div className="h-5 w-px bg-border" />
 
-        {scope.kind === 'warehouse' ? (
+        {scope.kind === 'warehouse' && canReturn ? (
           <Button variant="outline" size="sm" onClick={() => onAssign(selectedIds, null, 'devueltos a generales')}>
             <Undo2 className="h-3.5 w-3.5" />
             Devolver a generales

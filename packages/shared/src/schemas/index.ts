@@ -11,3 +11,4 @@ export * from './invoice.schema';
 export * from './coordinadora.schema';
 export * from './certificate.schema';
 export * from './member.schema';
+export * from './platform.schema';
