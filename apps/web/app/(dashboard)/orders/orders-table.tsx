@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns/format';
 import { es } from 'date-fns/locale/es';
 import {
@@ -15,10 +15,19 @@ import {
   Package,
   SmilePlus,
 } from 'lucide-react';
-import type { OrderSummary, OrderSortField, Platform, SortDir } from '@smartlogistica/shared';
+import {
+  DEFAULT_VTEX_FEES,
+  vtexNetValue,
+  type OrderSummary,
+  type OrderSortField,
+  type Platform,
+  type SortDir,
+  type VtexFees,
+} from '@smartlogistica/shared';
 
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { api } from '@/lib/api-client';
 import { cn, titleCaseName } from '@/lib/utils';
 
 import { ClaimChip, ClaimSlot, initialsOf } from './claim-chip';
@@ -93,6 +102,22 @@ export function OrdersTable({
   // esta tomado (asi la tabla no gana ancho cuando nadie ha tomado nada).
   const anyClaimed = items.some((o) => o.claimedBy);
 
+  // Clic en el PRECIO de un pedido VTEX: muestra/oculta debajo el neto real
+  // tras descontar comision del marketplace (solo visual, por fila). Los
+  // porcentajes y el fijo son CONFIGURABLES en Ajustes (globales).
+  const [netShown, setNetShown] = useState<Set<string>>(new Set());
+  const toggleNet = (id: string) =>
+    setNetShown((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  const { data: fees = DEFAULT_VTEX_FEES } = useQuery({
+    queryKey: ['vtex-fees'],
+    queryFn: () => api.get<VtexFees>('/v1/vtex-fees'),
+    staleTime: 5 * 60_000,
+  });
+
   return (
     <>
       {/* Movil: lista de tarjetas (la tabla no cabe). */}
@@ -109,6 +134,9 @@ export function OrdersTable({
             showAddress={showAddress}
             showPlatform={showPlatform}
             platforms={platforms}
+            fees={fees}
+            netOpen={netShown.has(order.id)}
+            onToggleNet={toggleNet}
             onPrefetch={() => onOpenOrder && prefetchOrder(qc, order.id)}
             onClaim={openMenu('claim')}
             onReact={openMenu('react')}
@@ -257,7 +285,12 @@ export function OrdersTable({
                 </TableCell>
 
                 <TableCell className="whitespace-nowrap text-right font-mono text-xs tabular-nums">
-                  {formatCurrency(order.totalValue, order.currency)}
+                  <PriceCell
+                    order={order}
+                    fees={fees}
+                    netOpen={netShown.has(order.id)}
+                    onToggleNet={toggleNet}
+                  />
                 </TableCell>
                 <TableCell className="whitespace-nowrap text-muted-foreground">
                   <div className="flex flex-col leading-tight">
@@ -566,6 +599,9 @@ function OrderCard({
   showAddress,
   showPlatform,
   platforms,
+  fees,
+  netOpen,
+  onToggleNet,
   onPrefetch,
   onClaim,
   onReact,
@@ -580,6 +616,9 @@ function OrderCard({
   showAddress: boolean;
   showPlatform: boolean;
   platforms: Platform[];
+  fees: VtexFees;
+  netOpen: boolean;
+  onToggleNet: (id: string) => void;
   onPrefetch: () => void;
   onClaim: (order: OrderSummary, e: React.MouseEvent) => void;
   onReact: (order: OrderSummary, e: React.MouseEvent) => void;
@@ -651,9 +690,38 @@ function OrderCard({
         <div className="mt-1.5 flex items-center justify-between gap-2 text-[12.5px] text-muted-foreground">
           <span className="tabular-nums">
             {order.totalUnits} un &middot;{' '}
-            <span className="font-medium text-foreground">
-              {formatCurrency(order.totalValue, order.currency)}
-            </span>
+            {order.provider === 'vtex' ? (
+              // Tocar el precio muestra/oculta el NETO tras la comision (visual).
+              <span
+                role="button"
+                tabIndex={0}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleNet(order.id);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onToggleNet(order.id);
+                  }
+                }}
+                className="inline-flex flex-col align-top font-medium text-foreground"
+              >
+                <span className={cn(netOpen && 'underline decoration-dotted underline-offset-2')}>
+                  {formatCurrency(order.totalValue, order.currency)}
+                </span>
+                {netOpen ? (
+                  <span className="text-[11px] font-normal text-muted-foreground">
+                    ({formatCurrency(String(vtexNetValue(Number(order.totalValue) || 0, fees)), order.currency)})
+                  </span>
+                ) : null}
+              </span>
+            ) : (
+              <span className="font-medium text-foreground">
+                {formatCurrency(order.totalValue, order.currency)}
+              </span>
+            )}
           </span>
           <span className="shrink-0 tabular-nums">
             {format(new Date(order.marketplaceCreatedAt), "d MMM '·' HH:mm", { locale: es })}
@@ -702,6 +770,55 @@ function OrderCard({
         </div>
       </div>
     </button>
+  );
+}
+
+/**
+ * Precio con toggle de NETO (solo VTEX): un clic muestra debajo, entre
+ * parentesis, lo que de verdad queda tras los descuentos configurados en
+ * Ajustes (comision % + IVA % sobre la comision + fijo); otro clic lo oculta.
+ */
+function PriceCell({
+  order,
+  fees,
+  netOpen,
+  onToggleNet,
+}: {
+  order: OrderSummary;
+  fees: VtexFees;
+  netOpen: boolean;
+  onToggleNet: (id: string) => void;
+}) {
+  if (order.provider !== 'vtex') {
+    return <>{formatCurrency(order.totalValue, order.currency)}</>;
+  }
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      title={`Ver neto tras comisión ${fees.commissionPct}% + IVA ${fees.vatPct}% de la comisión + ${formatCurrency(String(fees.fixed), order.currency)} (configurable en Ajustes)`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggleNet(order.id);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          e.stopPropagation();
+          onToggleNet(order.id);
+        }
+      }}
+      className="inline-flex cursor-pointer flex-col items-end rounded-sm leading-tight outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <span className={cn(netOpen && 'underline decoration-dotted underline-offset-2')}>
+        {formatCurrency(order.totalValue, order.currency)}
+      </span>
+      {netOpen ? (
+        <span className="text-[10.5px] text-muted-foreground">
+          ({formatCurrency(String(vtexNetValue(Number(order.totalValue) || 0, fees)), order.currency)})
+        </span>
+      ) : null}
+    </span>
   );
 }
 

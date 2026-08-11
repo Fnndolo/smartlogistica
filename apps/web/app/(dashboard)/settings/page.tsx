@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowRight, Building2, Link2, Mail, Users } from 'lucide-react';
-import type { PackagePreset, Platform } from '@smartlogistica/shared';
+import type { PackagePreset, Platform, VtexFees } from '@smartlogistica/shared';
 
 import { Badge } from '@/components/ui/badge';
 import { serverFetch, serverFetchResult } from '@/lib/server-api';
@@ -10,6 +10,7 @@ import { ChangePasswordCard } from './change-password-card';
 import { ConfirmationLogCard } from './confirmation-log-card';
 import { PackagePresetsCard } from './package-presets-card';
 import { PlatformsCard } from './platforms-card';
+import { VtexFeesCard } from './vtex-fees-card';
 
 export const metadata: Metadata = { title: 'Ajustes' };
 
@@ -35,9 +36,10 @@ export default async function SettingsPage() {
     ? ((await serverFetch<PackagePreset[]>('/v1/warehouses/package-presets')) ?? [])
     : [];
   // null = la lectura fallo (API caida/reiniciando). NUNCA se cae a defaults:
-  // la card guarda con PUT de reemplazo total y unos defaults sembrados a
-  // ciegas pisarian el catalogo personalizado al primer "Guardar".
+  // las cards guardan con PUT de reemplazo total y unos defaults sembrados a
+  // ciegas pisarian la configuracion personalizada al primer "Guardar".
   const platforms = isOwner ? await serverFetch<Platform[]>('/v1/platforms') : null;
+  const vtexFees = isOwner ? await serverFetch<VtexFees>('/v1/vtex-fees') : null;
 
   return (
     <div className="space-y-8">
@@ -119,6 +121,7 @@ export default async function SettingsPage() {
             Pedidos
           </h2>
           <PlatformsCard initial={platforms} />
+          <VtexFeesCard initial={vtexFees} />
         </section>
       ) : null}
 

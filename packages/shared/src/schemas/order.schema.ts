@@ -197,6 +197,8 @@ export const listOrdersQuerySchema = z.object({
     .string()
     .regex(/^(confirmed|modified|pending)(,(confirmed|modified|pending))*$/)
     .optional(),
+  // Filtro por PRODUCTO: solo pedidos con algun item cuyo nombre contenga esto.
+  product: z.string().trim().min(1).max(160).optional(),
   // Busqueda universal: matchea por nombre de cliente, N.º de pedido (externalId),
   // cedula (customerDocument) o nombre de producto (incluye multi-producto).
   q: z.string().trim().min(1).max(120).optional(),

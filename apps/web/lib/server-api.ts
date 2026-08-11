@@ -70,6 +70,7 @@ export interface OrdersSearchParams {
   dir?: string;
   shipping?: string;
   address?: string;
+  product?: string;
 }
 
 /** Construye el querystring de `/v1/orders` para una sede + etapa + filtros de la URL. */
@@ -88,6 +89,7 @@ export function ordersQueryString(
   if (sp.from) params.set('from', sp.from);
   if (sp.to) params.set('to', sp.to);
   if (sp.q) params.set('q', sp.q);
+  if (sp.product) params.set('product', sp.product.slice(0, 160));
   // Solo valores validos: un valor inventado en la URL haria fallar el zod del API.
   if (sp.shipping && SHIPPING_VALUES.has(sp.shipping)) params.set('shipping', sp.shipping);
   const address = sanitizeAddressList(sp.address);

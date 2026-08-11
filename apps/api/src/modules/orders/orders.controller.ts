@@ -144,6 +144,28 @@ export class OrdersController {
     return this.orders.mentionsFeed(user);
   }
 
+  /**
+   * Productos DISTINTOS de la vista (sugerencias del filtro "Producto").
+   * Ruta literal: antes de :id. Params normalizados a mano: con `?q=a&q=b`
+   * Express entrega un ARRAY y `.trim()` reventaria en 500.
+   */
+  @Get('products')
+  async products(
+    @Query('warehouse') warehouse: string | string[] | undefined,
+    @Query('q') q: string | string[] | undefined,
+    @Query('state') state: string | string[] | undefined,
+    @CurrentUser() user: AuthContext,
+  ): Promise<string[]> {
+    const one = (v: string | string[] | undefined): string =>
+      typeof v === 'string' ? v : Array.isArray(v) ? String(v[0] ?? '') : '';
+    return this.orders.productOptions(
+      one(warehouse) || null,
+      one(state) === 'invoiced' ? 'invoiced' : 'pending',
+      one(q).trim().slice(0, 160),
+      user,
+    );
+  }
+
   /** Busqueda global (generales + todas las sedes). Ruta literal: antes de :id. */
   @Get('search')
   async search(

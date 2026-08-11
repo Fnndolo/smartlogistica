@@ -12,3 +12,4 @@ export * from './coordinadora.schema';
 export * from './certificate.schema';
 export * from './member.schema';
 export * from './platform.schema';
+export * from './vtex-fees.schema';

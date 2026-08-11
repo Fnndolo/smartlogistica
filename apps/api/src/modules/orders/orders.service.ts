@@ -210,6 +210,14 @@ export class OrdersService {
       }
     }
 
+    // Filtro por PRODUCTO. Va en AND para no chocar con el OR de la busqueda (q).
+    if (query.product) {
+      where.AND = [
+        ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+        { items: { some: { name: { contains: query.product, mode: 'insensitive' } } } },
+      ];
+    }
+
     if (query.from || query.to) {
       where.marketplaceCreatedAt = {};
       if (query.from) (where.marketplaceCreatedAt as Prisma.DateTimeFilter).gte = new Date(query.from);
@@ -271,6 +279,54 @@ export class OrdersService {
       limit: query.limit,
       totalPages: Math.max(1, Math.ceil(total / query.limit)),
     };
+  }
+
+  /**
+   * Nombres de producto DISTINTOS de la vista actual (sugerencias del filtro
+   * "Producto"). Mismo scope que list(): seguridad (sede/generales) Y etapa
+   * (Por preparar vs Facturados) — sugerir un producto que en esa pestaña da
+   * 0 resultados solo confunde.
+   */
+  async productOptions(
+    warehouseId: string | null,
+    state: 'pending' | 'invoiced',
+    q: string,
+    auth: AuthContext,
+  ): Promise<string[]> {
+    const { prisma } = getTenantContext();
+    if (warehouseId) {
+      const allowed = await this.warehouses.accessibleWarehouseIds(auth);
+      if (allowed && !allowed.includes(warehouseId)) {
+        throw new ForbiddenException('Sin acceso a esta sede');
+      }
+    } else if (!isAdmin(auth)) {
+      throw new ForbiddenException('Sin acceso a pedidos generales');
+    }
+
+    const orderWhere: Prisma.OrderWhereInput = warehouseId
+      ? {
+          warehouseId,
+          events:
+            state === 'invoiced'
+              ? { some: { type: { in: FINALIZED_EVENTS } } }
+              : { none: { type: { in: FINALIZED_EVENTS } } },
+        }
+      : { warehouseId: null, status: state === 'invoiced' ? 'invoiced' : 'ready-for-handling' };
+
+    // groupBy, NO findMany+distinct: sin el preview nativeDistinct, Prisma
+    // deduplica `distinct` EN MEMORIA y el take no limita el SQL (traeria
+    // TODOS los items del scope en cada tecla). groupBy si empuja
+    // GROUP BY + LIMIT a Postgres.
+    const rows = await prisma.orderItem.groupBy({
+      by: ['name'],
+      where: {
+        ...(q ? { name: { contains: q, mode: 'insensitive' } } : {}),
+        order: orderWhere,
+      },
+      orderBy: { name: 'asc' },
+      take: 20,
+    });
+    return rows.map((r) => r.name);
   }
 
   /** Reacciones por pedido, agregadas: [{emoji, count, mine}] en orden de llegada. */

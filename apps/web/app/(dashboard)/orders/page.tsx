@@ -21,6 +21,7 @@ interface PageProps {
     sort?: string;
     dir?: string;
     address?: string;
+    product?: string;
   }>;
 }
 
@@ -32,6 +33,7 @@ async function fetchOrders(params: {
   sort?: string;
   dir?: string;
   address?: string;
+  product?: string;
 }): Promise<ListOrdersResponse> {
   const cookieStore = await cookies();
   const session = cookieStore.get(SESSION_COOKIE_NAME);
@@ -45,6 +47,7 @@ async function fetchOrders(params: {
   if (params.from) url.searchParams.set('from', params.from);
   if (params.to) url.searchParams.set('to', params.to);
   if (params.q) url.searchParams.set('q', params.q);
+  if (params.product) url.searchParams.set('product', params.product.slice(0, 160));
   const address = sanitizeAddressList(params.address);
   if (address) url.searchParams.set('address', address);
 
@@ -71,6 +74,7 @@ export default async function OrdersPage({ searchParams }: PageProps) {
     sort: params.sort,
     dir: params.dir,
     address: params.address,
+    product: params.product,
   });
 
   // El encabezado (migas + titulo + "En vivo" + rango) lo pinta OrdersLive.

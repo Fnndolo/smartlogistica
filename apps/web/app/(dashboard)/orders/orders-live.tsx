@@ -3,7 +3,7 @@
 import { useSearchParams, usePathname } from 'next/navigation';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Building2, Check, ChevronLeft, ChevronRight, MapPin, PackagePlus, Truck, Undo2, X } from 'lucide-react';
+import { Building2, Check, ChevronLeft, ChevronRight, MapPin, Package, PackagePlus, Search, Truck, Undo2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type {
   ListOrdersResponse,
@@ -56,13 +56,14 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const q = searchParams.get('q') ?? undefined;
   const shipping = searchParams.get('shipping') ?? undefined;
   const address = searchParams.get('address') ?? undefined;
+  const product = searchParams.get('product') ?? undefined;
   const sort = parseSort(searchParams.get('sort'));
   const dir = parseDir(searchParams.get('dir'));
   const warehouseId = scope.kind === 'warehouse' ? scope.id : undefined;
 
   const queryKey = [
     'orders',
-    { scope: warehouseId ?? 'general', state, shipping, address, page, from, to, q, sort, dir },
+    { scope: warehouseId ?? 'general', state, shipping, address, product, page, from, to, q, sort, dir },
   ] as const;
   // Clave con la que se monto la pagina (la que corresponde al initialData del
   // SSR). Se fija UNA vez: si initialData se pasara plano, React Query lo
@@ -85,6 +86,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       if (state) params.set('state', state);
       if (shipping) params.set('shipping', shipping);
       if (address) params.set('address', address);
+      if (product) params.set('product', product);
       return api.get<ListOrdersResponse>(`/v1/orders?${params.toString()}`);
     },
     // Solo la clave inicial recibe el initialData del SSR (ver mountKey arriba).
@@ -113,7 +115,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   useEffect(() => {
     setSelected(new Set());
-  }, [page, q, from, to, sort, dir, warehouseId, shipping, address]);
+  }, [page, q, from, to, sort, dir, warehouseId, shipping, address, product]);
 
   // Pedido abierto en el drawer (click en la fila). La conversacion es SIEMPRE
   // la primera pestaña.
@@ -334,6 +336,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       <div className="flex flex-wrap items-center gap-2">
         <SearchFilter />
         <DateRangeFilter />
+        <ProductFilter warehouseId={warehouseId} state={state} />
         {state === 'invoiced' && warehouseId ? <ShippingFilter /> : null}
         {state !== 'invoiced' ? <AddressFilter /> : null}
         {/* Montar pedido: SOLO en la sede (Por preparar) — pedidos externos a
@@ -524,6 +527,167 @@ function ShippingFilter() {
               );
             })}
           </ul>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Filtro por PRODUCTO. Vive en la URL (?product=). Popover con buscador y
+ * sugerencias REALES de la vista (nombres distintos de items via el API);
+ * tambien acepta texto libre con Enter (match "contiene", sin mayusculas).
+ */
+function ProductFilter({
+  warehouseId,
+  state,
+}: {
+  warehouseId: string | undefined;
+  /** Etapa de la vista: las sugerencias se recortan a lo que esa pestaña muestra. */
+  state: 'pending' | 'invoiced' | undefined;
+}) {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const [open, setOpen] = useState(false);
+  // En movil el boton puede quedar cerca del borde derecho: el popover (320px)
+  // se ancla al lado que SI cabe (el body corta todo paneo horizontal).
+  const [alignRight, setAlignRight] = useState(false);
+  const [term, setTerm] = useState('');
+  const [debounced, setDebounced] = useState('');
+  const ref = useRef<HTMLDivElement>(null);
+  const current = searchParams.get('product') ?? '';
+  const hasFilter = current !== '';
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(term.trim()), 250);
+    return () => clearTimeout(t);
+  }, [term]);
+
+  const stage = state === 'invoiced' ? 'invoiced' : 'pending';
+  const { data: options = [], isFetching } = useQuery({
+    queryKey: ['product-options', warehouseId ?? 'general', stage, debounced],
+    queryFn: () => {
+      const params = new URLSearchParams();
+      if (warehouseId) params.set('warehouse', warehouseId);
+      params.set('state', stage);
+      if (debounced) params.set('q', debounced);
+      return api.get<string[]>(`/v1/orders/products?${params.toString()}`);
+    },
+    enabled: open,
+    staleTime: 30_000,
+  });
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const set = (value: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (value) params.set('product', value);
+    else params.delete('product');
+    params.delete('page');
+    replaceUrlParams(pathname, params);
+    setOpen(false);
+    setTerm('');
+  };
+
+  return (
+    <div className="relative" ref={ref}>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={(e) => {
+          // ¿Cabe el popover (320px) hacia la derecha del boton? Si no, se
+          // ancla a la derecha (crece hacia la izquierda) para no cortarse.
+          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+          setAlignRight(r.left + 320 > window.innerWidth - 12);
+          setOpen((s) => !s);
+        }}
+        className={cn('h-[34px] rounded-lg font-normal text-muted-foreground', hasFilter && 'border-accent/40')}
+      >
+        <Package className="h-3.5 w-3.5 text-muted-foreground/70" />
+        <span className="text-xs">
+          Producto:{' '}
+          <span className="max-w-[140px] truncate align-bottom font-semibold text-foreground inline-block">
+            {hasFilter ? current : 'Todos'}
+          </span>
+        </span>
+        {hasFilter ? (
+          <span
+            role="button"
+            tabIndex={0}
+            aria-label="Limpiar filtro"
+            onClick={(e) => {
+              e.stopPropagation();
+              set('');
+            }}
+            className="ml-0.5 flex h-4 w-4 items-center justify-center rounded-sm hover:bg-muted"
+          >
+            <X className="h-3 w-3" />
+          </span>
+        ) : null}
+      </Button>
+
+      {open ? (
+        <div
+          className={cn(
+            'absolute top-full z-20 mt-2 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-border bg-popover shadow-lg',
+            alignRight ? 'right-0' : 'left-0',
+          )}
+        >
+          <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+            <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <input
+              autoFocus
+              value={term}
+              maxLength={160}
+              onChange={(e) => setTerm(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && term.trim()) set(term.trim().slice(0, 160));
+              }}
+              placeholder="Buscar producto..."
+              className="h-7 flex-1 bg-transparent text-sm outline-none"
+            />
+          </div>
+          <ul className="max-h-64 overflow-auto p-1.5">
+            {isFetching && options.length === 0 ? (
+              <li className="px-2.5 py-2 text-xs text-muted-foreground">Buscando...</li>
+            ) : options.length === 0 ? (
+              <li className="px-2.5 py-2 text-xs text-muted-foreground">
+                Sin productos que coincidan.
+              </li>
+            ) : (
+              options.map((name) => (
+                <li key={name}>
+                  <button
+                    type="button"
+                    onClick={() => set(name)}
+                    className={cn(
+                      'w-full break-words rounded-md px-2.5 py-2 text-left text-sm leading-snug transition-colors hover:bg-muted',
+                      current === name && 'bg-accent/10 font-medium',
+                    )}
+                  >
+                    {name}
+                  </button>
+                </li>
+              ))
+            )}
+          </ul>
+          <div className="border-t border-border px-3 py-2 text-[11px] text-muted-foreground">
+            Enter aplica el texto tal cual (busca por «contiene»)
+          </div>
         </div>
       ) : null}
     </div>

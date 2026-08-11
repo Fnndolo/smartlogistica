@@ -10,10 +10,11 @@ import { OrdersService } from './orders.service';
 import { PlatformsController } from './platforms.controller';
 import { ShippingRefreshProcessor } from './shipping-refresh.processor';
 import { ShippingRefreshScheduler } from './shipping-refresh.scheduler';
+import { VtexFeesController } from './vtex-fees.controller';
 
 @Module({
   imports: [WarehousesModule, AiModule, AlegraModule, CoordinadoraModule, VtexModule],
-  controllers: [OrdersController, PlatformsController],
+  controllers: [OrdersController, PlatformsController, VtexFeesController],
   providers: [OrdersService, ShippingRefreshProcessor, ShippingRefreshScheduler],
 })
 export class OrdersModule {}

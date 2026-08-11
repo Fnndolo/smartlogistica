@@ -20,6 +20,7 @@ interface PageProps {
     q?: string;
     sort?: string;
     dir?: string;
+    product?: string;
   }>;
 }
 
@@ -35,6 +36,7 @@ async function fetchOrders(params: {
   q?: string;
   sort?: string;
   dir?: string;
+  product?: string;
 }): Promise<ListOrdersResponse> {
   const cookieStore = await cookies();
   const session = cookieStore.get(SESSION_COOKIE_NAME);
@@ -49,6 +51,7 @@ async function fetchOrders(params: {
   if (params.from) url.searchParams.set('from', params.from);
   if (params.to) url.searchParams.set('to', params.to);
   if (params.q) url.searchParams.set('q', params.q);
+  if (params.product) url.searchParams.set('product', params.product.slice(0, 160));
 
   try {
     const res = await fetch(url, {
@@ -72,6 +75,7 @@ export default async function OrdersFacturadosPage({ searchParams }: PageProps) 
     q: params.q,
     sort: params.sort,
     dir: params.dir,
+    product: params.product,
   });
 
   return (
