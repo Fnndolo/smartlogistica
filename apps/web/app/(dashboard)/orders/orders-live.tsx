@@ -164,24 +164,36 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderParam]);
 
-  // Cada evento SSE -> refetch debounced de la pagina actual. El debounce
-  // coalesce rafagas (ej: 100 upserts durante un backfill -> pocos refetch).
+  // Cada evento SSE -> refetch de la pagina actual. El PRIMER evento refresca
+  // AL INSTANTE (una transferencia/asignacion se pinta ya en la sede destino);
+  // solo las RAFAGAS (ej: 100 upserts durante un backfill) se coalescen con el
+  // debounce. Antes TODO esperaba el debounce y la transferencia se sentia lenta.
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastRefetchRef = useRef(0);
   const handleStreamEvent = useCallback(
     (event?: { kind: string }) => {
       // "esta escribiendo" es efimero y las reacciones a mensajes no tocan la
       // lista: cero refetch (que nada compita con pintar el chat al instante).
       if (event?.kind === 'chat.typing' || event?.kind === 'chat.reaction') return;
       const chatOnly = event?.kind === 'chat.message';
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => {
+      const run = () => {
+        lastRefetchRef.current = Date.now();
         // chat.message solo afecta el badge de no leidos -> solo la lista.
         queryClient.invalidateQueries({ queryKey: ['orders'] });
         if (!chatOnly) {
           queryClient.invalidateQueries({ queryKey: ['order-stats'] });
           queryClient.invalidateQueries({ queryKey: ['orders-pulse'] });
         }
-      }, SSE_DEBOUNCE_MS);
+      };
+      // Borde de ATAQUE: si llevamos un rato quietos, este evento es una accion
+      // puntual -> refetch YA. Lo que llegue enseguida se coalesce (debounce).
+      if (Date.now() - lastRefetchRef.current > 1_000) {
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        run();
+        return;
+      }
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(run, SSE_DEBOUNCE_MS);
     },
     [queryClient],
   );
@@ -237,27 +249,53 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const toggleSelectAll = () =>
     setSelected((prev) => (prev.size === items.length ? new Set() : new Set(items.map((o) => o.id))));
 
-  // Asignar/transferir/devolver de forma OPTIMISTA: sacamos los pedidos de la
-  // vista al instante y la llamada al API corre por detras (con rollback si
-  // falla). Asi la accion se siente inmediata aunque el backend tarde ~1-2s.
+  // Asignar/transferir/devolver de forma OPTIMISTA: los pedidos SALEN de esta
+  // vista al instante y ademas ENTRAN ya a la cache de la sede destino — al
+  // navegar alla estan pintados sin esperar ni al API ni al SSE. La llamada
+  // corre por detras (con rollback si falla).
   const handleAssign = useCallback(
-    async (orderIds: string[], warehouseId: string | null, label: string) => {
+    async (orderIds: string[], destId: string | null, label: string) => {
       const ids = new Set(orderIds);
       const snapshots = queryClient.getQueriesData<ListOrdersResponse>({ queryKey: ['orders'] });
-      queryClient.setQueriesData<ListOrdersResponse>({ queryKey: ['orders'] }, (old) => {
-        if (!old) return old;
-        const removed = old.items.filter((o) => ids.has(o.id)).length;
-        if (removed === 0) return old;
-        return {
-          ...old,
-          items: old.items.filter((o) => !ids.has(o.id)),
-          total: Math.max(0, old.total - removed),
-        };
-      });
+      const nowIso = new Date().toISOString();
+      // Copias ya "movidas" (para sembrar la vista destino).
+      const moving = items
+        .filter((o) => ids.has(o.id))
+        .map((o) => ({ ...o, warehouseId: destId, assignedAt: destId ? nowIso : null }));
+
+      for (const [key, data] of snapshots) {
+        if (!data) continue;
+        const filters = (key as [string, Record<string, unknown> | undefined])[1];
+        // ¿Esta cache es la sede DESTINO (Por preparar, pagina 1 sin filtros)?
+        // Ahi los pedidos se AGREGAN arriba (el refetch ordena en un momento).
+        const isDestSeed =
+          destId !== null &&
+          filters?.scope === destId &&
+          filters?.state !== 'invoiced' &&
+          (filters?.page ?? 1) === 1 &&
+          !filters?.q &&
+          !filters?.product;
+        if (isDestSeed && moving.length > 0) {
+          queryClient.setQueryData<ListOrdersResponse>(key, {
+            ...data,
+            items: [...moving, ...data.items.filter((o) => !ids.has(o.id))],
+            total: data.total + moving.filter((m) => !data.items.some((o) => o.id === m.id)).length,
+          });
+          continue;
+        }
+        const removed = data.items.filter((o) => ids.has(o.id)).length;
+        if (removed > 0) {
+          queryClient.setQueryData<ListOrdersResponse>(key, {
+            ...data,
+            items: data.items.filter((o) => !ids.has(o.id)),
+            total: Math.max(0, data.total - removed),
+          });
+        }
+      }
       setSelected(new Set());
       toast.success(`${orderIds.length} pedido(s) ${label}`);
       try {
-        await api.post('/v1/orders/assign', { orderIds, warehouseId });
+        await api.post('/v1/orders/assign', { orderIds, warehouseId: destId });
       } catch (err) {
         // Falló: revertir la vista a como estaba y avisar.
         snapshots.forEach(([key, data]) => queryClient.setQueryData(key, data));
@@ -269,7 +307,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
         queryClient.invalidateQueries({ queryKey: ['order-stats'] });
       }
     },
-    [queryClient],
+    [queryClient, items],
   );
 
   const sectionLabel = state === 'invoiced' ? 'Facturados' : 'Por preparar';

@@ -19,16 +19,16 @@ const DOC_LABEL: Record<string, string> = {
 type Any = Record<string, any>;
 
 /**
- * Genera el "MKT" (el documento Print order de VTEX) como PDF, IDENTICO al que
- * imprime VTEX. Se arma con pdfkit (Helvetica ~ Arial, US Letter) a partir del
- * detalle del pedido — validado 1:1 contra el original. 2 paginas: resumen del
- * pedido + factura/producto (con la imagen del producto de `items[].imageUrl`).
+ * Genera el "MKT" (el documento Print order de VTEX) como PDF en UNA SOLA
+ * PAGINA (pedido del negocio, calcado de MKT MUESTRA.pdf): resumen + cliente +
+ * direccion + valores + pago + factura + tabla de producto, con metricas
+ * compactas para que todo quepa en un Letter. Se arma con pdfkit (Helvetica ~
+ * Arial) a partir del detalle del pedido.
  *
- * Textos y formatos copiados del Print order REAL de VTEX en español
- * (MKT-1561962373865-01.pdf). Unica desviacion deliberada: el tipo de documento.
- * VTEX en español imprime ahi su clave de traduccion sin traducir
- * ("profile-form.field.COL_cedula"); nosotros ponemos "Cédula de Ciudadanía"
- * (ver DOC_LABEL), que es lo que VTEX muestra en ingles y lo unico legible.
+ * Textos y formatos copiados del Print order REAL de VTEX en español. Unica
+ * desviacion deliberada: el tipo de documento. VTEX en español imprime su clave
+ * de traduccion sin traducir ("profile-form.field.COL_cedula"); nosotros
+ * ponemos "Cédula de Ciudadanía" (DOC_LABEL), lo unico legible.
  */
 @Injectable()
 export class MktDocumentService {
@@ -39,17 +39,18 @@ export class MktDocumentService {
     const cp: Any = o.clientProfileData ?? {};
     const a: Any = o.shippingData?.address ?? {};
     const li: Any = o.shippingData?.logisticsInfo?.[0] ?? {};
-    const item: Any = o.items?.[0] ?? {};
+    const items: Any[] = Array.isArray(o.items) && o.items.length > 0 ? o.items : [{}];
     const totals: Record<string, number> = Object.fromEntries(
       (o.totals ?? []).map((t: Any) => [t.id, t.value]),
     );
     const pkg: Any = o.packageAttachment?.packages?.[0] ?? {};
     const pay: Any = o.paymentData?.transactions?.[0]?.payments?.[0] ?? {};
-    const whId: string = li.deliveryIds?.[0]?.warehouseId ?? item.warehouseId ?? '';
+    const conn: Any = pay.connectorResponses ?? {};
 
-    const img = await this.fetchImage(item.imageUrl);
+    // Imagenes de los productos (en paralelo, best-effort).
+    const imgs = await Promise.all(items.map((it) => this.fetchImage(it.imageUrl)));
 
-    // === Layout ===
+    // === Layout (compacto: TODO en una pagina Letter) ===
     const M = 57;
     const RX = 555;
     const VX = 250;
@@ -65,18 +66,20 @@ export class MktDocumentService {
 
     let y = 0;
     const bar = (): void => {
-      doc.rect(M, y, W, 3.5).fill(BLACK);
-      y += 3.5;
+      doc.rect(M, y, W, 3).fill(BLACK);
+      y += 3;
     };
     const hline = (): void => {
       doc.moveTo(M, y).lineTo(RX, y).lineWidth(0.5).strokeColor(LINE).stroke();
     };
-    const sectionTitle = (t: string): void => {
-      y += 14;
-      bar();
-      y += 6;
-      doc.font('Helvetica-Bold').fontSize(11).fillColor(BLACK).text(t, M, y);
-      y += 13;
+    const sectionTitle = (t: string, withBar = true): void => {
+      y += 7;
+      if (withBar) {
+        bar();
+        y += 3;
+      }
+      doc.font('Helvetica-Bold').fontSize(9.5).fillColor(BLACK).text(t, M, y);
+      y += 11;
       hline();
     };
     const row = (label: string, value: string): void => {
@@ -84,8 +87,8 @@ export class MktDocumentService {
       // direccion sin "Información adicional"): omite etiqueta y todo. Si
       // pintaramos una fila vacia, ademas de sobrar, correria todo lo de abajo.
       if (!value.trim()) return;
-      const pad = 5;
-      doc.font('Helvetica').fontSize(9.5);
+      const pad = 2;
+      doc.font('Helvetica').fontSize(8);
       const lh = doc.heightOfString(label, { width: VX - M - 12 });
       const vh = doc.heightOfString(value, { width: RX - VX });
       const h = Math.max(lh, vh);
@@ -96,12 +99,12 @@ export class MktDocumentService {
       hline();
     };
 
-    // ===== PAGINA 1 =====
-    y = 57;
-    doc.font('Helvetica').fontSize(9).fillColor(GRAY).text('Pedido nro.', M, y);
-    y += 12;
-    doc.font('Helvetica-Bold').fontSize(20).fillColor(BLACK).text(String(o.orderId ?? ''), M, y);
-    y += 24;
+    // ===== UNICA PAGINA =====
+    y = 30;
+    doc.font('Helvetica').fontSize(8).fillColor(GRAY).text('Pedido nro.', M, y);
+    y += 10;
+    doc.font('Helvetica-Bold').fontSize(14).fillColor(BLACK).text(String(o.orderId ?? ''), M, y);
+    y += 17;
 
     sectionTitle('Pedido');
     row('Fecha de creación', this.dtFull(o.creationDate));
@@ -123,11 +126,13 @@ export class MktDocumentService {
     row('País', String(a.country ?? ''));
     row('Coordenadas geográficas', (a.geoCoordinates ?? []).join(', '));
 
-    sectionTitle('Destinatario');
+    // Como en la muestra: subtitulo SIN barra (subseccion de la direccion).
+    sectionTitle('Destinatario', false);
     row('Destinatario Nombre', String(a.receiverName ?? ''));
 
     sectionTitle('Valores');
     row('Artículos', this.money(totals.Items ?? 0));
+    row('Envío', totals.Shipping ? this.money(totals.Shipping) : '');
     row('Valor final', this.money(o.value ?? 0));
 
     sectionTitle('Pago');
@@ -135,65 +140,62 @@ export class MktDocumentService {
       'Método',
       `${pay.paymentSystemName ?? ''}\n${pay.installments ?? 1}x ${this.money(pay.value ?? 0)} = ${this.money(pay.value ?? 0)}`,
     );
+    row('Adquirente', String(conn.acquirer ?? ''));
     row('Autorización de gateway', this.dtNoComma(o.authorizedDate));
+    row('ID de la transacción', String(pay.tid ?? conn.tid ?? ''));
+    row('Retailer', String(o.sellers?.[0]?.name ?? ''));
 
-    doc.font('Helvetica').fontSize(8.5).fillColor(GRAY).text(`Pedido nro. ${o.orderId} (${o.sequence})`, M, 748);
-
-    // ===== PAGINA 2 =====
-    doc.addPage({ size: 'letter', margin: 0 });
-    y = 57;
-    doc
-      .font('Helvetica-Bold')
-      .fontSize(11)
-      .fillColor(BLACK)
-      .text(`Factura - 1 de 1 (${o.items?.length ?? 1} artículos)`, M, y);
-    y += 13;
-    hline();
+    sectionTitle(`Factura - 1 de 1 (${items.length} artículos)`);
     row('Factura', String(pkg.invoiceNumber ?? ''));
     row('Entrega hasta el', li.shippingEstimateDate ? this.dateOnly(li.shippingEstimateDate) : '');
     row('Entregado por', String(pkg.courier ?? li.deliveryCompany ?? ''));
     row('Tipo', String(li.selectedSla ?? ''));
 
-    y += 14;
-    bar();
-    y += 6;
+    y += 5;
+    hline();
     row('Total de artículos', this.money(totals.Items ?? 0));
     row('Valores extra', this.money((totals.Shipping ?? 0) + (totals.Tax ?? 0)));
     row('Valor', this.money(pkg.invoiceValue ?? o.value ?? 0));
 
-    // Tabla de producto
-    y += 14;
+    // Tabla de producto(s)
+    y += 7;
     bar();
-    y += 6;
-    doc.font('Helvetica-Bold').fontSize(9).fillColor(BLACK);
+    y += 4;
+    doc.font('Helvetica-Bold').fontSize(8).fillColor(BLACK);
     doc.text('Producto', M, y);
     doc.text('Cant.', 400, y);
     doc.text('Valor total', 470, y);
-    y += 15;
-    hline();
     y += 12;
+    hline();
+    y += 6;
 
-    const imgW = 42;
-    if (img) {
-      try {
-        doc.image(img, M, y, { width: imgW, height: imgW });
-      } catch {
-        /* imagen invalida — se omite */
+    const imgW = 32;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const whId: string = li.deliveryIds?.[0]?.warehouseId ?? item.warehouseId ?? '';
+      const rowTop = y;
+      if (imgs[i]) {
+        try {
+          doc.image(imgs[i]!, M, y, { width: imgW, height: imgW });
+        } catch {
+          /* imagen invalida — se omite */
+        }
       }
+      const tx = M + imgW + 10;
+      doc.font('Helvetica-Bold').fontSize(8).fillColor(BLACK).text(String(item.name ?? ''), tx, y, { width: 330 });
+      let ty2 = doc.y + 2;
+      doc.font('Helvetica').fontSize(7.5).fillColor(GRAY).text(`SKU ${item.id ?? ''}`, tx, ty2);
+      doc.text(`Ref. ${item.refId ?? ''}`, tx + 70, ty2, { width: 260 });
+      ty2 = doc.y + 1;
+      doc.text(`Almacén: ${whId}`, tx, ty2);
+      ty2 = doc.y + 2;
+      doc.text(`${this.money(item.price ?? 0)} / un`, tx, ty2);
+      doc.font('Helvetica').fontSize(8).fillColor(GRAY).text(`${item.quantity ?? 1} un`, 400, rowTop + 14);
+      doc.text(this.money((item.price ?? 0) * (item.quantity ?? 1)), 470, rowTop + 14);
+      y = Math.max(doc.y, rowTop + imgW) + 8;
     }
-    const tx = M + imgW + 12;
-    doc.font('Helvetica-Bold').fontSize(9.5).fillColor(BLACK).text(String(item.name ?? ''), tx, y, { width: 330 });
-    let ty2 = doc.y + 2;
-    doc.font('Helvetica').fontSize(8.5).fillColor(GRAY).text(`SKU ${item.id ?? ''}`, tx, ty2);
-    doc.text(`Ref. ${item.refId ?? ''}`, tx + 70, ty2, { width: 260 });
-    ty2 = doc.y + 1;
-    doc.text(`Almacén: ${whId}`, tx, ty2);
-    ty2 = doc.y + 3;
-    doc.text(`${this.money(item.price ?? 0)} / un`, tx, ty2);
-    doc.font('Helvetica').fontSize(8.5).fillColor(GRAY).text(`${item.quantity ?? 1} un`, 400, y + 20);
-    doc.text(this.money((item.price ?? 0) * (item.quantity ?? 1)), 470, y + 20);
 
-    doc.font('Helvetica').fontSize(8.5).fillColor(GRAY).text(`Pedido nro. ${o.orderId} (${o.sequence})`, M, 748);
+    doc.font('Helvetica').fontSize(8).fillColor(GRAY).text(`Pedido nro. ${o.orderId} (${o.sequence})`, M, 760);
     doc.end();
     return done;
   }
