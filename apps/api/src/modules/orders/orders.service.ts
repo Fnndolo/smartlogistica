@@ -440,14 +440,19 @@ export class OrdersService {
         Date.UTC(bogota.getUTCFullYear(), bogota.getUTCMonth(), bogota.getUTCDate(), 5, 0, 0),
       );
       const startYesterday = new Date(startToday.getTime() - 24 * 3_600_000);
+      // OJO: la vista de generales es el espejo en 'ready-for-handling'. Los
+      // facturados POR FUERA (status invoiced, trazabilidad) tambien tienen
+      // warehouseId null — sin el filtro de status inflaban "sin asignar" a
+      // miles cuando la tabla mostraba unos cientos.
+      const mirror = { warehouseId: null, status: 'ready-for-handling' } as const;
       const [today, yesterday, unassigned, addrPending, unclaimed] = await Promise.all([
         prisma.order.count({ where: { marketplaceCreatedAt: { gte: startToday } } }),
         prisma.order.count({
           where: { marketplaceCreatedAt: { gte: startYesterday, lt: startToday } },
         }),
-        prisma.order.count({ where: { warehouseId: null } }),
-        prisma.order.count({ where: { warehouseId: null, addressStatus: null } }),
-        prisma.order.count({ where: { warehouseId: null, claimedById: null } }),
+        prisma.order.count({ where: mirror }),
+        prisma.order.count({ where: { ...mirror, addressStatus: null } }),
+        prisma.order.count({ where: { ...mirror, claimedById: null } }),
       ]);
       return { scope, a: today, b: unassigned, c: addrPending, d: unclaimed, deltaToday: today - yesterday };
     }
@@ -492,49 +497,46 @@ export class OrdersService {
     if (!isAdmin(auth)) throw new ForbiddenException('Solo administradores pueden asignar pedidos');
     const { tenantId, prisma } = getTenantContext();
 
-    let toName: string | null = null;
-    if (input.warehouseId) {
-      const w = await prisma.warehouse.findUnique({ where: { id: input.warehouseId } });
-      if (!w || w.archived) throw new NotFoundException('Sede no encontrada o archivada');
-      toName = w.name;
-    }
+    // Validaciones EN PARALELO (eran 3-4 esperas encadenadas que retrasaban el
+    // aviso en vivo a la sede destino): sede destino + pedidos finalizados +
+    // estado previo (sede origen y si es montado a mano).
+    const [wh, finalized, prior] = await Promise.all([
+      input.warehouseId
+        ? prisma.warehouse.findUnique({ where: { id: input.warehouseId } })
+        : Promise.resolve(null),
+      // No mover pedidos ya FINALIZADOS (cerrados en VTEX o completados a mano).
+      // Uno solo facturado en Alegra sin cerrar todavia se puede mover.
+      prisma.orderEvent.findMany({
+        where: {
+          orderId: { in: input.orderIds },
+          type: { in: [...FINALIZED_EVENTS, 'vtex_invoiced_external'] },
+        },
+        select: { orderId: true },
+        distinct: ['orderId'],
+      }),
+      prisma.order.findMany({
+        where: { id: { in: input.orderIds } },
+        select: { id: true, warehouseId: true, provider: true },
+      }),
+    ]);
 
-    // No mover pedidos ya FINALIZADOS (estado "Facturado" = cerrados en VTEX o
-    // completados a mano). Un pedido solo facturado en Alegra pero sin cerrar
-    // todavia se puede mover (sigue en "Por preparar").
-    const finalized = await prisma.orderEvent.findMany({
-      where: {
-        orderId: { in: input.orderIds },
-        type: { in: [...FINALIZED_EVENTS, 'vtex_invoiced_external'] },
-      },
-      select: { orderId: true },
-      distinct: ['orderId'],
-    });
+    if (input.warehouseId && (!wh || wh.archived)) {
+      throw new NotFoundException('Sede no encontrada o archivada');
+    }
+    const toName = wh?.name ?? null;
     if (finalized.length > 0) {
       throw new BadRequestException(
         `No se pueden mover ${finalized.length} pedido(s) ya facturados (finalizados). ` +
           'Estos pedidos ya estan cerrados.',
       );
     }
-
     // Los pedidos MONTADOS a mano nacen en una sede y no tienen espejo en VTEX:
     // no pueden "devolverse a generales" (esa vista es el espejo del marketplace).
-    if (input.warehouseId === null) {
-      const manualCount = await prisma.order.count({
-        where: { id: { in: input.orderIds }, provider: 'manual' },
-      });
-      if (manualCount > 0) {
-        throw new BadRequestException(
-          'Los pedidos montados a mano no van a generales. Si hace falta, transfiérelos a otra sede.',
-        );
-      }
+    if (input.warehouseId === null && prior.some((o) => o.provider === 'manual')) {
+      throw new BadRequestException(
+        'Los pedidos montados a mano no van a generales. Si hace falta, transfiérelos a otra sede.',
+      );
     }
-
-    // Estado previo (para clasificar cada cambio como asignado/transferido/devuelto).
-    const prior = await prisma.order.findMany({
-      where: { id: { in: input.orderIds } },
-      select: { id: true, warehouseId: true },
-    });
 
     const result = await prisma.order.updateMany({
       where: { id: { in: input.orderIds } },
@@ -543,6 +545,11 @@ export class OrdersService {
         assignedAt: input.warehouseId ? new Date() : null,
       },
     });
+
+    // INMEDIATEZ: el cambio ya esta en la base -> avisar YA a todas las vistas
+    // (la sede destino lo pinta al instante). La actividad se registra despues:
+    // no cambia la lista y no tiene por que retrasar el aviso.
+    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
 
     // Registrar actividad por pedido, con NOMBRES de sede (la Actividad debe
     // decir a cual sede se asigno/transfirio y desde cual venia).
@@ -568,7 +575,6 @@ export class OrdersService {
       })),
     });
 
-    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
     return { count: result.count };
   }
 

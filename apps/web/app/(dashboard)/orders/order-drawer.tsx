@@ -95,6 +95,23 @@ interface StagedFile {
 /** Burbuja optimista de un adjunto subiendo (progress 0..100). */
 type PendingMsg = OrderMessage & { progress?: number };
 
+/**
+ * Vista previa LOCAL de los adjuntos que YO acabo de subir (id real -> object
+ * URL). Al confirmarse el mensaje, la imagen sigue mostrando el MISMO src
+ * local: cambiarlo a la URL firmada de storage hacia "parpadear" la foto (un
+ * frame en blanco mientras el navegador descargaba/decodificaba la remota).
+ * A nivel de modulo: sobrevive remontajes del drawer durante la sesion.
+ */
+const localPreviews = new Map<string, string>();
+
+/** Espera a que el navegador PINTE (2 frames): la burbuja optimista queda en
+ *  pantalla ANTES de arrancar trabajo pesado (comprimir una foto de camara
+ *  puede congelar el hilo principal un instante). */
+const nextPaint = () =>
+  new Promise<void>((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+  );
+
 const CLOSE_MS = 200;
 
 /**
@@ -1399,6 +1416,8 @@ function ConversacionTab({
       progress: 0,
     });
     try {
+      // Que la burbuja quede PINTADA antes de comprimir (si aun no lo esta).
+      await nextPaint();
       const compact = sf.compact ?? (await compressImage(sf.file));
       const fd = new FormData();
       fd.append('file', compact, compact.name);
@@ -1408,17 +1427,22 @@ function ConversacionTab({
         fd,
         (p) => bumpPending(tempId, { progress: p }),
       );
-      injectReal({ ...msg, attachmentUrl: msg.attachmentUrl ?? previewUrl });
+      // La preview LOCAL queda asociada al mensaje real: el <img> conserva el
+      // mismo src (cero parpadeo al confirmar y en los refetch posteriores).
+      localPreviews.set(msg.id, previewUrl);
+      injectReal(msg);
       removePending(tempId);
+      // Se conserva SOLO la preview que quedo en uso; la otra se libera.
+      if (sf.compactUrl && sf.compactUrl !== previewUrl) URL.revokeObjectURL(sf.compactUrl);
+      if (sf.url !== previewUrl) URL.revokeObjectURL(sf.url);
     } catch (err) {
       removePending(tempId);
       toast.error(err instanceof ApiError ? err.message : 'No se pudo subir el archivo');
-    } finally {
-      // Darle tiempo al <img> real de cargar antes de soltar las previews.
+      // Fallo: ninguna preview quedo en uso, liberar ambas.
       setTimeout(() => {
         URL.revokeObjectURL(sf.url);
         if (sf.compactUrl) URL.revokeObjectURL(sf.compactUrl);
-      }, 60_000);
+      }, 1_000);
     }
   };
 
@@ -1437,6 +1461,8 @@ function ConversacionTab({
     });
     let compactUrl: string | null = null;
     try {
+      // Que la burbuja quede PINTADA antes del trabajo pesado.
+      await nextPaint();
       // Comprimir ANTES de subir: sube en una fraccion y la IA lee mas rapido.
       const compact = await compressImage(file);
       // Cambiar la preview a la version liviana: la foto cruda de camara puede
@@ -1450,6 +1476,8 @@ function ConversacionTab({
         fd,
         (p) => bumpPending(tempId, { progress: p }),
       );
+      // El mensaje real conserva la preview LOCAL como src (cero parpadeo).
+      localPreviews.set(res.message.id, compactUrl ?? localUrl);
       injectReal(res.message);
       removePending(tempId);
       toast.success(
@@ -1458,15 +1486,17 @@ function ConversacionTab({
       qc.invalidateQueries({ queryKey: ['catalog', orderId] });
       // Las lineas de facturar dependen de los codigos: refrescar el preview.
       qc.invalidateQueries({ queryKey: ['invoice-preview', orderId] });
+      // Se conserva la preview en uso (compacta); la cruda se libera.
+      if (compactUrl) URL.revokeObjectURL(localUrl);
     } catch (err) {
       removePending(tempId);
       toast.error(err instanceof ApiError ? err.message : 'No se pudo procesar la foto');
-    } finally {
-      if (fileRef.current) fileRef.current.value = '';
       setTimeout(() => {
         URL.revokeObjectURL(localUrl);
         if (compactUrl) URL.revokeObjectURL(compactUrl);
-      }, 60_000);
+      }, 1_000);
+    } finally {
+      if (fileRef.current) fileRef.current.value = '';
     }
   };
 
@@ -1532,11 +1562,14 @@ function ConversacionTab({
         className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden px-3.5 pb-2 pt-[18px] md:px-[18px]"
       >
         <div className="mt-auto" aria-hidden />
-        {isLoading ? (
+        {isLoading && allMessages.length === 0 ? (
           <div className="flex justify-center py-8">
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
           </div>
-        ) : messages.length === 0 ? (
+        ) : allMessages.length === 0 ? (
+          // OJO: allMessages (server + optimistas), NO messages. Con messages,
+          // la PRIMERA foto de un chat vacio no pintaba su burbuja optimista
+          // (el estado "sin mensajes" la tapaba hasta que llegaba la real).
           <div className="py-10 text-center">
             <MessageSquare className="mx-auto h-6 w-6 text-muted-foreground" />
             <p className="mt-2 text-sm text-muted-foreground">
@@ -2568,6 +2601,9 @@ function AttachmentCard({
   onPreview?: (url: string) => void;
 }) {
   const url = message.attachmentUrl;
+  // Para MEDIOS que yo acabo de subir: mantener la preview local como src
+  // (misma imagen ya decodificada) — cambiar a la URL firmada parpadeaba.
+  const displayUrl = localPreviews.get(message.id) ?? url;
   const mime = message.attachmentMime ?? '';
   const name = message.body ?? 'archivo';
 
@@ -2609,7 +2645,7 @@ function AttachmentCard({
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={url}
+            src={displayUrl ?? url}
             alt={name}
             decoding="async"
             className="h-auto max-h-64 w-full object-cover"
@@ -2629,7 +2665,7 @@ function AttachmentCard({
     return (
       <div className={cn('w-[230px] max-w-full overflow-hidden rounded-[14px] border', tone)}>
         <div className="bg-black">
-          <video src={url} controls preload="metadata" className="max-h-64 w-full" />
+          <video src={displayUrl ?? url} controls preload="metadata" className="max-h-64 w-full" />
           {pending ? (
             <div className="px-2.5 pb-2.5">
               <UploadBar value={progress} />
@@ -2737,7 +2773,8 @@ function PhotoCard({
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={message.attachmentUrl}
+            // Recien subida por mi: conservar la preview local (cero parpadeo).
+            src={localPreviews.get(message.id) ?? message.attachmentUrl}
             alt={isSerial ? 'Foto serial' : 'Foto IMEI'}
             decoding="async"
             className="h-[140px] w-full bg-muted object-cover md:h-[120px]"
