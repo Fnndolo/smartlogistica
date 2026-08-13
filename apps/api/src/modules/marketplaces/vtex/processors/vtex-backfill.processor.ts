@@ -113,7 +113,7 @@ export class VtexBackfillProcessor extends WorkerHost {
       if (!VtexClient.isRelevantStatus(detail.status)) {
         return false;
       }
-      await this.orders.upsertFromDetail(prisma, accountName, detail);
+      await this.orders.upsertFromDetail(prisma, accountName, detail, tenantId);
       await this.realtime.publish(tenantId, { kind: 'order.upserted', externalId: orderId });
       return true;
     } catch (err) {

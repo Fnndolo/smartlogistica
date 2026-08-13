@@ -74,7 +74,7 @@ export class VtexWebhookProcessor extends WorkerHost {
         return { processed: true };
       }
 
-      await this.orders.upsertFromDetail(prisma, accountName, detail);
+      await this.orders.upsertFromDetail(prisma, accountName, detail, tenantId);
       await this.realtime.publish(tenantId, { kind: 'order.upserted', externalId: payload.OrderId });
       this.logger.log(`Webhook upsert ${payload.OrderId} status=${detail.status}`);
 

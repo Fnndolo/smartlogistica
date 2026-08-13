@@ -2926,6 +2926,7 @@ function EventIcon({ type }: { type: string }) {
   if (type === 'guide_generated') return <Truck className={cls} />;
   if (type === 'vtex_invoiced' || type === 'vtex_invoiced_external' || type === 'manual_completed')
     return <ReceiptText className={cls} />;
+  if (type === 'wa_confirmation') return <MessageCircle className={cls} />;
   return <Activity className={cls} />;
 }
 
@@ -2966,6 +2967,8 @@ function describeEvent(e: OrderEvent): string {
       return 'Facturado POR FUERA de SmartLogística (cerrado directamente en VTEX)';
     case 'manual_completed':
       return `Pedido completado · Factura ${(e.data.invoiceNumber as string | undefined) ?? ''} + guía ${(e.data.tracking as string | undefined) ?? ''} (sin MKT)`.trim();
+    case 'wa_confirmation':
+      return 'Confirmación del pedido enviada por WhatsApp (flujo de Whapify)';
     default:
       return e.type;
   }

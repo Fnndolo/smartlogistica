@@ -62,15 +62,21 @@ export class WhapifyClient {
     return null;
   }
 
-  /** Crea el contacto (telefono con indicativo). */
+  /** Crea el contacto (telefono con indicativo). Whapify hace upsert por telefono. */
   async createContact(
     http: AxiosInstance,
-    input: { phone: string; firstName?: string | null; lastName?: string | null },
+    input: {
+      phone: string;
+      firstName?: string | null;
+      lastName?: string | null;
+      email?: string | null;
+    },
   ): Promise<WhapifyContact | null> {
     const res = await http.post('/contacts', {
       phone: input.phone,
       ...(input.firstName ? { first_name: input.firstName } : {}),
       ...(input.lastName ? { last_name: input.lastName } : {}),
+      ...(input.email ? { email: input.email } : {}),
     });
     const raw: RawContact = res.data?.data ?? res.data ?? {};
     return raw.id != null ? this.toContact(raw) : null;
@@ -96,6 +102,27 @@ export class WhapifyClient {
       type,
       channel: 'whatsapp',
     });
+  }
+
+  /** Setea un CUSTOM FIELD del contacto (form-urlencoded, como el flujo de n8n). */
+  async setCustomField(
+    http: AxiosInstance,
+    contactId: string,
+    fieldId: string,
+    value: string,
+  ): Promise<void> {
+    await http.post(
+      `/contacts/${encodeURIComponent(contactId)}/custom_fields/${encodeURIComponent(fieldId)}`,
+      new URLSearchParams({ value }).toString(),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } },
+    );
+  }
+
+  /** Dispara un FLOW de Whapify al contacto (ej. el de confirmacion del pedido). */
+  async sendFlow(http: AxiosInstance, contactId: string, flowId: string): Promise<void> {
+    await http.post(
+      `/contacts/${encodeURIComponent(contactId)}/send/${encodeURIComponent(flowId)}`,
+    );
   }
 
   private toContact(raw: RawContact): WhapifyContact {

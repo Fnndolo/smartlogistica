@@ -29,6 +29,19 @@ import { WhapifyClient } from './whapify-client.service';
 /** Ultimos mensajes que carga el hilo (el historial completo queda guardado). */
 const THREAD_TAKE = 500;
 
+/**
+ * CONFIRMACION DE PEDIDO (calcada del workflow "Confirmador de pedidos" de n8n,
+ * ahora nativa): cuando llega un pedido NUEVO de VTEX en ready-for-handling se
+ * crea/actualiza el contacto en Whapify, se le setean la direccion y los
+ * productos (custom fields del flujo) y se dispara el flow de confirmacion.
+ * Ids de la cuenta Whapify del negocio (los mismos que usaba n8n).
+ */
+const CONFIRMATION_FLOW_ID = '1765216079186'; // flow "order_confirmation"
+const CF_ADDRESS_ID = '942316'; // custom field: direccion de envio
+const CF_PRODUCTS_ID = '557415'; // custom field: productos y cantidades
+/** Solo pedidos RECIENTES: un backfill de pedidos viejos JAMAS debe escribirle a nadie. */
+const CONFIRMATION_MAX_AGE_MS = 48 * 3_600_000;
+
 /** Archivo entrante/saliente: tope 50MB (igual que los adjuntos del chat). */
 export const WA_FILE_MAX_BYTES = 50 * 1024 * 1024;
 
@@ -290,6 +303,101 @@ export class WhatsappService {
     }
 
     await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+  }
+
+  /**
+   * CONFIRMACION del pedido por WhatsApp (reemplaza el workflow de n8n). Se
+   * llama desde la ingesta de VTEX cuando el pedido es NUEVO. Best-effort:
+   * jamas tumba la ingesta. Corre FUERA del contexto tenant (recibe prisma).
+   */
+  async sendOrderConfirmation(
+    tenantId: string,
+    prisma: PrismaClient,
+    orderId: string,
+  ): Promise<void> {
+    const conn = await prisma.whapifyConnection.findFirst({ orderBy: { createdAt: 'desc' } });
+    if (!conn) return; // sin conexion: n8n (u nadie) sigue a cargo
+
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: { items: { orderBy: { name: 'asc' } } },
+    });
+    if (!order || order.provider !== 'vtex') return;
+    // Mismo guard del n8n: SOLO ready-for-handling.
+    if (order.status !== 'ready-for-handling') return;
+    // Solo pedidos recientes (un backfill de viejos no escribe a nadie).
+    if (Date.now() - order.marketplaceCreatedAt.getTime() > CONFIRMATION_MAX_AGE_MS) return;
+    const phone = order.customerPhone ? tenDigits(order.customerPhone) : '';
+    if (!phone) return;
+
+    // Idempotente: una sola confirmacion por pedido.
+    const already = await prisma.orderEvent.findFirst({
+      where: { orderId, type: 'wa_confirmation' },
+      select: { id: true },
+    });
+    if (already) return;
+
+    // Datos del rawPayload de VTEX, igual que el flujo de n8n.
+    const raw = (order.rawPayload ?? {}) as Record<string, any>;
+    const cpd = raw.clientProfileData ?? {};
+    const a = raw.shippingData?.address ?? {};
+    const email = typeof raw.openTextField?.value === 'string' ? raw.openTextField.value : null;
+    const direccion = [
+      [a.street, a.neighborhood, a.city].filter(Boolean).join(', '),
+      [a.state, a.complement].filter(Boolean).join(' '),
+    ]
+      .filter(Boolean)
+      .join(', ');
+    const productos = order.items.map((i) => `${i.quantity} ${i.name}`).join(', ');
+
+    const token = await this.envelope.decryptField(tenantId, conn.encryptedToken);
+    const http = this.client.buildHttp(token);
+
+    // 1. Crear/actualizar contacto (Whapify hace upsert por telefono).
+    const contact = await this.client.createContact(http, {
+      phone: typeof cpd.phone === 'string' && cpd.phone ? cpd.phone : `+57${phone}`,
+      firstName: cpd.firstName ?? null,
+      lastName: cpd.lastName ?? null,
+      email,
+    });
+    if (!contact) {
+      this.logger.warn(`Confirmacion WA: no se pudo crear el contacto (pedido ${order.externalId})`);
+      return;
+    }
+
+    // 2. Custom fields del flow (direccion + productos) y 3. disparar el flow.
+    if (direccion) await this.client.setCustomField(http, contact.id, CF_ADDRESS_ID, direccion);
+    if (productos) await this.client.setCustomField(http, contact.id, CF_PRODUCTS_ID, productos);
+    await this.client.sendFlow(http, contact.id, CONFIRMATION_FLOW_ID);
+
+    // 4. Registrar: evento del pedido + mensaje en el hilo + cache del contacto.
+    await Promise.all([
+      prisma.orderEvent.create({
+        data: {
+          orderId,
+          type: 'wa_confirmation',
+          actorName: 'SmartLogística',
+          data: { flowId: CONFIRMATION_FLOW_ID, phone } as Prisma.InputJsonValue,
+        },
+      }),
+      prisma.waMessage.create({
+        data: {
+          phone,
+          direction: 'out',
+          kind: 'text',
+          body: `📋 Confirmación del pedido ${order.externalId} enviada (flujo de WhatsApp).`,
+          authorName: 'SmartLogística',
+          contactId: contact.id,
+        },
+      }),
+      prisma.waContact.upsert({
+        where: { phone },
+        create: { phone, contactId: contact.id, name: contact.name },
+        update: { contactId: contact.id, ...(contact.name ? { name: contact.name } : {}) },
+      }),
+    ]);
+    await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    this.logger.log(`Confirmacion WA enviada: pedido ${order.externalId} -> ${phone}`);
   }
 
   // === Helpers ===
