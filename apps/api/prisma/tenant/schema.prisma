@@ -171,6 +171,48 @@ model WarehouseMember {
 // Conexion a un proveedor de IA con vision (OpenAI / Gemini / Anthropic) a nivel
 // tenant. Una sola por tenant (el modelo a utilizar). Se usa para extraer el IMEI
 // de la foto. La API key va cifrada con la DEK del tenant (envelope).
+// Conexion global a Whapify (WhatsApp del negocio). Singleton por tenant.
+model WhapifyConnection {
+  id             String   @id @default(cuid())
+  encryptedToken Bytes
+  accountName    String?
+  totalContacts  Int?
+  status         String   @default("connected")
+  lastError      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// Historial de WhatsApp (Whapify no lo expone por API: se guarda AQUI todo lo
+// que pasa — salientes al enviarlos desde la plataforma, entrantes via webhook).
+// El hilo se arma por TELEFONO (10 digitos CO): un cliente comparte hilo entre
+// sus pedidos.
+model WaMessage {
+  id            String   @id @default(cuid())
+  phone         String // ultimos 10 digitos (normalizado CO)
+  direction     String // in | out
+  kind          String   @default("text") // text | image | video | audio | file
+  body          String?
+  // Medio: key de nuestro storage (salientes; la URL se firma al vuelo) o URL
+  // externa tal cual llego del webhook (entrantes).
+  attachmentKey String?
+  mediaUrl      String?
+  authorId      String? // usuario de la plataforma que lo envio (salientes)
+  authorName    String?
+  contactId     String? // id del contacto en Whapify
+  createdAt     DateTime @default(now())
+
+  @@index([phone, createdAt])
+}
+
+// Cache telefono -> contacto de Whapify (evita buscar/crear en cada envio).
+model WaContact {
+  phone     String   @id
+  contactId String
+  name      String?
+  updatedAt DateTime @updatedAt
+}
+
 model AiConnection {
   id              String   @id @default(cuid())
   provider        String // openai | gemini | anthropic

@@ -110,6 +110,47 @@ CREATE TABLE "WarehouseMember" (
 );
 
 -- CreateTable
+CREATE TABLE "WhapifyConnection" (
+    "id" TEXT NOT NULL,
+    "encryptedToken" BYTEA NOT NULL,
+    "accountName" TEXT,
+    "totalContacts" INTEGER,
+    "status" TEXT NOT NULL DEFAULT 'connected',
+    "lastError" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "WhapifyConnection_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "WaMessage" (
+    "id" TEXT NOT NULL,
+    "phone" TEXT NOT NULL,
+    "direction" TEXT NOT NULL,
+    "kind" TEXT NOT NULL DEFAULT 'text',
+    "body" TEXT,
+    "attachmentKey" TEXT,
+    "mediaUrl" TEXT,
+    "authorId" TEXT,
+    "authorName" TEXT,
+    "contactId" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "WaMessage_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "WaContact" (
+    "phone" TEXT NOT NULL,
+    "contactId" TEXT NOT NULL,
+    "name" TEXT,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "WaContact_pkey" PRIMARY KEY ("phone")
+);
+
+-- CreateTable
 CREATE TABLE "AiConnection" (
     "id" TEXT NOT NULL,
     "provider" TEXT NOT NULL,
@@ -328,6 +369,9 @@ CREATE INDEX "WarehouseMember_userId_idx" ON "WarehouseMember"("userId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "WarehouseMember_warehouseId_userId_key" ON "WarehouseMember"("warehouseId", "userId");
+
+-- CreateIndex
+CREATE INDEX "WaMessage_phone_createdAt_idx" ON "WaMessage"("phone", "createdAt");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "AlegraImeiIndex_imei_key" ON "AlegraImeiIndex"("imei");

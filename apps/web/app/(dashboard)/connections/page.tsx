@@ -1,13 +1,18 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Plus } from 'lucide-react';
-import type { AiConnectionSummary, VtexConnectionSummary } from '@smartlogistica/shared';
+import type {
+  AiConnectionSummary,
+  VtexConnectionSummary,
+  WhapifyConnectionSummary,
+} from '@smartlogistica/shared';
 
 import { Button } from '@/components/ui/button';
 import { serverFetchResult } from '@/lib/server-api';
 
 import { AiConnectionCard } from './ai-connection-card';
 import { ConnectionsList } from './connections-list';
+import { WhapifyConnectionCard } from './whapify-connection-card';
 
 export const metadata: Metadata = { title: 'Conexiones' };
 
@@ -27,8 +32,17 @@ async function initialAiConnection(): Promise<AiConnectionSummary | null | undef
   return res.ok ? res.data : undefined;
 }
 
+async function initialWhapify(): Promise<WhapifyConnectionSummary | null | undefined> {
+  const res = await serverFetchResult<WhapifyConnectionSummary | null>('/v1/connections/whapify');
+  return res.ok ? res.data : undefined;
+}
+
 export default async function ConnectionsPage() {
-  const [connections, aiConnection] = await Promise.all([initialConnections(), initialAiConnection()]);
+  const [connections, aiConnection, whapify] = await Promise.all([
+    initialConnections(),
+    initialAiConnection(),
+    initialWhapify(),
+  ]);
 
   return (
     <div className="space-y-8">
@@ -59,6 +73,7 @@ export default async function ConnectionsPage() {
           Servicios
         </h2>
         <AiConnectionCard initial={aiConnection} />
+        <WhapifyConnectionCard initial={whapify} />
       </section>
     </div>
   );

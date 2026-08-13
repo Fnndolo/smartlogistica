@@ -21,6 +21,7 @@ import {
   Mail,
   MapPin,
   Megaphone,
+  MessageCircle,
   MessageSquare,
   Package,
   Paperclip,
@@ -63,6 +64,7 @@ import { GuidePanel } from './guide-panel';
 import { InvoicePanel } from './invoice-panel';
 import { platformOf, usePlatforms } from './platform-badge';
 import { useOrderActions } from './use-order-actions';
+import { WhatsappPanel } from './whatsapp-panel';
 import { compressImage } from '@/lib/compress-image';
 
 import { EmojiPicker } from './emoji-picker';
@@ -79,7 +81,7 @@ import {
 import { orderDetailQuery, orderMessagesQuery } from './order-queries';
 import { useOrdersStream } from './use-orders-stream';
 
-type Tab = 'detalle' | 'conversacion' | 'facturar' | 'guia' | 'actividad';
+type Tab = 'detalle' | 'conversacion' | 'facturar' | 'guia' | 'actividad' | 'whatsapp';
 
 /** Adjunto en STAGING: elegido/pegado/arrastrado, aun sin enviar. */
 interface StagedFile {
@@ -276,13 +278,13 @@ function DrawerContent({
         ] as { id: Tab; label: string; icon: typeof Info }[])
       : []),
     // Actividad SIEMPRE para admins (en los facturados por fuera es la
-    // trazabilidad misma).
+    // trazabilidad misma). WhatsApp de ULTIMA (el hilo real con el cliente,
+    // solo administradores).
     ...(canManage
-      ? ([{ id: 'actividad', label: 'Actividad', icon: Activity }] as {
-          id: Tab;
-          label: string;
-          icon: typeof Info;
-        }[])
+      ? ([
+          { id: 'actividad', label: 'Actividad', icon: Activity },
+          { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
+        ] as { id: Tab; label: string; icon: typeof Info }[])
       : []),
   ];
 
@@ -401,9 +403,14 @@ function DrawerContent({
           </>
         ) : null}
         {canManage ? (
-          <TabPane active={tab === 'actividad'} scroll>
-            <ActividadTab orderId={order.id} />
-          </TabPane>
+          <>
+            <TabPane active={tab === 'actividad'} scroll>
+              <ActividadTab orderId={order.id} />
+            </TabPane>
+            <TabPane active={tab === 'whatsapp'}>
+              <WhatsappPanel orderId={order.id} active={tab === 'whatsapp'} />
+            </TabPane>
+          </>
         ) : null}
       </div>
     </>

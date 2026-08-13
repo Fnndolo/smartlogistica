@@ -24,6 +24,7 @@ import { OrdersModule } from './modules/orders/orders.module';
 import { TenantsModule } from './modules/tenants/tenants.module';
 import { WarehousesModule } from './modules/warehouses/warehouses.module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
+import { WhatsappModule } from './modules/whatsapp/whatsapp.module';
 
 @Module({
   imports: [
@@ -78,6 +79,7 @@ import { WebhooksModule } from './modules/webhooks/webhooks.module';
     CoordinadoraModule,
     AiModule,
     WebhooksModule,
+    WhatsappModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

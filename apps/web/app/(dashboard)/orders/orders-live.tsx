@@ -172,9 +172,15 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const lastRefetchRef = useRef(0);
   const handleStreamEvent = useCallback(
     (event?: { kind: string }) => {
-      // "esta escribiendo" es efimero y las reacciones a mensajes no tocan la
-      // lista: cero refetch (que nada compita con pintar el chat al instante).
-      if (event?.kind === 'chat.typing' || event?.kind === 'chat.reaction') return;
+      // "esta escribiendo" es efimero, las reacciones a mensajes no tocan la
+      // lista y los mensajes de WHATSAPP viven en su propia pestaña: cero
+      // refetch de la tabla por ellos.
+      if (
+        event?.kind === 'chat.typing' ||
+        event?.kind === 'chat.reaction' ||
+        event?.kind === 'wa.message'
+      )
+        return;
       const chatOnly = event?.kind === 'chat.message';
       const run = () => {
         lastRefetchRef.current = Date.now();

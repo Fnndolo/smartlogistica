@@ -13,6 +13,7 @@ export interface OrderRealtimeEvent {
     | 'order.upserted'
     | 'order.removed'
     | 'orders.refresh'
+    | 'wa.message'
     | 'chat.message'
     | 'chat.reaction'
     | 'chat.typing';
