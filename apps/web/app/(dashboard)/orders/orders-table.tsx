@@ -1039,11 +1039,11 @@ function SendConfirmationButton({ orderId }: { orderId: string }) {
   const me = useCurrentUser();
   const qc = useQueryClient();
   const [sending, setSending] = useState(false);
-  const isAdminRole = me?.role === 'OWNER' || me?.role === 'ADMIN';
 
-  if (!isAdminRole) {
-    // Operadores: solo el estado, sin boton (el envio es de administradores).
-    return <Badge dot variant="destructive" className="whitespace-nowrap">Mensaje sin enviar</Badge>;
+  // TEMPORAL: mientras la integracion de WhatsApp madura, SOLO el propietario
+  // ve el estado/boton; los demas ven el badge normal (como si nada).
+  if (me?.role !== 'OWNER') {
+    return <Badge dot variant="outline" className="whitespace-nowrap">Sin responder</Badge>;
   }
 
   const send = async (e: React.MouseEvent) => {

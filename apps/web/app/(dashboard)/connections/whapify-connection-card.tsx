@@ -24,7 +24,9 @@ const ICON_TILE =
 export function WhapifyConnectionCard({ initial }: { initial?: WhapifyConnectionSummary | null }) {
   const qc = useQueryClient();
   const user = useCurrentUser();
-  const canManage = user?.role === 'OWNER' || user?.role === 'ADMIN';
+  // TEMPORAL: solo el PROPIETARIO ve/gestiona la conexion mientras la
+  // integracion madura (igual que la pestaña WhatsApp del pedido).
+  const canManage = user?.role === 'OWNER';
 
   const {
     data: connection,

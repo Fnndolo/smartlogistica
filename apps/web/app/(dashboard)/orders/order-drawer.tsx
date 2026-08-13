@@ -278,13 +278,22 @@ function DrawerContent({
         ] as { id: Tab; label: string; icon: typeof Info }[])
       : []),
     // Actividad SIEMPRE para admins (en los facturados por fuera es la
-    // trazabilidad misma). WhatsApp de ULTIMA (el hilo real con el cliente,
-    // solo administradores).
+    // trazabilidad misma).
     ...(canManage
-      ? ([
-          { id: 'actividad', label: 'Actividad', icon: Activity },
-          { id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle },
-        ] as { id: Tab; label: string; icon: typeof Info }[])
+      ? ([{ id: 'actividad', label: 'Actividad', icon: Activity }] as {
+          id: Tab;
+          label: string;
+          icon: typeof Info;
+        }[])
+      : []),
+    // WhatsApp de ULTIMA. TEMPORAL: solo el PROPIETARIO (primer administrador)
+    // mientras la integracion con Whapify madura — los demas ni la ven.
+    ...(me?.role === 'OWNER'
+      ? ([{ id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle }] as {
+          id: Tab;
+          label: string;
+          icon: typeof Info;
+        }[])
       : []),
   ];
 
@@ -403,14 +412,14 @@ function DrawerContent({
           </>
         ) : null}
         {canManage ? (
-          <>
-            <TabPane active={tab === 'actividad'} scroll>
-              <ActividadTab orderId={order.id} />
-            </TabPane>
-            <TabPane active={tab === 'whatsapp'}>
-              <WhatsappPanel orderId={order.id} active={tab === 'whatsapp'} />
-            </TabPane>
-          </>
+          <TabPane active={tab === 'actividad'} scroll>
+            <ActividadTab orderId={order.id} />
+          </TabPane>
+        ) : null}
+        {me?.role === 'OWNER' ? (
+          <TabPane active={tab === 'whatsapp'}>
+            <WhatsappPanel orderId={order.id} active={tab === 'whatsapp'} />
+          </TabPane>
         ) : null}
       </div>
     </>

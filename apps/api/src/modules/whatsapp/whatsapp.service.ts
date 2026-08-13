@@ -18,7 +18,6 @@ import type {
 } from '@smartlogistica/shared';
 import type { Prisma, PrismaClient } from '.prisma/tenant-client';
 
-import { isAdmin } from '../../common/rbac';
 import type { AuthContext } from '../../common/types/authenticated-request';
 import { EnvelopeService } from '../../infrastructure/crypto/envelope.service';
 import { RealtimeService } from '../../infrastructure/realtime/realtime.service';
@@ -511,8 +510,11 @@ export class WhatsappService {
   }
 
   private assertAdmin(auth: AuthContext): void {
-    if (!isAdmin(auth)) {
-      throw new ForbiddenException('WhatsApp es solo para administradores');
+    // TEMPORAL (pedido del propietario): mientras la integracion con Whapify
+    // madura, TODO WhatsApp es SOLO del OWNER (el primer administrador) — los
+    // demas ni lo ven. Para abrirlo al resto de admins: volver a isAdmin(auth).
+    if (auth.role !== 'OWNER') {
+      throw new ForbiddenException('WhatsApp está en pruebas: solo el propietario puede usarlo');
     }
   }
 
