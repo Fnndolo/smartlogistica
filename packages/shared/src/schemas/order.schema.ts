@@ -85,6 +85,12 @@ export const orderSummarySchema = z.object({
   addressStatus: addressStatusSchema.nullable(),
   confirmedAddress: z.string().nullable(),
   addressConfirmedAt: z.string().datetime().nullable(),
+  // Estado del MENSAJE de confirmacion (el flujo de Whapify):
+  // 'unsent' = deberia haberse enviado y NO salio (Whapify caido/sin saldo) ->
+  // la columna Direccion muestra un BOTON para enviarlo a mano.
+  // 'sent' = ya se envio desde la plataforma. null = no aplica (pedido de antes
+  // de conectar Whapify, manual, sin telefono...).
+  waConfirmation: z.enum(['sent', 'unsent']).nullable().default(null),
   // Plataforma de origen de un pedido MONTADO a mano (Krediya, Mercado Libre...).
   // null en los de marketplace (su plataforma es el provider: VTEX). El color
   // del badge se resuelve contra el catalogo de plataformas (Ajustes).

@@ -248,11 +248,12 @@ export class OrdersService {
     ]);
 
     // Que pedidos de esta pagina ya tienen foto IMEI/serial (indicador en la tabla)
-    // + mensajes sin leer por pedido (badge) + reacciones agregadas por pedido.
+    // + mensajes sin leer por pedido (badge) + reacciones agregadas por pedido
+    // + estado del MENSAJE de confirmacion de WhatsApp (enviado / sin enviar).
     const ids = rows.map((r) => r.id);
-    const [withPhoto, unread, reactions] =
+    const [withPhoto, unread, reactions, waSent, waConn] =
       rows.length === 0
-        ? [new Set<string>(), new Map<string, UnreadInfo>(), new Map<string, OrderSummary['reactions']>()]
+        ? [new Set<string>(), new Map<string, UnreadInfo>(), new Map<string, OrderSummary['reactions']>(), new Set<string>(), null]
         : await Promise.all([
             prisma.orderMessage
               .groupBy({
@@ -262,7 +263,25 @@ export class OrdersService {
               .then((g) => new Set(g.map((x) => x.orderId))),
             this.unreadMap(auth.userId, { orderIds: ids }),
             this.reactionsMap(ids, auth.userId),
+            prisma.orderEvent
+              .findMany({
+                where: { orderId: { in: ids }, type: 'wa_confirmation' },
+                select: { orderId: true },
+                distinct: ['orderId'],
+              })
+              .then((g) => new Set(g.map((x) => x.orderId))),
+            prisma.whapifyConnection.findFirst({ select: { createdAt: true } }),
           ]);
+
+    // 'unsent' SOLO desde que existe la conexion Whapify (los pedidos de la era
+    // n8n no tienen evento aca aunque SI se les envio: no se marcan).
+    const waStateOf = (o: OrderWithItems): OrderSummary['waConfirmation'] => {
+      if (o.provider !== 'vtex' || !o.customerPhone || !waConn) return null;
+      if (waSent.has(o.id)) return 'sent';
+      return o.status === 'ready-for-handling' && o.marketplaceCreatedAt >= waConn.createdAt
+        ? 'unsent'
+        : null;
+    };
 
     return {
       items: rows.map((o) =>
@@ -272,6 +291,7 @@ export class OrdersService {
           unread.get(o.id)?.count ?? 0,
           auth.userId,
           reactions.get(o.id) ?? [],
+          waStateOf(o),
         ),
       ),
       total,
@@ -2356,9 +2376,11 @@ export class OrdersService {
     unreadCount = 0,
     viewerId?: string,
     reactions: OrderSummary['reactions'] = [],
+    waConfirmation: OrderSummary['waConfirmation'] = null,
   ): OrderSummary {
     return {
       unreadCount,
+      waConfirmation,
       // Plataforma de origen (solo montados a mano; en VTEX el provider basta).
       platform: manualPlatformOf(o),
       claimedBy: o.claimedById

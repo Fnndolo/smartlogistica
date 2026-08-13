@@ -79,6 +79,19 @@ export class OrderWhatsappController {
     return this.whatsapp.thread(id, user);
   }
 
+  /**
+   * Envio MANUAL de la confirmacion del pedido (el boton "Sin enviar" de la
+   * columna Direccion): mismo flujo de Whapify que el automatico.
+   */
+  @Post(':id/whatsapp/confirmation')
+  @HttpCode(200)
+  async sendConfirmation(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ ok: true }> {
+    return this.whatsapp.sendConfirmationManual(id, user);
+  }
+
   /** Envia un texto al cliente por WhatsApp. */
   @Post(':id/whatsapp/text')
   @HttpCode(201)

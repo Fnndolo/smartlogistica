@@ -11,10 +11,13 @@ import {
   ChevronRight,
   ChevronsUpDown,
   Hand,
+  Loader2,
   MoreHorizontal,
   Package,
+  Send,
   SmilePlus,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   DEFAULT_VTEX_FEES,
   vtexNetValue,
@@ -25,9 +28,10 @@ import {
   type VtexFees,
 } from '@smartlogistica/shared';
 
+import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { api } from '@/lib/api-client';
+import { ApiError, api } from '@/lib/api-client';
 import { cn, titleCaseName } from '@/lib/utils';
 
 import { ClaimChip, ClaimSlot, initialsOf } from './claim-chip';
@@ -1009,6 +1013,12 @@ const ADDRESS_FALLBACK = { label: 'Confirmada', variant: 'success' } as const;
 
 function AddressCell({ order }: { order: OrderSummary }) {
   if (!order.addressStatus) {
+    // El MENSAJE de confirmacion no salio (Whapify caido / sin saldo cuando
+    // llego el pedido): badge-BOTON que lo envia a mano (mismo flujo). Solo
+    // aparece para admins (el server igual lo exige).
+    if (order.waConfirmation === 'unsent') {
+      return <SendConfirmationButton orderId={order.id} />;
+    }
     return <Badge dot variant="outline" className="whitespace-nowrap">Sin responder</Badge>;
   }
   const meta = ADDRESS_LABELS[order.addressStatus] ?? ADDRESS_FALLBACK;
@@ -1017,6 +1027,55 @@ function AddressCell({ order }: { order: OrderSummary }) {
     <Badge dot variant={meta.variant} className="whitespace-nowrap">
       {meta.label}
     </Badge>
+  );
+}
+
+/**
+ * "Mensaje sin enviar" -> boton que dispara la confirmacion de WhatsApp a mano.
+ * Optimista visual: mientras envia muestra spinner; al confirmar, la fila se
+ * refresca sola (SSE orders.refresh del server) y pasa a "Sin responder".
+ */
+function SendConfirmationButton({ orderId }: { orderId: string }) {
+  const me = useCurrentUser();
+  const qc = useQueryClient();
+  const [sending, setSending] = useState(false);
+  const isAdminRole = me?.role === 'OWNER' || me?.role === 'ADMIN';
+
+  if (!isAdminRole) {
+    // Operadores: solo el estado, sin boton (el envio es de administradores).
+    return <Badge dot variant="destructive" className="whitespace-nowrap">Mensaje sin enviar</Badge>;
+  }
+
+  const send = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (sending) return;
+    setSending(true);
+    try {
+      await api.post(`/v1/orders/${orderId}/whatsapp/confirmation`, {});
+      toast.success('Confirmación enviada por WhatsApp');
+      qc.invalidateQueries({ queryKey: ['orders'] });
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo enviar la confirmación');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={send}
+      disabled={sending}
+      title="La confirmación automática no salió (¿Whapify caído/sin saldo?). Clic para enviarla ahora."
+      className="inline-flex items-center gap-[5px] whitespace-nowrap rounded-full border border-destructive/30 bg-destructive/10 px-[10px] py-[3px] text-[10.5px] font-semibold uppercase tracking-[0.06em] text-destructive transition-colors hover:bg-destructive/20 disabled:opacity-60 md:px-[9px] md:py-[2.5px] md:text-[10px]"
+    >
+      {sending ? (
+        <Loader2 className="h-3 w-3 animate-spin" />
+      ) : (
+        <Send className="h-3 w-3" />
+      )}
+      {sending ? 'Enviando…' : 'Sin enviar'}
+    </button>
   );
 }
 

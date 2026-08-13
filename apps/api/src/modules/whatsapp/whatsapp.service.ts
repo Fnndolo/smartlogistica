@@ -306,36 +306,66 @@ export class WhatsappService {
   }
 
   /**
+   * Envio MANUAL de la confirmacion (el boton "Sin enviar" de la columna
+   * Direccion): mismo flujo que el automatico pero con errores VISIBLES y sin
+   * el limite de frescura (si Whapify estuvo caido dias, igual se puede enviar).
+   */
+  async sendConfirmationManual(orderId: string, auth: AuthContext): Promise<{ ok: true }> {
+    this.assertAdmin(auth);
+    const { tenantId, prisma } = getTenantContext();
+    await this.sendOrderConfirmation(tenantId, prisma, orderId, { manual: true });
+    // Refrescar la tabla (el badge pasa de "Sin enviar" a "Sin responder").
+    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+    return { ok: true };
+  }
+
+  /**
    * CONFIRMACION del pedido por WhatsApp (reemplaza el workflow de n8n). Se
-   * llama desde la ingesta de VTEX cuando el pedido es NUEVO. Best-effort:
-   * jamas tumba la ingesta. Corre FUERA del contexto tenant (recibe prisma).
+   * llama desde la ingesta de VTEX cuando el pedido es NUEVO (best-effort:
+   * jamas tumba la ingesta; los "skip" son silenciosos) y desde el boton
+   * manual (manual=true: los skip se vuelven ERRORES visibles y no aplica el
+   * limite de frescura). Corre FUERA del contexto tenant (recibe prisma).
    */
   async sendOrderConfirmation(
     tenantId: string,
     prisma: PrismaClient,
     orderId: string,
+    opts: { manual?: boolean } = {},
   ): Promise<void> {
+    const manual = opts.manual === true;
+    const fail = (msg: string): void => {
+      if (manual) throw new BadRequestException(msg);
+    };
+
     const conn = await prisma.whapifyConnection.findFirst({ orderBy: { createdAt: 'desc' } });
-    if (!conn) return; // sin conexion: n8n (u nadie) sigue a cargo
+    if (!conn) return fail('Whapify no está conectado. Configúralo en Conexiones.'); // auto: n8n sigue a cargo
 
     const order = await prisma.order.findUnique({
       where: { id: orderId },
       include: { items: { orderBy: { name: 'asc' } } },
     });
-    if (!order || order.provider !== 'vtex') return;
-    // Mismo guard del n8n: SOLO ready-for-handling.
-    if (order.status !== 'ready-for-handling') return;
-    // Solo pedidos recientes (un backfill de viejos no escribe a nadie).
-    if (Date.now() - order.marketplaceCreatedAt.getTime() > CONFIRMATION_MAX_AGE_MS) return;
+    if (!order) return fail('Pedido no encontrado');
+    if (order.provider !== 'vtex') return fail('La confirmación aplica a pedidos de VTEX');
+    if (manual) {
+      // A mano: mientras el pedido siga vivo (no facturado/cancelado) se puede.
+      if (order.status === 'invoiced' || order.status === 'canceled') {
+        return fail('Este pedido ya está cerrado: la confirmación ya no aplica.');
+      }
+    } else {
+      // Automatico: mismo guard del n8n (SOLO ready-for-handling) + frescura
+      // (un backfill de pedidos viejos JAMAS escribe a nadie).
+      if (order.status !== 'ready-for-handling') return;
+      if (Date.now() - order.marketplaceCreatedAt.getTime() > CONFIRMATION_MAX_AGE_MS) return;
+    }
     const phone = order.customerPhone ? tenDigits(order.customerPhone) : '';
-    if (!phone) return;
+    if (!phone) return fail('Este pedido no tiene teléfono del cliente');
 
     // Idempotente: una sola confirmacion por pedido.
     const already = await prisma.orderEvent.findFirst({
       where: { orderId, type: 'wa_confirmation' },
       select: { id: true },
     });
-    if (already) return;
+    if (already) return fail('La confirmación de este pedido ya se había enviado.');
 
     // Datos del rawPayload de VTEX, igual que el flujo de n8n.
     const raw = (order.rawPayload ?? {}) as Record<string, any>;
@@ -353,22 +383,30 @@ export class WhatsappService {
     const token = await this.envelope.decryptField(tenantId, conn.encryptedToken);
     const http = this.client.buildHttp(token);
 
-    // 1. Crear/actualizar contacto (Whapify hace upsert por telefono).
-    const contact = await this.client.createContact(http, {
-      phone: typeof cpd.phone === 'string' && cpd.phone ? cpd.phone : `+57${phone}`,
-      firstName: cpd.firstName ?? null,
-      lastName: cpd.lastName ?? null,
-      email,
-    });
-    if (!contact) {
-      this.logger.warn(`Confirmacion WA: no se pudo crear el contacto (pedido ${order.externalId})`);
-      return;
-    }
+    let contact;
+    try {
+      // 1. Crear/actualizar contacto (Whapify hace upsert por telefono).
+      contact = await this.client.createContact(http, {
+        phone: typeof cpd.phone === 'string' && cpd.phone ? cpd.phone : `+57${phone}`,
+        firstName: cpd.firstName ?? null,
+        lastName: cpd.lastName ?? null,
+        email,
+      });
+      if (!contact) {
+        this.logger.warn(`Confirmacion WA: no se pudo crear el contacto (pedido ${order.externalId})`);
+        return fail('Whapify no pudo crear el contacto del cliente');
+      }
 
-    // 2. Custom fields del flow (direccion + productos) y 3. disparar el flow.
-    if (direccion) await this.client.setCustomField(http, contact.id, CF_ADDRESS_ID, direccion);
-    if (productos) await this.client.setCustomField(http, contact.id, CF_PRODUCTS_ID, productos);
-    await this.client.sendFlow(http, contact.id, CONFIRMATION_FLOW_ID);
+      // 2. Custom fields del flow (direccion + productos) y 3. disparar el flow.
+      if (direccion) await this.client.setCustomField(http, contact.id, CF_ADDRESS_ID, direccion);
+      if (productos) await this.client.setCustomField(http, contact.id, CF_PRODUCTS_ID, productos);
+      await this.client.sendFlow(http, contact.id, CONFIRMATION_FLOW_ID);
+    } catch (err) {
+      // Manual: error claro al usuario. Automatico: se propaga al catch del
+      // background (queda en el log y el pedido queda "Sin enviar" en la tabla).
+      if (err instanceof BadRequestException) throw err;
+      throw this.translateError(err, 'Whapify no pudo enviar la confirmación');
+    }
 
     // 4. Registrar: evento del pedido + mensaje en el hilo + cache del contacto.
     await Promise.all([
