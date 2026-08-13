@@ -45,6 +45,31 @@ export class AddressConfirmationService {
     );
   }
 
+  /**
+   * Escribe la respuesta del cliente en el HILO de WhatsApp (WaMessage, por
+   * telefono) para que la pestaña WhatsApp del pedido la muestre: el boton que
+   * toco, o la direccion nueva que escribio.
+   */
+  private async logToThread(
+    tenantId: string,
+    prisma: TenantPrismaClient,
+    digits: string,
+    input: ConfirmAddressWebhookInput,
+  ): Promise<void> {
+    const address = (input.address ?? '').trim();
+    const body =
+      input.action === 'confirmed'
+        ? '✅ Confirmó su dirección'
+        : this.looksLikeButtonText(address)
+          ? address || '✏️ Pidió modificar su dirección'
+          : address;
+    if (!body) return;
+    await prisma.waMessage.create({
+      data: { phone: digits, direction: 'in', kind: 'text', body },
+    });
+    await this.realtime.publish(tenantId, { kind: 'wa.message', phone: digits });
+  }
+
   /** Registra la llamada en ConfirmationLog. Nunca lanza (el log no puede tumbar el webhook). */
   private async record(
     prisma: TenantPrismaClient,
@@ -85,6 +110,10 @@ export class AddressConfirmationService {
       await this.record(prisma, input, 0, 'Telefono invalido (muy corto)');
       return { updated: 0 };
     }
+
+    // La RESPUESTA del cliente tambien queda en el hilo de WhatsApp del pedido
+    // (pestaña WhatsApp): es un mensaje real de el. Nunca tumba el webhook.
+    await this.logToThread(tenantId, prisma, digits, input).catch(() => null);
 
     // Salvaguarda del flujo "modificar direccion": si en vez de la direccion llega
     // el texto del boton (porque el flujo no espero la respuesta del cliente antes

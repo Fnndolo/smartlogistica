@@ -423,7 +423,16 @@ export class WhatsappService {
           phone,
           direction: 'out',
           kind: 'text',
-          body: `📋 Confirmación del pedido ${order.externalId} enviada (flujo de WhatsApp).`,
+          // El TEXTO literal del flujo vive en Whapify (su API no lo expone);
+          // aqui queda lo que sabemos que se le envio: el pedido y los datos
+          // inyectados al flujo (productos + direccion a confirmar).
+          body: [
+            `📋 Confirmación del pedido ${order.externalId} enviada`,
+            productos ? `📦 ${productos}` : null,
+            direccion ? `📍 ${direccion}` : null,
+          ]
+            .filter(Boolean)
+            .join('\n'),
           authorName: 'SmartLogística',
           contactId: contact.id,
         },
