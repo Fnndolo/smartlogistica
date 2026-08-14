@@ -16,13 +16,16 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import type { Request } from 'express';
 import {
   dialog360CredentialsSchema,
+  sendWaTemplateSchema,
   sendWaTextSchema,
   whapifyCredentialsSchema,
   type Dialog360ConnectionSummary,
   type Dialog360CredentialsInput,
   type Dialog360TestResult,
+  type SendWaTemplateInput,
   type SendWaTextInput,
   type WaMessage,
+  type WaTemplateList,
   type WaThread,
   type WhapifyConnectionSummary,
   type WhapifyCredentialsInput,
@@ -138,6 +141,26 @@ export class OrderWhatsappController {
     @CurrentUser() user: AuthContext,
   ): Promise<{ ok: true }> {
     return this.whatsapp.sendConfirmationManual(id, user);
+  }
+
+  /** Plantillas de la WABA + sugerencias del pedido (el picker de "/"). */
+  @Get(':id/whatsapp/templates')
+  async templates(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<WaTemplateList> {
+    return this.whatsapp.listTemplates(id, user);
+  }
+
+  /** Envia una plantilla de Meta (elegida con "/") al cliente. */
+  @Post(':id/whatsapp/template')
+  @HttpCode(201)
+  async sendTemplate(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(sendWaTemplateSchema)) body: SendWaTemplateInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<WaMessage> {
+    return this.whatsapp.sendTemplate(id, body, user);
   }
 
   /** Envia un texto al cliente por WhatsApp. */

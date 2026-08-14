@@ -114,6 +114,39 @@ export class Dialog360Client {
     return res.data?.messages?.[0]?.id ?? null;
   }
 
+  /**
+   * Lista las PLANTILLAS de la WABA (GET /v1/configs/templates). Solo tiene
+   * sentido en produccion (el sandbox no tiene WABA propia con plantillas).
+   */
+  async listTemplates(http: AxiosInstance): Promise<
+    Array<{
+      name: string;
+      language: string;
+      category: string;
+      status: string;
+      body: string;
+      buttons: string[];
+    }>
+  > {
+    const res = await http.get('/v1/configs/templates', { params: { limit: 100 } });
+    const list: Any[] = res.data?.waba_templates ?? res.data?.templates ?? [];
+    return list.map((tpl) => {
+      const comps: Any[] = Array.isArray(tpl.components) ? tpl.components : [];
+      const bodyComp = comps.find((c) => c?.type === 'BODY');
+      const btnComp = comps.find((c) => c?.type === 'BUTTONS');
+      return {
+        name: String(tpl.name ?? ''),
+        language: String(tpl.language ?? 'es'),
+        category: String(tpl.category ?? ''),
+        status: String(tpl.status ?? '').toLowerCase(),
+        body: String(bodyComp?.text ?? ''),
+        buttons: ((btnComp?.buttons ?? []) as Any[])
+          .map((b) => String(b?.text ?? ''))
+          .filter(Boolean),
+      };
+    });
+  }
+
   /** Envia una PLANTILLA aprobada (la confirmacion del pedido, en produccion). */
   async sendTemplate(
     http: AxiosInstance,

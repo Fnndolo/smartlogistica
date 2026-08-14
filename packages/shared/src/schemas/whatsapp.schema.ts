@@ -97,6 +97,44 @@ export const sendWaTextSchema = z.object({
 });
 export type SendWaTextInput = z.infer<typeof sendWaTextSchema>;
 
+// === Plantillas de Meta (WABA via 360dialog) ===
+// El picker de "/" en el chat: lista las plantillas REALES de la WABA y las
+// envia con variables. Las variables 1/2/3 se sugieren con datos del pedido.
+
+export const waTemplateSchema = z.object({
+  name: z.string(),
+  language: z.string(),
+  /** UTILITY | MARKETING | AUTHENTICATION (como la clasifica Meta). */
+  category: z.string(),
+  /** approved | pending | rejected | ... (minusculas). */
+  status: z.string(),
+  /** Cuerpo con sus {{n}} tal cual esta aprobado en Meta. */
+  body: z.string(),
+  /** Titulos de los botones (se pintan en la burbuja del hilo). */
+  buttons: z.array(z.string()),
+  /** Cuantas variables {{n}} usa el cuerpo. */
+  variables: z.number().int().min(0),
+});
+export type WaTemplate = z.infer<typeof waTemplateSchema>;
+
+export const waTemplateListSchema = z.object({
+  templates: z.array(waTemplateSchema),
+  /** Sugerencias sacadas del PEDIDO para prellenar variables. */
+  suggestions: z.object({
+    nombre: z.string(),
+    productos: z.string(),
+    direccion: z.string(),
+  }),
+});
+export type WaTemplateList = z.infer<typeof waTemplateListSchema>;
+
+export const sendWaTemplateSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  language: z.string().trim().min(2).max(15),
+  params: z.array(z.string().trim().min(1, 'Completa la variable').max(500)).max(10).default([]),
+});
+export type SendWaTemplateInput = z.infer<typeof sendWaTemplateSchema>;
+
 /**
  * Webhook de mensajes (mismo secreto que la confirmacion de direccion):
  * - El flow de Whapify reenvia los ENTRANTES: { phone, name?, text }.

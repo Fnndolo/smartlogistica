@@ -12,9 +12,11 @@ import type {
   Dialog360CredentialsInput,
   Dialog360Mode,
   Dialog360TestResult,
+  SendWaTemplateInput,
   SendWaTextInput,
   WaInboundInput,
   WaMessage as WaMessageDto,
+  WaTemplateList,
   WaThread,
   WhapifyConnectionSummary,
   WhapifyCredentialsInput,
@@ -53,15 +55,31 @@ const CONFIRMATION_MAX_AGE_MS = 48 * 3_600_000;
 // nuestra plataforma responde sola segun el boton / la direccion que escriban.
 
 /** Nombre/idioma de la plantilla aprobada (ajustar el dia de la migracion). */
-const D360_TEMPLATE_NAME = process.env.D360_CONFIRMATION_TEMPLATE ?? 'order_confirmation';
+// OJO: el nombre "order_confirmation" esta VETADO en Meta para este negocio
+// (quedo asociado a categoria MARKETING); la UTILITY nueva es esta.
+const D360_TEMPLATE_NAME = process.env.D360_CONFIRMATION_TEMPLATE ?? 'confirmacion_datos_pedido';
 const D360_TEMPLATE_LANG = process.env.D360_CONFIRMATION_LANG ?? 'es';
 
-/** Cuerpo de la plantilla ({{1}} nombre, {{2}} productos, {{3}} direccion). */
+/**
+ * Cuerpo de la plantilla ({{1}} nombre, {{2}} productos, {{3}} direccion).
+ * REDACCION UTILITY (transaccional, sobria): la version con emojis/tono promo
+ * quedaba categorizada MARKETING en Meta y chocaba con el tope por usuario
+ * (error 131049). DEBE ser identico al texto aprobado en la WABA.
+ */
 const tplBody = (nombre: string, productos: string, direccion: string): string =>
-  `¡Hola ${nombre}! 👋 Es un gusto saludarle 😄 Le escribimos de Smart Gadgets para ` +
-  `confirmar su compra de: 📱 ${productos} Por nuestra plataforma de ADDI 💙 📍 A la ` +
-  `dirección: ${direccion} Si desea agregar alguna información adicional o más específica, ` +
-  `quedamos atentos para incluirla en la guía 😉 🔍 ¿Me confirma si sus datos son correctos? ‼️`;
+  `Hola ${nombre}, le escribimos de Smart Gadgets para confirmar los datos de su pedido.\n\n` +
+  `Productos: ${productos}\n` +
+  `Dirección de entrega: ${direccion}\n\n` +
+  `Si desea agregar información adicional a la dirección, quedamos atentos para incluirla ` +
+  `en la guía. ¿Nos confirma que sus datos son correctos?`;
+
+/** Cuantas variables {{n}} usa el cuerpo de una plantilla. */
+const templateVarCount = (body: string): number =>
+  Math.max(0, ...[...body.matchAll(/\{\{(\d+)\}\}/g)].map((m) => Number(m[1])));
+
+/** Reemplaza {{n}} por los valores — el TEXTO REAL que le llega al cliente. */
+const renderTemplateBody = (body: string, params: string[]): string =>
+  body.replace(/\{\{(\d+)\}\}/g, (_, n: string) => params[Number(n) - 1] ?? '');
 
 const MSG_CONFIRMED =
   '¡Muchas gracias por confirmar 🙌 Su pedido ya quedó en alistamiento. Puede seguir el ' +
@@ -463,6 +481,128 @@ export class WhatsappService {
       },
     });
     await this.realtime.publish(tenantId, { kind: 'wa.message', phone: targetPhone });
+    return this.toDto(row);
+  }
+
+  // === Plantillas de Meta (el picker de "/" en el chat) ===
+
+  /**
+   * Plantillas REALES de la WABA (via 360dialog en produccion) + sugerencias
+   * del pedido para prellenar variables — convencion del negocio:
+   * {{1}} nombre, {{2}} productos, {{3}} direccion.
+   */
+  async listTemplates(orderId: string, auth: AuthContext): Promise<WaTemplateList> {
+    this.assertAdmin(auth);
+    const { tenantId, prisma } = getTenantContext();
+
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: { items: { orderBy: { name: 'asc' } } },
+    });
+    if (!order) throw new NotFoundException('Pedido no encontrado');
+    // Mismos datos que usa la confirmacion automatica (rawPayload forma VTEX).
+    const raw = (order.rawPayload ?? {}) as Record<string, any>;
+    const cpd = raw.clientProfileData ?? {};
+    const a = raw.shippingData?.address ?? {};
+    const suggestions = {
+      nombre:
+        `${cpd.firstName ?? ''} ${cpd.lastName ?? ''}`.trim() || (order.customerName ?? ''),
+      productos: order.items.map((i) => `${i.quantity} ${i.name}`).join(', '),
+      direccion: [
+        [a.street, a.neighborhood, a.city].filter(Boolean).join(', '),
+        [a.state, a.complement].filter(Boolean).join(' '),
+      ]
+        .filter(Boolean)
+        .join(', '),
+    };
+
+    const d360 = await this.dialog360OrNull(tenantId, prisma);
+    // El sandbox no tiene WABA propia con plantillas: lista vacia (la UI lo dice).
+    if (!d360 || d360.mode !== 'production') return { templates: [], suggestions };
+    try {
+      const list = await this.dialog360.listTemplates(d360.http);
+      return {
+        templates: list.map((t) => ({ ...t, variables: templateVarCount(t.body) })),
+        suggestions,
+      };
+    } catch (err) {
+      throw this.translateError(err, 'No se pudieron cargar las plantillas de la WABA');
+    }
+  }
+
+  /** Envia una plantilla de Meta al cliente del pedido (elegida con "/"). */
+  async sendTemplate(
+    orderId: string,
+    input: SendWaTemplateInput,
+    auth: AuthContext,
+  ): Promise<WaMessageDto> {
+    this.assertAdmin(auth);
+    const { tenantId, prisma } = getTenantContext();
+    const d360 = await this.dialog360OrNull(tenantId, prisma);
+    if (!d360 || d360.mode !== 'production') {
+      throw new BadRequestException(
+        'Las plantillas requieren la conexión de 360dialog en producción',
+      );
+    }
+    const { phone } = await this.orderPhone(orderId);
+
+    // Se relee de la WABA (no se confia en el cliente): cuerpo, estado y
+    // numero de variables REALES de la plantilla.
+    let all;
+    try {
+      all = await this.dialog360.listTemplates(d360.http);
+    } catch (err) {
+      throw this.translateError(err, 'No se pudieron cargar las plantillas de la WABA');
+    }
+    const tpl =
+      all.find((t) => t.name === input.name && t.language === input.language) ??
+      all.find((t) => t.name === input.name);
+    if (!tpl) throw new NotFoundException('Esa plantilla no existe en la WABA');
+    if (tpl.status !== 'approved') {
+      throw new BadRequestException(
+        `La plantilla "${tpl.name}" aún no está aprobada por Meta (estado: ${tpl.status})`,
+      );
+    }
+    const vars = templateVarCount(tpl.body);
+    const params = input.params.slice(0, vars);
+    if (params.length < vars) {
+      throw new BadRequestException(`La plantilla usa ${vars} variables y llegaron ${params.length}`);
+    }
+
+    const components =
+      vars > 0
+        ? [{ type: 'body', parameters: params.map((text) => ({ type: 'text', text })) }]
+        : [];
+    let wamid: string | null = null;
+    try {
+      wamid = await this.dialog360.sendTemplate(
+        d360.http,
+        d360.mode,
+        `57${phone}`,
+        tpl.name,
+        tpl.language,
+        components,
+      );
+    } catch (err) {
+      throw this.translateError(err, '360dialog no pudo enviar la plantilla');
+    }
+
+    // En el hilo queda el TEXTO REAL (variables sustituidas) + sus botones.
+    const row = await prisma.waMessage.create({
+      data: {
+        phone,
+        direction: 'out',
+        kind: 'text',
+        body: renderTemplateBody(tpl.body, params),
+        authorId: auth.userId,
+        authorName: auth.name?.trim() || auth.email,
+        externalId: wamid,
+        ...(tpl.buttons.length
+          ? { buttons: tpl.buttons as unknown as Prisma.InputJsonValue }
+          : {}),
+      },
+    });
+    await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
     return this.toDto(row);
   }
 
