@@ -720,6 +720,7 @@ export class WhatsappService {
       let kind: WaMessageDto['kind'] = 'text';
       let body: string | null = null;
       let attachmentKey: string | null = null;
+      let mediaUrl: string | null = null;
 
       if (type === 'text') {
         body = m.text?.body ?? null;
@@ -737,10 +738,18 @@ export class WhatsappService {
               const key = `tenants/${tenantId}/whatsapp/${phone}/${randomUUID()}.${ext}`;
               await this.storage.put(key, bin.buffer, bin.mime);
               attachmentKey = key;
+            } else {
+              this.logger.warn(
+                `Medio ${type} ${media.id} no se pudo descargar (modo ${d360.mode}); se guarda sin archivo`,
+              );
             }
           }
-          if (!attachmentKey) body = body ?? `[${type} recibido]`;
         }
+        // Algunos payloads (sandbox) traen la URL directa del medio.
+        if (!attachmentKey && typeof media.link === 'string' && /^https?:/.test(media.link)) {
+          mediaUrl = media.link;
+        }
+        if (!attachmentKey && !mediaUrl) body = body ?? `[${type} recibido]`;
       } else if (type === 'interactive') {
         body = m.interactive?.button_reply?.title ?? m.interactive?.list_reply?.title ?? '[interacción]';
       } else if (type === 'button') {
@@ -758,6 +767,7 @@ export class WhatsappService {
           kind,
           body,
           attachmentKey,
+          mediaUrl,
           authorName:
             direction === 'out'
               ? 'WhatsApp (celular)'
@@ -834,7 +844,11 @@ export class WhatsappService {
       include: { items: { orderBy: { name: 'asc' } } },
     });
     if (!order) return fail('Pedido no encontrado');
-    if (order.provider !== 'vtex') return fail('La confirmación aplica a pedidos de VTEX');
+    // VTEX y tambien MONTADOS a mano (su rawPayload imita la forma VTEX, asi
+    // que la plantilla se llena igual). El AUTO solo se dispara para VTEX.
+    if (order.provider !== 'vtex' && order.provider !== 'manual') {
+      return fail('La confirmación no aplica a este pedido');
+    }
     if (manual) {
       // A mano: mientras el pedido siga vivo (no facturado/cancelado) se puede.
       if (order.status === 'invoiced' || order.status === 'canceled') {

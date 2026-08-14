@@ -79,11 +79,39 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
   }, [active, count]);
 
   const sendText = useMutation({
-    mutationFn: (body: string) =>
-      api.post<WaMessage>(`/v1/orders/${orderId}/whatsapp/text`, { text: body }),
-    onSuccess: (msg) => appendMessage(msg),
-    onError: (err) =>
-      toast.error(err instanceof ApiError ? err.message : 'No se pudo enviar el mensaje'),
+    mutationFn: (vars: { body: string; tempId: string }) =>
+      api.post<WaMessage>(`/v1/orders/${orderId}/whatsapp/text`, { text: vars.body }),
+    // OPTIMISTA: la burbuja aparece AL INSTANTE; el POST corre por detras
+    // (el sandbox/API puede tardar segundos y no debe sentirse).
+    onMutate: (vars) => {
+      appendMessage({
+        id: vars.tempId,
+        direction: 'out',
+        kind: 'text',
+        body: vars.body,
+        mediaUrl: null,
+        authorName: 'Tú',
+        createdAt: new Date().toISOString(),
+      });
+    },
+    onSuccess: (msg, vars) => {
+      // Reemplazar la burbuja temporal por la real (con su id/wamid).
+      qc.setQueryData<WaThread>(['wa-thread', orderId], (old) =>
+        old
+          ? {
+              ...old,
+              messages: old.messages.map((x) => (x.id === vars.tempId ? msg : x)),
+            }
+          : old,
+      );
+    },
+    onError: (err, vars) => {
+      qc.setQueryData<WaThread>(['wa-thread', orderId], (old) =>
+        old ? { ...old, messages: old.messages.filter((x) => x.id !== vars.tempId) } : old,
+      );
+      setText(vars.body); // devolver el texto al campo para reintentar
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo enviar el mensaje');
+    },
   });
 
   const sendFile = useMutation({
@@ -99,9 +127,9 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
 
   const submit = () => {
     const body = text.trim();
-    if (!body || sendText.isPending) return;
+    if (!body) return;
     setText('');
-    sendText.mutate(body);
+    sendText.mutate({ body, tempId: `temp-${crypto.randomUUID()}` });
   };
 
   if (isLoading) {
@@ -232,15 +260,11 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
             type="button"
             onPointerDown={(e) => e.preventDefault()}
             onClick={submit}
-            disabled={!text.trim() || sendText.isPending}
+            disabled={!text.trim()}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-white transition-colors hover:bg-emerald-700 disabled:opacity-40 md:h-9 md:w-9"
             aria-label="Enviar"
           >
-            {sendText.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Send className="h-4 w-4" />
-            )}
+            <Send className="h-4 w-4" />
           </button>
         </div>
         <p className="mt-1.5 text-center text-[10.5px] text-muted-foreground">
@@ -275,6 +299,8 @@ function WaBubble({ message: m, prev }: { message: WaMessage; prev?: WaMessage }
             mine
               ? 'rounded-br-sm bg-emerald-600 text-white'
               : 'rounded-bl-sm bg-muted text-foreground',
+            // Burbuja optimista (enviando): apenas un pelin translucida.
+            m.id.startsWith('temp-') && 'opacity-70',
           )}
         >
           {mine && m.authorName && !grouped ? (
@@ -295,9 +321,16 @@ function WaBubble({ message: m, prev }: { message: WaMessage; prev?: WaMessage }
 
 function WaMedia({ message: m, mine }: { message: WaMessage; mine: boolean }) {
   if (m.kind === 'text' || !m.mediaUrl) {
-    // Medio sin URL (ej. entrante que el flow no adjunto): se anota.
+    // Medio sin URL (no se pudo descargar): etiqueta + el caption si lo trae.
     if (m.kind !== 'text') {
-      return <p className={cn('italic', mine ? 'text-white/80' : 'text-muted-foreground')}>[{m.kind}]</p>;
+      const label =
+        m.kind === 'image' ? '📷 Foto' : m.kind === 'video' ? '🎬 Video' : m.kind === 'audio' ? '🎙️ Audio' : '📎 Archivo';
+      return (
+        <p className={cn('italic', mine ? 'text-white/80' : 'text-muted-foreground')}>
+          {label}
+          {m.body ? ` · ${m.body}` : ' (no se pudo descargar)'}
+        </p>
+      );
     }
     return null;
   }

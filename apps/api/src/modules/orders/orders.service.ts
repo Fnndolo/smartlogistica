@@ -270,13 +270,22 @@ export class OrdersService {
                 distinct: ['orderId'],
               })
               .then((g) => new Set(g.map((x) => x.orderId))),
-            prisma.whapifyConnection.findFirst({ select: { createdAt: true } }),
+            // Conexion de WhatsApp: Whapify O 360dialog (la que exista primero).
+            Promise.all([
+              prisma.whapifyConnection.findFirst({ select: { createdAt: true } }),
+              prisma.dialog360Connection.findFirst({ select: { createdAt: true } }),
+            ]).then(([w, d]) =>
+              w && d ? (w.createdAt <= d.createdAt ? w : d) : (w ?? d),
+            ),
           ]);
 
-    // 'unsent' SOLO desde que existe la conexion Whapify (los pedidos de la era
-    // n8n no tienen evento aca aunque SI se les envio: no se marcan).
+    // 'unsent' SOLO desde que existe una conexion de WhatsApp (los pedidos de
+    // la era n8n no tienen evento aca aunque SI se les envio: no se marcan).
+    // Aplica a VTEX y tambien a los MONTADOS a mano (para poder confirmarles
+    // la direccion si un admin la resetea o lo necesita).
     const waStateOf = (o: OrderWithItems): OrderSummary['waConfirmation'] => {
-      if (o.provider !== 'vtex' || !o.customerPhone || !waConn) return null;
+      if (!o.customerPhone || !waConn) return null;
+      if (o.provider !== 'vtex' && o.provider !== 'manual') return null;
       if (waSent.has(o.id)) return 'sent';
       return o.status === 'ready-for-handling' && o.marketplaceCreatedAt >= waConn.createdAt
         ? 'unsent'
