@@ -110,6 +110,7 @@ interface WaMessageRow {
   attachmentKey: string | null;
   mediaUrl: string | null;
   authorName: string | null;
+  buttons?: unknown;
   createdAt: Date;
 }
 
@@ -588,7 +589,15 @@ export class WhatsappService {
     const sayButtons = async (body: string, buttons: Array<{ id: string; title: string }>): Promise<void> => {
       const wamid = await this.dialog360.sendInteractiveButtons(d360.http, d360.mode, to, body, buttons);
       await prisma.waMessage.create({
-        data: { phone, direction: 'out', kind: 'text', body, authorName: 'SmartLogística', externalId: wamid },
+        data: {
+          phone,
+          direction: 'out',
+          kind: 'text',
+          body,
+          authorName: 'SmartLogística',
+          externalId: wamid,
+          buttons: buttons.map((b) => b.title) as Prisma.InputJsonValue,
+        },
       });
       await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
     };
@@ -931,7 +940,7 @@ export class WhatsappService {
             data: { via: 'dialog360', mode: d360.mode, phone } as Prisma.InputJsonValue,
           },
         }),
-        // Con Cloud API el mensaje del hilo es el TEXTO REAL enviado.
+        // Con Cloud API el mensaje del hilo es el TEXTO REAL enviado (con botones).
         prisma.waMessage.create({
           data: {
             phone,
@@ -940,6 +949,9 @@ export class WhatsappService {
             body: rendered,
             authorName: 'SmartLogística',
             externalId: wamid,
+            buttons: (d360.mode === 'sandbox'
+              ? ['Datos correctos ✅', 'Modificar dirección']
+              : ['Mis datos son correctos.', 'Modificar mi dirección.']) as unknown as Prisma.InputJsonValue,
           },
         }),
       ]);
@@ -1075,6 +1087,7 @@ export class WhatsappService {
       body: r.body,
       mediaUrl,
       authorName: r.authorName,
+      buttons: Array.isArray(r.buttons) ? (r.buttons as unknown[]).map(String) : [],
       createdAt: r.createdAt.toISOString(),
     };
   }

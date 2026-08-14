@@ -135,6 +135,7 @@ CREATE TABLE "WaMessage" (
     "authorId" TEXT,
     "authorName" TEXT,
     "contactId" TEXT,
+    "buttons" JSONB,
     "externalId" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 

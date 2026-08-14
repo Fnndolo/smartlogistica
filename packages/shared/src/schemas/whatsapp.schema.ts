@@ -74,6 +74,8 @@ export const waMessageSchema = z.object({
   mediaUrl: z.string().nullable(),
   /** Quien lo envio desde la plataforma (salientes) o nombre del contacto (entrantes). */
   authorName: z.string().nullable(),
+  /** Botones del mensaje (titulos) — se PINTAN en el hilo igual que en el cel. */
+  buttons: z.array(z.string()).default([]),
   createdAt: z.string(),
 });
 export type WaMessage = z.infer<typeof waMessageSchema>;

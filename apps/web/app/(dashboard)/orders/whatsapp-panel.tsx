@@ -91,6 +91,7 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
         body: vars.body,
         mediaUrl: null,
         authorName: 'Tú',
+        buttons: [],
         createdAt: new Date().toISOString(),
       });
     },
@@ -309,6 +310,23 @@ function WaBubble({ message: m, prev }: { message: WaMessage; prev?: WaMessage }
           <WaMedia message={m} mine={mine} />
           {m.body && m.kind === 'text' ? (
             <p className="whitespace-pre-wrap break-words">{m.body}</p>
+          ) : null}
+          {/* Botones del mensaje: se PINTAN como en el celular (solo visual —
+              quien los toca es el cliente en su WhatsApp). */}
+          {m.buttons && m.buttons.length > 0 ? (
+            <div className="mb-1 mt-2 space-y-1">
+              {m.buttons.map((b, i) => (
+                <div
+                  key={i}
+                  className={cn(
+                    'rounded-lg px-2.5 py-1.5 text-center text-[12.5px] font-medium',
+                    mine ? 'bg-white/15 text-white' : 'bg-background text-sky-600 dark:text-sky-400',
+                  )}
+                >
+                  {b}
+                </div>
+              ))}
+            </div>
           ) : null}
           <p className={cn('mt-0.5 text-right text-[9.5px]', mine ? 'text-white/60' : 'text-muted-foreground')}>
             {format(new Date(m.createdAt), 'HH:mm')}

@@ -153,7 +153,16 @@ export class Dialog360Client {
               mime_type?: string;
             };
             if (!meta.url) continue;
-            const bin = await http.get(meta.url, { responseType: 'arraybuffer' });
+            // REGLA de 360dialog (docs): la URL viene de lookaside.fbsbx.com y
+            // hay que REEMPLAZAR el host por el de 360dialog (misma ruta+query)
+            // para descargarla con el D360-API-KEY. La directa da 403.
+            let bin;
+            try {
+              const u = new URL(meta.url);
+              bin = await http.get(u.pathname + u.search, { responseType: 'arraybuffer' });
+            } catch {
+              bin = await http.get(meta.url, { responseType: 'arraybuffer' });
+            }
             return {
               buffer: Buffer.from(bin.data as ArrayBuffer),
               mime: meta.mime_type ?? String(bin.headers?.['content-type'] ?? 'application/octet-stream'),

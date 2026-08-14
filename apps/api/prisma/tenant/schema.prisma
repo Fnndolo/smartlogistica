@@ -200,6 +200,8 @@ model WaMessage {
   authorId      String? // usuario de la plataforma que lo envio (salientes)
   authorName    String?
   contactId     String? // id del contacto en Whapify
+  // Botones del mensaje (titulos, solo para PINTARLOS en el hilo como en el cel).
+  buttons       Json?
   // Id del mensaje en WhatsApp (wamid de la Cloud API): dedup de reentregas.
   externalId    String?  @unique
   createdAt     DateTime @default(now())
