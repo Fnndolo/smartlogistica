@@ -253,7 +253,16 @@ export class OrdersService {
     const ids = rows.map((r) => r.id);
     const [withPhoto, unread, reactions, waSent, waConn] =
       rows.length === 0
-        ? [new Set<string>(), new Map<string, UnreadInfo>(), new Map<string, OrderSummary['reactions']>(), new Set<string>(), null]
+        ? [
+            new Set<string>(),
+            new Map<string, UnreadInfo>(),
+            new Map<string, OrderSummary['reactions']>(),
+            new Set<string>(),
+            { whapify: null, d360: null } as {
+              whapify: { createdAt: Date } | null;
+              d360: { createdAt: Date; mode: string } | null;
+            },
+          ]
         : await Promise.all([
             prisma.orderMessage
               .groupBy({
@@ -270,24 +279,31 @@ export class OrdersService {
                 distinct: ['orderId'],
               })
               .then((g) => new Set(g.map((x) => x.orderId))),
-            // Conexion de WhatsApp: Whapify O 360dialog (la que exista primero).
+            // Conexiones de WhatsApp (Whapify y 360dialog, con su modo).
             Promise.all([
               prisma.whapifyConnection.findFirst({ select: { createdAt: true } }),
-              prisma.dialog360Connection.findFirst({ select: { createdAt: true } }),
-            ]).then(([w, d]) =>
-              w && d ? (w.createdAt <= d.createdAt ? w : d) : (w ?? d),
-            ),
+              prisma.dialog360Connection.findFirst({ select: { createdAt: true, mode: true } }),
+            ]).then(([whapify, d360]) => ({ whapify, d360 })),
           ]);
 
-    // 'unsent' SOLO desde que existe una conexion de WhatsApp (los pedidos de
-    // la era n8n no tienen evento aca aunque SI se les envio: no se marcan).
-    // Aplica a VTEX y tambien a los MONTADOS a mano (para poder confirmarles
-    // la direccion si un admin la resetea o lo necesita).
+    // 'unsent' SOLO desde que existe una conexion de WhatsApp QUE GOBIERNE ese
+    // pedido (los de la era n8n no tienen evento aca aunque SI se les envio):
+    // - El SANDBOX de 360dialog solo puede escribirle al numero de prueba ->
+    //   solo gobierna los pedidos MONTADOS a mano (los de ensayo). Los VTEX
+    //   reales siguen siendo de n8n/Whapify hasta conectar PRODUCCION.
     const waStateOf = (o: OrderWithItems): OrderSummary['waConfirmation'] => {
-      if (!o.customerPhone || !waConn) return null;
+      if (!o.customerPhone) return null;
       if (o.provider !== 'vtex' && o.provider !== 'manual') return null;
+      const d360Rules = waConn.d360 && (o.provider === 'manual' || waConn.d360.mode === 'production');
+      const conn =
+        waConn.whapify && d360Rules
+          ? waConn.whapify.createdAt <= waConn.d360!.createdAt
+            ? waConn.whapify
+            : waConn.d360!
+          : (waConn.whapify ?? (d360Rules ? waConn.d360 : null));
+      if (!conn) return null;
       if (waSent.has(o.id)) return 'sent';
-      return o.status === 'ready-for-handling' && o.marketplaceCreatedAt >= waConn.createdAt
+      return o.status === 'ready-for-handling' && o.marketplaceCreatedAt >= conn.createdAt
         ? 'unsent'
         : null;
     };

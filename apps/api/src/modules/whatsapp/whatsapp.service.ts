@@ -901,6 +901,13 @@ export class WhatsappService {
 
     // ===== Camino CLOUD API (360dialog): plantilla en produccion, emulacion
     // con botones de sesion en sandbox. Las ramas las responde handleFlowReply.
+    // OJO: el SANDBOX solo puede escribirle al numero de prueba vinculado ->
+    // en AUTOMATICO se salta los pedidos VTEX reales (n8n/Whapify siguen a
+    // cargo hasta conectar produccion). El boton manual si puede intentar
+    // (p. ej. un pedido VTEX de prueba con tu propio numero).
+    if (d360 && !manual && d360.mode === 'sandbox' && order.provider === 'vtex') {
+      return;
+    }
     if (d360) {
       const nombre =
         `${cpd.firstName ?? ''} ${cpd.lastName ?? ''}`.trim() || (order.customerName ?? 'cliente');
