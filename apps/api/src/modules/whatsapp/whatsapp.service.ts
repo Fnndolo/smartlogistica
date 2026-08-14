@@ -759,6 +759,11 @@ export class WhatsappService {
           mediaUrl = media.link;
         }
         if (!attachmentKey && !mediaUrl) body = body ?? `[${type} recibido]`;
+        // Diagnostico: si no se pudo bajar, conservar el media id (columna
+        // contactId, que los mensajes Cloud no usan) para sondearlo despues.
+        if (!attachmentKey && !mediaUrl && media.id) {
+          (m as Any).__failedMediaId = String(media.id);
+        }
       } else if (type === 'interactive') {
         body = m.interactive?.button_reply?.title ?? m.interactive?.list_reply?.title ?? '[interacción]';
       } else if (type === 'button') {
@@ -777,6 +782,8 @@ export class WhatsappService {
           body,
           attachmentKey,
           mediaUrl,
+          // contactId reutilizado como stash de diagnostico del media id fallido.
+          contactId: (m as Any).__failedMediaId ? `media:${(m as Any).__failedMediaId}` : null,
           authorName:
             direction === 'out'
               ? 'WhatsApp (celular)'

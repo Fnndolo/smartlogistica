@@ -4,6 +4,9 @@ import type { Dialog360Mode } from '@smartlogistica/shared';
 
 const TIMEOUT_MS = 30_000;
 
+// Headers de axios (acceso laxo).
+type Any = Record<string, any>;
+
 /**
  * Cliente de 360dialog (BSP api-first): expone la Cloud API de Meta CRUDA.
  * Auth = header D360-API-KEY.
@@ -131,55 +134,68 @@ export class Dialog360Client {
   }
 
   /**
-   * Descarga un medio ENTRANTE por su media id: primero el descriptor con la
-   * URL (valida 5 min) y luego el binario. Devuelve null si algo falla
-   * (best-effort: el mensaje se guarda igual, sin el archivo).
+   * Descarga un medio ENTRANTE por su media id. El descriptor vive en
+   * `/v1/media/{id}` (sandbox, validado con probe) o `/{id}` (produccion) y
+   * puede ser el BINARIO directo o un JSON {url} de lookaside.fbsbx.com; esa
+   * URL se descarga probando: host reescrito al de 360dialog (regla oficial de
+   * produccion), la URL directa sin headers (esta firmada), y directa con key.
+   * Devuelve null si todo falla (el mensaje se guarda igual, sin archivo).
    */
   async downloadMedia(
     http: AxiosInstance,
     mode: Dialog360Mode,
     mediaId: string,
   ): Promise<{ buffer: Buffer; mime: string } | null> {
-    try {
-      const paths = mode === 'sandbox' ? [`/v1/media/${mediaId}`, `/${mediaId}`] : [`/${mediaId}`];
-      for (const path of paths) {
-        try {
-          const res = await http.get(path, { responseType: 'arraybuffer' });
-          const contentType = String(res.headers?.['content-type'] ?? '');
-          // Si respondio JSON, es el descriptor {url}; si no, ya es el binario.
-          if (contentType.includes('application/json')) {
-            const meta = JSON.parse(Buffer.from(res.data as ArrayBuffer).toString('utf8')) as {
-              url?: string;
-              mime_type?: string;
-            };
-            if (!meta.url) continue;
-            // REGLA de 360dialog (docs): la URL viene de lookaside.fbsbx.com y
-            // hay que REEMPLAZAR el host por el de 360dialog (misma ruta+query)
-            // para descargarla con el D360-API-KEY. La directa da 403.
-            let bin;
-            try {
-              const u = new URL(meta.url);
-              bin = await http.get(u.pathname + u.search, { responseType: 'arraybuffer' });
-            } catch {
-              bin = await http.get(meta.url, { responseType: 'arraybuffer' });
-            }
-            return {
-              buffer: Buffer.from(bin.data as ArrayBuffer),
-              mime: meta.mime_type ?? String(bin.headers?.['content-type'] ?? 'application/octet-stream'),
-            };
-          }
-          return {
-            buffer: Buffer.from(res.data as ArrayBuffer),
-            mime: contentType || 'application/octet-stream',
-          };
-        } catch {
-          continue; // probar la siguiente ruta
+    const isBinary = (contentType: string): boolean =>
+      Boolean(contentType) && !contentType.includes('json') && !contentType.includes('html');
+
+    const paths = mode === 'sandbox' ? [`/v1/media/${mediaId}`, `/${mediaId}`] : [`/${mediaId}`, `/v1/media/${mediaId}`];
+    for (const path of paths) {
+      try {
+        const res = await http.get(path, { responseType: 'arraybuffer' });
+        const contentType = String(res.headers?.['content-type'] ?? '');
+        if (isBinary(contentType)) {
+          return { buffer: Buffer.from(res.data as ArrayBuffer), mime: contentType };
         }
+        if (!contentType.includes('json')) continue;
+
+        const meta = JSON.parse(Buffer.from(res.data as ArrayBuffer).toString('utf8')) as {
+          url?: string;
+          mime_type?: string;
+        };
+        if (!meta.url) continue;
+
+        const u = new URL(meta.url);
+        // Estrategias para bajar el binario de la URL (expira en 5 min).
+        const attempts: Array<() => Promise<{ data: ArrayBuffer; headers: Any }>> = [
+          // 1) Host reescrito al de 360dialog, con el API key (regla oficial).
+          () => http.get(u.pathname + u.search, { responseType: 'arraybuffer' }),
+          // 2) URL directa SIN headers (viene firmada por Meta).
+          () => axios.get(meta.url!, { responseType: 'arraybuffer', timeout: TIMEOUT_MS }),
+          // 3) URL directa con el API key.
+          () => http.get(meta.url!, { responseType: 'arraybuffer' }),
+        ];
+        for (const attempt of attempts) {
+          try {
+            const bin = await attempt();
+            const binType = String(bin.headers?.['content-type'] ?? '');
+            if (!isBinary(binType) && !meta.mime_type) continue;
+            return {
+              buffer: Buffer.from(bin.data),
+              mime: meta.mime_type ?? binType ?? 'application/octet-stream',
+            };
+          } catch {
+            continue;
+          }
+        }
+      } catch (err) {
+        this.logger.warn(
+          `Media ${mediaId} via ${path} fallo: ${(err as Error).message}`,
+        );
+        continue;
       }
-      return null;
-    } catch (err) {
-      this.logger.warn(`No se pudo descargar el medio ${mediaId}: ${(err as Error).message}`);
-      return null;
     }
+    this.logger.warn(`No se pudo descargar el medio ${mediaId} (modo ${mode})`);
+    return null;
   }
 }
