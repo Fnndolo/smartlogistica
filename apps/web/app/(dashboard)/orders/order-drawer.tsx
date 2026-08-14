@@ -2977,7 +2977,9 @@ function describeEvent(e: OrderEvent): string {
     case 'manual_completed':
       return `Pedido completado · Factura ${(e.data.invoiceNumber as string | undefined) ?? ''} + guía ${(e.data.tracking as string | undefined) ?? ''} (sin MKT)`.trim();
     case 'wa_confirmation':
-      return 'Confirmación del pedido enviada por WhatsApp (flujo de Whapify)';
+      return 'Confirmación del pedido enviada por WhatsApp';
+    case 'wa_confirmation_failed':
+      return `La confirmación de WhatsApp NO se entregó (Meta: ${(e.data.error as string | undefined) ?? 'bloqueo de entrega'})`;
     default:
       return e.type;
   }

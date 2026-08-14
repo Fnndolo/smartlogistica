@@ -557,7 +557,17 @@ export class WhatsappService {
           const phone = await this.storeCloudMessage(tenantId, prisma, m, 'out', names);
           if (phone) touched.add(phone);
         }
-        // v.statuses (sent/delivered/read): por ahora no se pintan.
+        // Estados: 'failed' = Meta NO entrego (ej. 131049) -> el hilo lo anota
+        // y, si era una confirmacion, el pedido VUELVE a "Sin enviar".
+        for (const s of v.statuses ?? []) {
+          if (s?.status === 'failed' && s?.id) {
+            const phone = await this.handleFailedStatus(tenantId, prisma, s).catch((err) => {
+              this.logger.warn(`Status failed no procesado: ${err instanceof Error ? err.message : err}`);
+              return null;
+            });
+            if (phone) touched.add(phone);
+          }
+        }
       }
     }
 
@@ -717,6 +727,63 @@ export class WhatsappService {
       .catch(() => null);
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
     this.logger.log(`Direccion ${action} via Cloud API: ...${phone} (${ids.length} pedido(s))`);
+  }
+
+  /**
+   * Meta reporto que un mensaje NO se entrego (status 'failed', ej. 131049
+   * "healthy ecosystem"): nota en el hilo y, si era la CONFIRMACION del pedido,
+   * se revierte el evento para que el pedido VUELVA a "Sin enviar" (la verdad
+   * ante todo — jamas un "Sin responder" de un mensaje que no llego).
+   */
+  private async handleFailedStatus(
+    tenantId: string,
+    prisma: PrismaClient,
+    s: Any,
+  ): Promise<string | null> {
+    const wamid = String(s.id);
+    const err = Array.isArray(s.errors) ? s.errors[0] : null;
+    const detail = err ? `${err.code ?? ''} ${err.title ?? err.message ?? ''}`.trim() : 'motivo desconocido';
+
+    const msg = await prisma.waMessage.findUnique({ where: { externalId: wamid } });
+    if (!msg) return null;
+
+    // Nota en el hilo (dedup natural: externalId unico "fail:<wamid>").
+    try {
+      await prisma.waMessage.create({
+        data: {
+          phone: msg.phone,
+          direction: 'out',
+          kind: 'text',
+          body: `⚠️ El mensaje anterior NO se entregó (Meta: ${detail}).`,
+          authorName: 'Sistema',
+          externalId: `fail:${wamid}`,
+        },
+      });
+    } catch {
+      return null; // ya se habia procesado este fallo
+    }
+
+    // ¿Era una confirmacion? Revertir el evento -> badge "Sin enviar" de nuevo.
+    const events = await prisma.orderEvent.findMany({
+      where: { type: 'wa_confirmation', data: { path: ['wamid'], equals: wamid } },
+      select: { id: true, orderId: true },
+    });
+    for (const ev of events) {
+      await prisma.orderEvent.delete({ where: { id: ev.id } }).catch(() => null);
+      await prisma.orderEvent.create({
+        data: {
+          orderId: ev.orderId,
+          type: 'wa_confirmation_failed',
+          actorName: 'Meta',
+          data: { wamid, error: detail } as Prisma.InputJsonValue,
+        },
+      });
+    }
+    if (events.length > 0) {
+      await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+      this.logger.warn(`Confirmacion NO entregada (${detail}): ${events.length} pedido(s) vuelven a "Sin enviar"`);
+    }
+    return msg.phone;
   }
 
   /** Guarda UN mensaje del payload Cloud (con dedup por wamid). Devuelve el telefono. */
@@ -964,7 +1031,9 @@ export class WhatsappService {
             orderId,
             type: 'wa_confirmation',
             actorName: 'SmartLogística',
-            data: { via: 'dialog360', mode: d360.mode, phone } as Prisma.InputJsonValue,
+            // wamid: si Meta luego reporta "failed", este evento se revierte y
+            // el pedido vuelve a "Sin enviar" (handleFailedStatus).
+            data: { via: 'dialog360', mode: d360.mode, phone, wamid } as Prisma.InputJsonValue,
           },
         }),
         // Con Cloud API el mensaje del hilo es el TEXTO REAL enviado (con botones).
