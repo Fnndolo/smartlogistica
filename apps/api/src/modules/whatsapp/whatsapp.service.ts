@@ -357,10 +357,12 @@ export class WhatsappService {
     this.assertAdmin(auth);
     const { tenantId, prisma } = getTenantContext();
 
-    // 360dialog conectado = Cloud API directa (sin contactos de por medio).
+    // Ruteo: 360dialog SOLO si gobierna este pedido (produccion, o sandbox con
+    // pedido de prueba); si no, Whapify (abajo).
     const d360 = await this.dialog360OrNull(tenantId, prisma);
-    if (d360) {
-      const phone = await this.orderPhone(orderId);
+    const { phone: targetPhone360, provider } = await this.orderPhone(orderId);
+    if (d360 && this.d360Governs(d360, provider)) {
+      const phone = targetPhone360;
       let wamid: string | null = null;
       try {
         wamid = await this.dialog360.sendText(d360.http, d360.mode, `57${phone}`, input.text);
@@ -411,10 +413,12 @@ export class WhatsappService {
     if (!this.storage.isConfigured()) {
       throw new BadRequestException('El almacenamiento de archivos no esta configurado');
     }
-    const d360 = await this.dialog360OrNull(tenantId, prisma);
-    const phone = d360 ? await this.orderPhone(orderId) : '';
+    const d360raw = await this.dialog360OrNull(tenantId, prisma);
+    const { phone: phone360, provider } = await this.orderPhone(orderId);
+    // Mismo ruteo que sendText: sandbox solo gobierna pedidos de prueba.
+    const d360 = d360raw && this.d360Governs(d360raw, provider) ? d360raw : null;
     const target = d360 ? null : await this.resolveTarget(orderId);
-    const targetPhone = target?.phone ?? phone;
+    const targetPhone = target?.phone ?? phone360;
 
     const name = file.originalname || 'archivo';
     const ext = /\.([a-z0-9]{1,8})$/i.exec(name)?.[1];
@@ -462,17 +466,28 @@ export class WhatsappService {
     return this.toDto(row);
   }
 
-  /** Telefono (10 digitos) del cliente del pedido, o error claro. */
-  private async orderPhone(orderId: string): Promise<string> {
+  /** Telefono (10 digitos) + provider del pedido, o error claro. */
+  private async orderPhone(orderId: string): Promise<{ phone: string; provider: string }> {
     const { prisma } = getTenantContext();
     const order = await prisma.order.findUnique({
       where: { id: orderId },
-      select: { customerPhone: true },
+      select: { customerPhone: true, provider: true },
     });
     if (!order) throw new NotFoundException('Pedido no encontrado');
     const phone = order.customerPhone ? tenDigits(order.customerPhone) : '';
     if (!phone) throw new BadRequestException('Este pedido no tiene teléfono del cliente');
-    return phone;
+    return { phone, provider: order.provider };
+  }
+
+  /**
+   * ¿Este envio va por 360dialog? El SANDBOX solo alcanza el numero de prueba
+   * -> solo pedidos MONTADOS a mano; lo demas va por Whapify hasta produccion.
+   */
+  private d360Governs(
+    d360: { mode: Dialog360Mode } | null,
+    provider: string,
+  ): boolean {
+    return Boolean(d360 && (d360.mode === 'production' || provider === 'manual'));
   }
 
   /**
@@ -901,14 +916,12 @@ export class WhatsappService {
 
     // ===== Camino CLOUD API (360dialog): plantilla en produccion, emulacion
     // con botones de sesion en sandbox. Las ramas las responde handleFlowReply.
-    // OJO: el SANDBOX solo puede escribirle al numero de prueba vinculado ->
-    // en AUTOMATICO se salta los pedidos VTEX reales (n8n/Whapify siguen a
-    // cargo hasta conectar produccion). El boton manual si puede intentar
-    // (p. ej. un pedido VTEX de prueba con tu propio numero).
-    if (d360 && !manual && d360.mode === 'sandbox' && order.provider === 'vtex') {
-      return;
-    }
-    if (d360) {
+    // REGLA DE RUTEO: el SANDBOX solo puede escribirle al numero de prueba
+    // vinculado -> solo toma los pedidos MONTADOS a mano (ensayos). Los VTEX
+    // REALES siguen saliendo por WHAPIFY (abajo) hasta tener 360dialog en
+    // PRODUCCION — el sandbox JAMAS les roba el turno.
+    const viaD360 = Boolean(d360 && (d360.mode === 'production' || order.provider === 'manual'));
+    if (viaD360 && d360) {
       const nombre =
         `${cpd.firstName ?? ''} ${cpd.lastName ?? ''}`.trim() || (order.customerName ?? 'cliente');
       const rendered = tplBody(nombre, productos || '—', direccion || '—');
@@ -975,7 +988,12 @@ export class WhatsappService {
     }
 
     // ===== Camino WHAPIFY (flujo) — se mantiene hasta la migracion.
-    const token = await this.envelope.decryptField(tenantId, whapifyConn!.encryptedToken);
+    if (!whapifyConn) {
+      return fail(
+        'Solo está conectado el SANDBOX de 360dialog y no puede escribirle a clientes reales. Conecta Whapify (o 360dialog en producción).',
+      );
+    }
+    const token = await this.envelope.decryptField(tenantId, whapifyConn.encryptedToken);
     const http = this.client.buildHttp(token);
 
     let contact;
