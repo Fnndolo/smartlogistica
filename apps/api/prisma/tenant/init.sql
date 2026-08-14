@@ -160,6 +160,8 @@ CREATE TABLE "WaContact" (
     "phone" TEXT NOT NULL,
     "contactId" TEXT NOT NULL,
     "name" TEXT,
+    "flowState" TEXT,
+    "draftAddress" TEXT,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "WaContact_pkey" PRIMARY KEY ("phone")

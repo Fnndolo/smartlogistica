@@ -47,6 +47,49 @@ const CF_PRODUCTS_ID = '557415'; // custom field: productos y cantidades
 /** Solo pedidos RECIENTES: un backfill de pedidos viejos JAMAS debe escribirle a nadie. */
 const CONFIRMATION_MAX_AGE_MS = 48 * 3_600_000;
 
+// ============ Confirmacion NATIVA por Cloud API (360dialog) ============
+// El "flujo" de Whapify calcado textual: la plantilla inicial (aprobada en la
+// WABA; en sandbox se emula con texto + botones de sesion) y las ramas que
+// nuestra plataforma responde sola segun el boton / la direccion que escriban.
+
+/** Nombre/idioma de la plantilla aprobada (ajustar el dia de la migracion). */
+const D360_TEMPLATE_NAME = process.env.D360_CONFIRMATION_TEMPLATE ?? 'order_confirmation';
+const D360_TEMPLATE_LANG = process.env.D360_CONFIRMATION_LANG ?? 'es';
+
+/** Cuerpo de la plantilla ({{1}} nombre, {{2}} productos, {{3}} direccion). */
+const tplBody = (nombre: string, productos: string, direccion: string): string =>
+  `¡Hola ${nombre}! 👋 Es un gusto saludarle 😄 Le escribimos de Smart Gadgets para ` +
+  `confirmar su compra de: 📱 ${productos} Por nuestra plataforma de ADDI 💙 📍 A la ` +
+  `dirección: ${direccion} Si desea agregar alguna información adicional o más específica, ` +
+  `quedamos atentos para incluirla en la guía 😉 🔍 ¿Me confirma si sus datos son correctos? ‼️`;
+
+const MSG_CONFIRMED =
+  '¡Muchas gracias por confirmar 🙌 Su pedido ya quedó en alistamiento. Puede seguir el ' +
+  'estado de su pedido desde la app de ADDI. Si hay alguna novedad con su pedido, le ' +
+  'avisamos enseguida. 😊';
+const MSG_ASK_ADDRESS =
+  '¡Claro! 😊 Para modificar tu dirección de entrega, escríbela completa en un solo mensaje ' +
+  'y sin agregar palabras adicionales.\n\nEjemplo:\nCalle 123 # 1-2, barrio San José, Medellín, ' +
+  'Antioquia\n\nPor favor, envía únicamente la dirección con ese formato para poder actualizarla ' +
+  'correctamente';
+const MSG_RETRY_ADDRESS = 'Por favor vuelve a enviar tu dirección, en un ÚNICO mensaje.';
+const msgConfirmDraft = (direccion: string): string =>
+  `Le confirmo, su nueva dirección es:\n${direccion}\n\n¿Es correcto?`;
+
+/** Estados del flujo por telefono (WaContact.flowState). */
+type FlowState = 'awaiting_address' | 'awaiting_address_retry' | 'confirming' | 'confirming_retry';
+
+/** Minusculas sin acentos ni signos, para comparar botones con tolerancia. */
+function normBtn(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/[^a-z0-9 ]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 /** Archivo entrante/saliente: tope 50MB (igual que los adjuntos del chat). */
 export const WA_FILE_MAX_BYTES = 50 * 1024 * 1024;
 
@@ -484,7 +527,14 @@ export class WhatsappService {
         }
         for (const m of v.messages ?? []) {
           const phone = await this.storeCloudMessage(tenantId, prisma, m, 'in', names);
-          if (phone) touched.add(phone);
+          if (phone) {
+            touched.add(phone);
+            // El "cerebro" del flujo de confirmacion: botones y captura de la
+            // direccion nueva. Best-effort — jamas tumba la recepcion.
+            await this.handleFlowReply(tenantId, prisma, phone, m).catch((err) =>
+              this.logger.warn(`Flujo de confirmacion fallo (${phone}): ${err instanceof Error ? err.message : err}`),
+            );
+          }
         }
         // Coexistencia: lo que el negocio envia desde la APP se espeja aqui.
         for (const m of v.message_echoes ?? v.smb_message_echoes ?? []) {
@@ -501,6 +551,148 @@ export class WhatsappService {
 
     // El nombre del contacto se refresca con lo que diga WhatsApp.
     // (Se hace al final para no bloquear los mensajes.)
+  }
+
+  /**
+   * MOTOR del flujo de confirmacion (calcado del de Whapify): interpreta los
+   * botones y la direccion que escribe el cliente, responde las ramas y
+   * actualiza la columna Direccion. Estado por telefono en WaContact.flowState.
+   */
+  private async handleFlowReply(
+    tenantId: string,
+    prisma: PrismaClient,
+    phone: string,
+    m: Any,
+  ): Promise<void> {
+    const d360 = await this.dialog360OrNull(tenantId, prisma);
+    if (!d360) return; // sin Cloud API, el flujo vive en Whapify
+
+    const contact = await prisma.waContact.findUnique({ where: { phone } });
+    const state = (contact?.flowState ?? null) as FlowState | null;
+
+    // Boton tocado (plantilla => type 'button'; sesion => interactive.button_reply).
+    const btnTitle = m.interactive?.button_reply?.title ?? m.button?.text ?? null;
+    const payload = m.interactive?.button_reply?.id ?? m.button?.payload ?? null;
+    const btn = btnTitle ? normBtn(String(btnTitle)) : null;
+    const pay = payload ? String(payload) : null;
+    const text = m.type === 'text' ? String(m.text?.body ?? '').trim() : '';
+
+    const to = `57${phone}`;
+    const say = async (body: string): Promise<void> => {
+      const wamid = await this.dialog360.sendText(d360.http, d360.mode, to, body);
+      await prisma.waMessage.create({
+        data: { phone, direction: 'out', kind: 'text', body, authorName: 'SmartLogística', externalId: wamid },
+      });
+      await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    };
+    const sayButtons = async (body: string, buttons: Array<{ id: string; title: string }>): Promise<void> => {
+      const wamid = await this.dialog360.sendInteractiveButtons(d360.http, d360.mode, to, body, buttons);
+      await prisma.waMessage.create({
+        data: { phone, direction: 'out', kind: 'text', body, authorName: 'SmartLogística', externalId: wamid },
+      });
+      await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    };
+    const setState = async (flowState: FlowState | null, draftAddress: string | null): Promise<void> => {
+      await prisma.waContact.upsert({
+        where: { phone },
+        create: { phone, contactId: '', flowState, draftAddress },
+        update: { flowState, draftAddress },
+      });
+    };
+
+    if (btn || pay) {
+      // ¿Confirmando el BORRADOR de la direccion nueva?
+      if (state === 'confirming' || state === 'confirming_retry') {
+        if (pay === 'DRAFT_OK' || btn?.includes('si es correcto')) {
+          const addr = contact?.draftAddress?.trim() ?? '';
+          await setState(null, null);
+          if (addr) await this.applyAddressNative(tenantId, prisma, phone, 'modified', addr);
+          await say(MSG_CONFIRMED);
+          return;
+        }
+        if (pay === 'DRAFT_NO' || btn?.includes('no es correcto')) {
+          await setState('awaiting_address_retry', null);
+          await say(MSG_RETRY_ADDRESS);
+          return;
+        }
+      }
+      // Botones de la PLANTILLA inicial.
+      if (pay === 'CONFIRMED' || btn?.includes('mis datos son correctos') || btn?.includes('datos correctos')) {
+        await setState(null, null);
+        await this.applyAddressNative(tenantId, prisma, phone, 'confirmed');
+        await say(MSG_CONFIRMED);
+        return;
+      }
+      if (pay === 'MODIFY' || btn?.includes('modificar')) {
+        await setState('awaiting_address', null);
+        await say(MSG_ASK_ADDRESS);
+        return;
+      }
+      return;
+    }
+
+    // Texto libre mientras esperamos la direccion nueva.
+    if (text && (state === 'awaiting_address' || state === 'awaiting_address_retry')) {
+      const retry = state === 'awaiting_address_retry';
+      await setState(retry ? 'confirming_retry' : 'confirming', text);
+      await sayButtons(
+        msgConfirmDraft(text),
+        retry
+          ? [{ id: 'DRAFT_OK', title: 'Sí es correcto.' }]
+          : [
+              { id: 'DRAFT_OK', title: 'Sí es correcto.' },
+              { id: 'DRAFT_NO', title: 'No es correcto.' },
+            ],
+      );
+    }
+  }
+
+  /**
+   * Aplica la confirmacion/modificacion de direccion a los pedidos PENDIENTES
+   * del telefono (calcado del webhook de Whapify, pero nativo). Los mensajes ya
+   * quedaron en el hilo via el webhook Cloud — aqui solo columna + log.
+   */
+  private async applyAddressNative(
+    tenantId: string,
+    prisma: PrismaClient,
+    phone: string,
+    action: 'confirmed' | 'modified',
+    address?: string,
+  ): Promise<void> {
+    const candidates = await prisma.order.findMany({
+      where: {
+        customerPhone: { contains: phone },
+        provider: { not: 'manual' },
+        events: { none: { type: { in: ['vtex_invoiced', 'manual_completed'] } } },
+      },
+      select: { id: true, customerPhone: true },
+    });
+    const ids = candidates
+      .filter((o) => o.customerPhone && tenDigits(o.customerPhone) === phone)
+      .map((o) => o.id);
+    if (ids.length > 0) {
+      await prisma.order.updateMany({
+        where: { id: { in: ids } },
+        data: {
+          addressStatus: action,
+          confirmedAddress: action === 'modified' ? (address?.trim() ?? null) : null,
+          addressConfirmedAt: new Date(),
+        },
+      });
+    }
+    await prisma.confirmationLog
+      .create({
+        data: {
+          phone,
+          action,
+          address: address?.trim() || null,
+          matched: ids.length,
+          note: ids.length > 0 ? 'Cloud API (flujo nativo)' : 'Cloud API: sin pedido pendiente con ese telefono',
+        },
+      })
+      .catch(() => null);
+    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+    this.logger.log(`Direccion ${action} via Cloud API: ...${phone} (${ids.length} pedido(s))`);
   }
 
   /** Guarda UN mensaje del payload Cloud (con dedup por wamid). Devuelve el telefono. */
@@ -628,8 +820,14 @@ export class WhatsappService {
       if (manual) throw new BadRequestException(msg);
     };
 
-    const conn = await prisma.whapifyConnection.findFirst({ orderBy: { createdAt: 'desc' } });
-    if (!conn) return fail('Whapify no está conectado. Configúralo en Conexiones.'); // auto: n8n sigue a cargo
+    const [whapifyConn, d360] = await Promise.all([
+      prisma.whapifyConnection.findFirst({ orderBy: { createdAt: 'desc' } }),
+      this.dialog360OrNull(tenantId, prisma),
+    ]);
+    if (!whapifyConn && !d360) {
+      // auto: n8n (u nadie) sigue a cargo
+      return fail('WhatsApp no está conectado (ni 360dialog ni Whapify). Configúralo en Conexiones.');
+    }
 
     const order = await prisma.order.findUnique({
       where: { id: orderId },
@@ -671,7 +869,73 @@ export class WhatsappService {
       .join(', ');
     const productos = order.items.map((i) => `${i.quantity} ${i.name}`).join(', ');
 
-    const token = await this.envelope.decryptField(tenantId, conn.encryptedToken);
+    // ===== Camino CLOUD API (360dialog): plantilla en produccion, emulacion
+    // con botones de sesion en sandbox. Las ramas las responde handleFlowReply.
+    if (d360) {
+      const nombre =
+        `${cpd.firstName ?? ''} ${cpd.lastName ?? ''}`.trim() || (order.customerName ?? 'cliente');
+      const rendered = tplBody(nombre, productos || '—', direccion || '—');
+      let wamid: string | null = null;
+      try {
+        if (d360.mode === 'sandbox') {
+          wamid = await this.dialog360.sendInteractiveButtons(d360.http, d360.mode, `57${phone}`, rendered, [
+            { id: 'CONFIRMED', title: 'Datos correctos ✅' },
+            { id: 'MODIFY', title: 'Modificar dirección' },
+          ]);
+        } else {
+          wamid = await this.dialog360.sendTemplate(
+            d360.http,
+            d360.mode,
+            `57${phone}`,
+            D360_TEMPLATE_NAME,
+            D360_TEMPLATE_LANG,
+            [
+              {
+                type: 'body',
+                parameters: [
+                  { type: 'text', text: nombre },
+                  { type: 'text', text: productos || '—' },
+                  { type: 'text', text: direccion || '—' },
+                ],
+              },
+              { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: 'CONFIRMED' }] },
+              { type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: 'MODIFY' }] },
+            ],
+          );
+        }
+      } catch (err) {
+        if (err instanceof BadRequestException) throw err;
+        throw this.translateError(err, '360dialog no pudo enviar la confirmación');
+      }
+
+      await Promise.all([
+        prisma.orderEvent.create({
+          data: {
+            orderId,
+            type: 'wa_confirmation',
+            actorName: 'SmartLogística',
+            data: { via: 'dialog360', mode: d360.mode, phone } as Prisma.InputJsonValue,
+          },
+        }),
+        // Con Cloud API el mensaje del hilo es el TEXTO REAL enviado.
+        prisma.waMessage.create({
+          data: {
+            phone,
+            direction: 'out',
+            kind: 'text',
+            body: rendered,
+            authorName: 'SmartLogística',
+            externalId: wamid,
+          },
+        }),
+      ]);
+      await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+      this.logger.log(`Confirmacion Cloud enviada: pedido ${order.externalId} -> ${phone}`);
+      return;
+    }
+
+    // ===== Camino WHAPIFY (flujo) — se mantiene hasta la migracion.
+    const token = await this.envelope.decryptField(tenantId, whapifyConn!.encryptedToken);
     const http = this.client.buildHttp(token);
 
     let contact;

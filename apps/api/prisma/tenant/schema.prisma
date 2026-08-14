@@ -223,10 +223,14 @@ model Dialog360Connection {
 
 // Cache telefono -> contacto de Whapify (evita buscar/crear en cada envio).
 model WaContact {
-  phone     String   @id
-  contactId String
-  name      String?
-  updatedAt DateTime @updatedAt
+  phone        String   @id
+  contactId    String
+  name         String?
+  // Estado del flujo de confirmacion NATIVO (Cloud API): esperando direccion,
+  // confirmando el borrador, etc. draftAddress = la direccion que escribio.
+  flowState    String?
+  draftAddress String?
+  updatedAt    DateTime @updatedAt
 }
 
 model AiConnection {

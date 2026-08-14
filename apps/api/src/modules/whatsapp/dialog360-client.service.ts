@@ -81,6 +81,36 @@ export class Dialog360Client {
     return res.data?.messages?.[0]?.id ?? null;
   }
 
+  /**
+   * Envia un mensaje de SESION con botones de respuesta rapida (dentro de la
+   * ventana de 24h). OJO: titulos max 20 caracteres (limite de Meta).
+   */
+  async sendInteractiveButtons(
+    http: AxiosInstance,
+    mode: Dialog360Mode,
+    to: string,
+    bodyText: string,
+    buttons: Array<{ id: string; title: string }>,
+  ): Promise<string | null> {
+    const res = await http.post(this.messagesPath(mode), {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type: 'interactive',
+      interactive: {
+        type: 'button',
+        body: { text: bodyText },
+        action: {
+          buttons: buttons.map((b) => ({
+            type: 'reply',
+            reply: { id: b.id, title: b.title.slice(0, 20) },
+          })),
+        },
+      },
+    });
+    return res.data?.messages?.[0]?.id ?? null;
+  }
+
   /** Envia una PLANTILLA aprobada (la confirmacion del pedido, en produccion). */
   async sendTemplate(
     http: AxiosInstance,
