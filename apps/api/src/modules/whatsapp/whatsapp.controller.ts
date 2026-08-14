@@ -8,13 +8,19 @@ import {
   Param,
   Post,
   Put,
+  Req,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import type { Request } from 'express';
 import {
+  dialog360CredentialsSchema,
   sendWaTextSchema,
   whapifyCredentialsSchema,
+  type Dialog360ConnectionSummary,
+  type Dialog360CredentialsInput,
+  type Dialog360TestResult,
   type SendWaTextInput,
   type WaMessage,
   type WaThread,
@@ -65,6 +71,48 @@ export class WhapifyConnectionController {
   @HttpCode(204)
   async disconnect(@CurrentUser() user: AuthContext): Promise<void> {
     await this.whatsapp.disconnect(user);
+  }
+}
+
+/**
+ * Conexion a 360dialog (Cloud API de Meta). Al conectar, el webhook del numero
+ * queda apuntando AUTOMATICAMENTE a esta plataforma. Solo propietario (temporal).
+ */
+@Controller('connections/dialog360')
+export class Dialog360ConnectionController {
+  constructor(private readonly whatsapp: WhatsappService) {}
+
+  @Get()
+  async get(@CurrentUser() user: AuthContext): Promise<Dialog360ConnectionSummary | null> {
+    return this.whatsapp.getDialog360(user);
+  }
+
+  @Post('test')
+  @HttpCode(200)
+  async test(
+    @Body(new ZodValidationPipe(dialog360CredentialsSchema)) body: Dialog360CredentialsInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<Dialog360TestResult> {
+    return this.whatsapp.testDialog360(body, user);
+  }
+
+  @Put()
+  async connect(
+    @Body(new ZodValidationPipe(dialog360CredentialsSchema)) body: Dialog360CredentialsInput,
+    @CurrentUser() user: AuthContext,
+    @Req() req: Request,
+  ): Promise<Dialog360ConnectionSummary> {
+    // URL publica de la plataforma (la request llega proxied por el web): con
+    // ella se auto-configura el webhook del numero en 360dialog.
+    const host = (req.headers['x-forwarded-host'] as string | undefined) ?? req.headers.host ?? '';
+    const base = `https://${String(host).split(',')[0].trim()}`;
+    return this.whatsapp.connectDialog360(body, user, base);
+  }
+
+  @Delete()
+  @HttpCode(204)
+  async disconnect(@CurrentUser() user: AuthContext): Promise<void> {
+    await this.whatsapp.disconnectDialog360(user);
   }
 }
 

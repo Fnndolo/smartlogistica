@@ -135,9 +135,24 @@ CREATE TABLE "WaMessage" (
     "authorId" TEXT,
     "authorName" TEXT,
     "contactId" TEXT,
+    "externalId" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "WaMessage_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "Dialog360Connection" (
+    "id" TEXT NOT NULL,
+    "encryptedApiKey" BYTEA NOT NULL,
+    "mode" TEXT NOT NULL DEFAULT 'production',
+    "webhookUrl" TEXT,
+    "status" TEXT NOT NULL DEFAULT 'connected',
+    "lastError" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Dialog360Connection_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -369,6 +384,9 @@ CREATE INDEX "WarehouseMember_userId_idx" ON "WarehouseMember"("userId");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "WarehouseMember_warehouseId_userId_key" ON "WarehouseMember"("warehouseId", "userId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "WaMessage_externalId_key" ON "WaMessage"("externalId");
 
 -- CreateIndex
 CREATE INDEX "WaMessage_phone_createdAt_idx" ON "WaMessage"("phone", "createdAt");

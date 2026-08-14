@@ -200,9 +200,25 @@ model WaMessage {
   authorId      String? // usuario de la plataforma que lo envio (salientes)
   authorName    String?
   contactId     String? // id del contacto en Whapify
+  // Id del mensaje en WhatsApp (wamid de la Cloud API): dedup de reentregas.
+  externalId    String?  @unique
   createdAt     DateTime @default(now())
 
   @@index([phone, createdAt])
+}
+
+// Conexion a 360dialog (Cloud API de Meta, BSP api-first). Singleton. Reemplazo
+// de Whapify: con ella los envios salen por la Cloud API y el webhook recibe
+// TODO (mensajes, medios, echoes del celular con coexistencia).
+model Dialog360Connection {
+  id              String   @id @default(cuid())
+  encryptedApiKey Bytes
+  mode            String   @default("production") // sandbox | production
+  webhookUrl      String?
+  status          String   @default("connected")
+  lastError       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
 // Cache telefono -> contacto de Whapify (evita buscar/crear en cada envio).

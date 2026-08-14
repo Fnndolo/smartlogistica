@@ -34,6 +34,32 @@ export const whapifyTestResultSchema = z.object({
 });
 export type WhapifyTestResult = z.infer<typeof whapifyTestResultSchema>;
 
+// === Conexion 360dialog (Cloud API de Meta via BSP api-first) ===
+// Reemplazo de Whapify: acceso CRUDO a la Cloud API (webhooks de TODO,
+// incluidos los mensajes enviados desde el celular con coexistencia).
+
+export const dialog360ModeSchema = z.enum(['sandbox', 'production']);
+export type Dialog360Mode = z.infer<typeof dialog360ModeSchema>;
+
+export const dialog360CredentialsSchema = z.object({
+  apiKey: z.string().trim().min(10, 'API key muy corta').max(200),
+  mode: dialog360ModeSchema.default('production'),
+});
+export type Dialog360CredentialsInput = z.infer<typeof dialog360CredentialsSchema>;
+
+export const dialog360ConnectionSummarySchema = z.object({
+  mode: dialog360ModeSchema,
+  status: z.enum(['connected', 'error']),
+  lastError: z.string().nullable(),
+  /** URL del webhook que quedo configurada en 360dialog al conectar. */
+  webhookUrl: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type Dialog360ConnectionSummary = z.infer<typeof dialog360ConnectionSummarySchema>;
+
+export const dialog360TestResultSchema = z.object({ ok: z.literal(true) });
+export type Dialog360TestResult = z.infer<typeof dialog360TestResultSchema>;
+
 // === Mensajes ===
 
 export const waMessageKindSchema = z.enum(['text', 'image', 'video', 'audio', 'file']);

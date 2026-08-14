@@ -8,6 +8,10 @@ import {
 import { randomUUID } from 'node:crypto';
 import { isAxiosError, type AxiosInstance } from 'axios';
 import type {
+  Dialog360ConnectionSummary,
+  Dialog360CredentialsInput,
+  Dialog360Mode,
+  Dialog360TestResult,
   SendWaTextInput,
   WaInboundInput,
   WaMessage as WaMessageDto,
@@ -20,9 +24,11 @@ import type { Prisma, PrismaClient } from '.prisma/tenant-client';
 
 import type { AuthContext } from '../../common/types/authenticated-request';
 import { EnvelopeService } from '../../infrastructure/crypto/envelope.service';
+import { ControlPlaneService } from '../../infrastructure/prisma/control-plane.service';
 import { RealtimeService } from '../../infrastructure/realtime/realtime.service';
 import { StorageService } from '../../infrastructure/storage/storage.service';
 import { getTenantContext } from '../../infrastructure/tenant-context';
+import { Dialog360Client } from './dialog360-client.service';
 import { WhapifyClient } from './whapify-client.service';
 
 /** Ultimos mensajes que carga el hilo (el historial completo queda guardado). */
@@ -49,6 +55,9 @@ interface UploadedWaFile {
   mimetype: string;
   originalname?: string;
 }
+
+// Acceso laxo a los payloads de la Cloud API (forma variable segun el tipo).
+type Any = Record<string, any>;
 
 interface WaMessageRow {
   id: string;
@@ -94,9 +103,11 @@ export class WhatsappService {
 
   constructor(
     private readonly client: WhapifyClient,
+    private readonly dialog360: Dialog360Client,
     private readonly envelope: EnvelopeService,
     private readonly storage: StorageService,
     private readonly realtime: RealtimeService,
+    private readonly control: ControlPlaneService,
   ) {}
 
   // === Conexion (token global, cifrado) ===
@@ -172,6 +183,92 @@ export class WhatsappService {
     return this.client.buildHttp(token);
   }
 
+  // === Conexion 360dialog (Cloud API cruda — reemplazo de Whapify) ===
+
+  async getDialog360(auth: AuthContext): Promise<Dialog360ConnectionSummary | null> {
+    this.assertAdmin(auth);
+    const { prisma } = getTenantContext();
+    const conn = await prisma.dialog360Connection.findFirst({ orderBy: { createdAt: 'desc' } });
+    if (!conn) return null;
+    return {
+      mode: (conn.mode === 'sandbox' ? 'sandbox' : 'production') as Dialog360Mode,
+      status: conn.status === 'error' ? 'error' : 'connected',
+      lastError: conn.lastError,
+      webhookUrl: conn.webhookUrl,
+      createdAt: conn.createdAt.toISOString(),
+    };
+  }
+
+  async testDialog360(input: Dialog360CredentialsInput, auth: AuthContext): Promise<Dialog360TestResult> {
+    this.assertAdmin(auth);
+    try {
+      await this.dialog360.getWebhook(this.dialog360.buildHttp(input.apiKey, input.mode));
+      return { ok: true };
+    } catch (err) {
+      throw this.translateError(err, 'No se pudo conectar a 360dialog (¿API key/modo correctos?)');
+    }
+  }
+
+  /**
+   * Conecta 360dialog: valida el key, lo guarda cifrado y AUTO-CONFIGURA el
+   * webhook del numero hacia esta plataforma (asi entra TODO: mensajes, medios
+   * y, con coexistencia, los enviados desde el celular).
+   */
+  async connectDialog360(
+    input: Dialog360CredentialsInput,
+    auth: AuthContext,
+    publicBaseUrl: string,
+  ): Promise<Dialog360ConnectionSummary> {
+    this.assertAdmin(auth);
+    const { tenantId, prisma } = getTenantContext();
+
+    const secret = process.env.CONFIRMATION_WEBHOOK_SECRET;
+    if (!secret) {
+      throw new BadRequestException('Falta CONFIRMATION_WEBHOOK_SECRET en el servidor');
+    }
+    const tenant = await this.control.tenant.findUnique({ where: { id: tenantId } });
+    if (!tenant) throw new BadRequestException('Tenant no encontrado');
+
+    const http = this.dialog360.buildHttp(input.apiKey, input.mode);
+    const webhookUrl = `${publicBaseUrl}/v1/webhooks/dialog360/${tenant.slug}?token=${encodeURIComponent(secret)}`;
+    try {
+      await this.dialog360.setWebhook(http, webhookUrl);
+    } catch (err) {
+      throw this.translateError(err, 'El API key de 360dialog es invalido o no se pudo configurar el webhook');
+    }
+
+    const encryptedApiKey = await this.envelope.encryptField(tenantId, input.apiKey);
+    await prisma.dialog360Connection.deleteMany({});
+    const conn = await prisma.dialog360Connection.create({
+      data: { encryptedApiKey, mode: input.mode, webhookUrl, status: 'connected', lastError: null },
+    });
+    return {
+      mode: input.mode,
+      status: 'connected',
+      lastError: null,
+      webhookUrl,
+      createdAt: conn.createdAt.toISOString(),
+    };
+  }
+
+  async disconnectDialog360(auth: AuthContext): Promise<void> {
+    this.assertAdmin(auth);
+    const { prisma } = getTenantContext();
+    await prisma.dialog360Connection.deleteMany({});
+  }
+
+  /** Cliente 360dialog listo (null si no hay conexion). Prisma explicito: lo usa tambien el webhook. */
+  private async dialog360OrNull(
+    tenantId: string,
+    prisma: PrismaClient,
+  ): Promise<{ http: AxiosInstance; mode: Dialog360Mode } | null> {
+    const conn = await prisma.dialog360Connection.findFirst({ orderBy: { createdAt: 'desc' } });
+    if (!conn) return null;
+    const apiKey = await this.envelope.decryptField(tenantId, conn.encryptedApiKey);
+    const mode: Dialog360Mode = conn.mode === 'sandbox' ? 'sandbox' : 'production';
+    return { http: this.dialog360.buildHttp(apiKey, mode), mode };
+  }
+
   // === Hilo por pedido ===
 
   async thread(orderId: string, auth: AuthContext): Promise<WaThread> {
@@ -184,7 +281,12 @@ export class WhatsappService {
     if (!order) throw new NotFoundException('Pedido no encontrado');
 
     const phone = order.customerPhone ? tenDigits(order.customerPhone) : '';
-    const conn = await prisma.whapifyConnection.findFirst({ select: { id: true } });
+    // Conectado = CUALQUIERA de los dos proveedores (Whapify o 360dialog).
+    const [whapify, d360] = await Promise.all([
+      prisma.whapifyConnection.findFirst({ select: { id: true } }),
+      prisma.dialog360Connection.findFirst({ select: { id: true } }),
+    ]);
+    const conn = whapify ?? d360;
     if (!phone) {
       return { phone: null, connected: Boolean(conn), contactName: null, messages: [] };
     }
@@ -210,8 +312,33 @@ export class WhatsappService {
   async sendText(orderId: string, input: SendWaTextInput, auth: AuthContext): Promise<WaMessageDto> {
     this.assertAdmin(auth);
     const { tenantId, prisma } = getTenantContext();
-    const { phone, contact, http } = await this.resolveTarget(orderId);
 
+    // 360dialog conectado = Cloud API directa (sin contactos de por medio).
+    const d360 = await this.dialog360OrNull(tenantId, prisma);
+    if (d360) {
+      const phone = await this.orderPhone(orderId);
+      let wamid: string | null = null;
+      try {
+        wamid = await this.dialog360.sendText(d360.http, d360.mode, `57${phone}`, input.text);
+      } catch (err) {
+        throw this.translateError(err, '360dialog no pudo enviar el mensaje');
+      }
+      const row = await prisma.waMessage.create({
+        data: {
+          phone,
+          direction: 'out',
+          kind: 'text',
+          body: input.text,
+          authorId: auth.userId,
+          authorName: auth.name?.trim() || auth.email,
+          externalId: wamid,
+        },
+      });
+      await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+      return this.toDto(row);
+    }
+
+    const { phone, contact, http } = await this.resolveTarget(orderId);
     try {
       await this.client.sendText(http, contact.id, input.text);
     } catch (err) {
@@ -240,35 +367,68 @@ export class WhatsappService {
     if (!this.storage.isConfigured()) {
       throw new BadRequestException('El almacenamiento de archivos no esta configurado');
     }
-    const { phone, contact, http } = await this.resolveTarget(orderId);
+    const d360 = await this.dialog360OrNull(tenantId, prisma);
+    const phone = d360 ? await this.orderPhone(orderId) : '';
+    const target = d360 ? null : await this.resolveTarget(orderId);
+    const targetPhone = target?.phone ?? phone;
 
     const name = file.originalname || 'archivo';
     const ext = /\.([a-z0-9]{1,8})$/i.exec(name)?.[1];
-    const key = `tenants/${tenantId}/whatsapp/${phone}/${randomUUID()}${ext ? `.${ext.toLowerCase()}` : ''}`;
+    const key = `tenants/${tenantId}/whatsapp/${targetPhone}/${randomUUID()}${ext ? `.${ext.toLowerCase()}` : ''}`;
     await this.storage.put(key, file.buffer, file.mimetype || 'application/octet-stream');
     const url = await this.storage.getSignedUrl(key);
 
+    let wamid: string | null = null;
     try {
-      await this.client.sendFile(http, contact.id, url, waTypeOf(file.mimetype || ''));
+      if (d360) {
+        const kind = waTypeOf(file.mimetype || '');
+        wamid = await this.dialog360.sendMediaLink(
+          d360.http,
+          d360.mode,
+          `57${targetPhone}`,
+          kind === 'file' ? 'document' : kind,
+          url,
+          kind === 'file' ? name : undefined,
+        );
+      } else {
+        await this.client.sendFile(target!.http, target!.contact.id, url, waTypeOf(file.mimetype || ''));
+      }
     } catch (err) {
       await this.storage.delete(key).catch(() => null);
-      throw this.translateError(err, 'Whapify no pudo enviar el archivo');
+      throw this.translateError(
+        err,
+        d360 ? '360dialog no pudo enviar el archivo' : 'Whapify no pudo enviar el archivo',
+      );
     }
 
     const row = await prisma.waMessage.create({
       data: {
-        phone,
+        phone: targetPhone,
         direction: 'out',
         kind: waTypeOf(file.mimetype || ''),
         body: name,
         attachmentKey: key,
         authorId: auth.userId,
         authorName: auth.name?.trim() || auth.email,
-        contactId: contact.id,
+        contactId: target?.contact.id ?? null,
+        externalId: wamid,
       },
     });
-    await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    await this.realtime.publish(tenantId, { kind: 'wa.message', phone: targetPhone });
     return this.toDto(row);
+  }
+
+  /** Telefono (10 digitos) del cliente del pedido, o error claro. */
+  private async orderPhone(orderId: string): Promise<string> {
+    const { prisma } = getTenantContext();
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      select: { customerPhone: true },
+    });
+    if (!order) throw new NotFoundException('Pedido no encontrado');
+    const phone = order.customerPhone ? tenDigits(order.customerPhone) : '';
+    if (!phone) throw new BadRequestException('Este pedido no tiene teléfono del cliente');
+    return phone;
   }
 
   /**
@@ -302,6 +462,138 @@ export class WhatsappService {
     }
 
     await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+  }
+
+  /**
+   * Webhook de la CLOUD API (360dialog): mensajes entrantes, medios y — con
+   * coexistencia — los ECHOES de lo enviado desde el celular/WhatsApp Web.
+   * Corre FUERA del contexto tenant (recibe prisma). Best-effort por mensaje.
+   */
+  async inboundCloud(tenantId: string, prisma: PrismaClient, payload: unknown): Promise<void> {
+    const root = payload as { entry?: Array<{ changes?: Array<{ value?: Any }> }> };
+    const touched = new Set<string>();
+
+    for (const entry of root.entry ?? []) {
+      for (const change of entry.changes ?? []) {
+        const v = change.value;
+        if (!v || typeof v !== 'object') continue;
+        // Nombre del contacto segun WhatsApp (viene junto a los mensajes).
+        const names = new Map<string, string>();
+        for (const c of v.contacts ?? []) {
+          if (c?.wa_id && c?.profile?.name) names.set(String(c.wa_id), String(c.profile.name));
+        }
+        for (const m of v.messages ?? []) {
+          const phone = await this.storeCloudMessage(tenantId, prisma, m, 'in', names);
+          if (phone) touched.add(phone);
+        }
+        // Coexistencia: lo que el negocio envia desde la APP se espeja aqui.
+        for (const m of v.message_echoes ?? v.smb_message_echoes ?? []) {
+          const phone = await this.storeCloudMessage(tenantId, prisma, m, 'out', names);
+          if (phone) touched.add(phone);
+        }
+        // v.statuses (sent/delivered/read): por ahora no se pintan.
+      }
+    }
+
+    for (const phone of touched) {
+      await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    }
+
+    // El nombre del contacto se refresca con lo que diga WhatsApp.
+    // (Se hace al final para no bloquear los mensajes.)
+  }
+
+  /** Guarda UN mensaje del payload Cloud (con dedup por wamid). Devuelve el telefono. */
+  private async storeCloudMessage(
+    tenantId: string,
+    prisma: PrismaClient,
+    m: Any,
+    direction: 'in' | 'out',
+    names: Map<string, string>,
+  ): Promise<string | null> {
+    try {
+      const rawPhone = direction === 'in' ? m.from : (m.to ?? m.recipient_id ?? m.from);
+      if (!rawPhone) return null;
+      const phone = tenDigits(String(rawPhone));
+      if (phone.length < 7) return null;
+      const externalId = typeof m.id === 'string' ? m.id : null;
+
+      // Dedup: la Cloud API reintenta entregas del webhook.
+      if (externalId) {
+        const dup = await prisma.waMessage.findUnique({ where: { externalId }, select: { id: true } });
+        if (dup) return null;
+      }
+
+      const type = String(m.type ?? 'text');
+      let kind: WaMessageDto['kind'] = 'text';
+      let body: string | null = null;
+      let attachmentKey: string | null = null;
+
+      if (type === 'text') {
+        body = m.text?.body ?? null;
+      } else if (['image', 'video', 'audio', 'document', 'sticker'].includes(type)) {
+        const media = m[type] ?? {};
+        kind = type === 'document' ? 'file' : type === 'sticker' ? 'image' : (type as WaMessageDto['kind']);
+        body = media.caption ?? media.filename ?? null;
+        // Bajar el medio YA (la URL de Meta expira en 5 min) y guardarlo nuestro.
+        if (media.id) {
+          const d360 = await this.dialog360OrNull(tenantId, prisma);
+          if (d360 && this.storage.isConfigured()) {
+            const bin = await this.dialog360.downloadMedia(d360.http, d360.mode, String(media.id));
+            if (bin) {
+              const ext = (bin.mime.split('/')[1] ?? 'bin').split(';')[0].trim();
+              const key = `tenants/${tenantId}/whatsapp/${phone}/${randomUUID()}.${ext}`;
+              await this.storage.put(key, bin.buffer, bin.mime);
+              attachmentKey = key;
+            }
+          }
+          if (!attachmentKey) body = body ?? `[${type} recibido]`;
+        }
+      } else if (type === 'interactive') {
+        body = m.interactive?.button_reply?.title ?? m.interactive?.list_reply?.title ?? '[interacción]';
+      } else if (type === 'button') {
+        body = m.button?.text ?? '[botón]';
+      } else if (type === 'location') {
+        body = `📍 Ubicación: ${m.location?.latitude ?? '?'}, ${m.location?.longitude ?? '?'}`;
+      } else {
+        body = `[${type}]`;
+      }
+
+      await prisma.waMessage.create({
+        data: {
+          phone,
+          direction,
+          kind,
+          body,
+          attachmentKey,
+          authorName:
+            direction === 'out'
+              ? 'WhatsApp (celular)'
+              : (names.get(String(rawPhone)) ?? null),
+          externalId,
+        },
+      });
+
+      // Refrescar el nombre del contacto si WhatsApp lo trae.
+      const name = names.get(String(rawPhone));
+      if (direction === 'in' && name) {
+        await prisma.waContact
+          .upsert({
+            where: { phone },
+            create: { phone, contactId: '', name },
+            update: { name },
+          })
+          .catch(() => null);
+      }
+      return phone;
+    } catch (err) {
+      // P2002 = duplicado que se colo en paralelo — ignorar en silencio.
+      if (typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'P2002') {
+        return null;
+      }
+      this.logger.warn(`Mensaje Cloud no guardado: ${err instanceof Error ? err.message : err}`);
+      return null;
+    }
   }
 
   /**

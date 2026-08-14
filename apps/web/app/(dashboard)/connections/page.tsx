@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { Plus } from 'lucide-react';
 import type {
   AiConnectionSummary,
+  Dialog360ConnectionSummary,
   VtexConnectionSummary,
   WhapifyConnectionSummary,
 } from '@smartlogistica/shared';
@@ -12,6 +13,7 @@ import { serverFetchResult } from '@/lib/server-api';
 
 import { AiConnectionCard } from './ai-connection-card';
 import { ConnectionsList } from './connections-list';
+import { Dialog360ConnectionCard } from './dialog360-connection-card';
 import { WhapifyConnectionCard } from './whapify-connection-card';
 
 export const metadata: Metadata = { title: 'Conexiones' };
@@ -32,16 +34,22 @@ async function initialAiConnection(): Promise<AiConnectionSummary | null | undef
   return res.ok ? res.data : undefined;
 }
 
+async function initialDialog360(): Promise<Dialog360ConnectionSummary | null | undefined> {
+  const res = await serverFetchResult<Dialog360ConnectionSummary | null>('/v1/connections/dialog360');
+  return res.ok ? res.data : undefined;
+}
+
 async function initialWhapify(): Promise<WhapifyConnectionSummary | null | undefined> {
   const res = await serverFetchResult<WhapifyConnectionSummary | null>('/v1/connections/whapify');
   return res.ok ? res.data : undefined;
 }
 
 export default async function ConnectionsPage() {
-  const [connections, aiConnection, whapify] = await Promise.all([
+  const [connections, aiConnection, whapify, dialog360] = await Promise.all([
     initialConnections(),
     initialAiConnection(),
     initialWhapify(),
+    initialDialog360(),
   ]);
 
   return (
@@ -74,6 +82,7 @@ export default async function ConnectionsPage() {
         </h2>
         <AiConnectionCard initial={aiConnection} />
         <WhapifyConnectionCard initial={whapify} />
+        <Dialog360ConnectionCard initial={dialog360} />
       </section>
     </div>
   );
