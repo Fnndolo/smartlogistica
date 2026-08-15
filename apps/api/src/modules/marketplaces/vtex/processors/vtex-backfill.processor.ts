@@ -84,8 +84,35 @@ export class VtexBackfillProcessor extends WorkerHost {
       }
     }
 
+    // 1b) BARRIDO de trazabilidad EXTERNA: pedidos RECIENTES (ultimas 72h) que
+    //     ya avanzaron POR FUERA (handling/invoiced) y NO estan en el espejo
+    //     (borrados por la logica vieja o que avanzaron entre ticks). Se
+    //     importan conservados -> Generales > Facturados. Nada se pierde.
+    const createdFrom = new Date(Date.now() - 72 * 3_600_000);
+    for (const status of ['handling', 'invoiced']) {
+      let page = 1;
+      while (true) {
+        const response = await withRetry(() =>
+          this.vtex.listOrders(http, { status, page, perPage: PER_PAGE, createdFrom }),
+        );
+        const items = response.list ?? [];
+        for (const item of items) {
+          if (!existingIds.has(item.orderId)) {
+            const ok = await this.importExternal(http, prisma, tenantId, accountName, item.orderId);
+            if (ok) {
+              existingIds.add(item.orderId);
+              imported++;
+            }
+          }
+        }
+        await job.updateProgress({ status: `externo:${status}`, page, imported });
+        if (items.length < PER_PAGE) break;
+        page++;
+      }
+    }
+
     // 3) Borrar lo que VTEX ya NO lista como relevante (cambio de estado),
-    //    CONSERVANDO los que llegaron a 'invoiced' (facturados por fuera).
+    //    CONSERVANDO todo lo que avanzo por fuera (solo canceled se borra).
     const removed = await this.removeStale(http, prisma, tenantId, accountName, listedIds);
 
     await prisma.marketplaceConnection.update({
@@ -123,10 +150,51 @@ export class VtexBackfillProcessor extends WorkerHost {
   }
 
   /**
+   * Importa un pedido que YA avanzo POR FUERA (handling/invoiced): trazabilidad
+   * pura para Generales > Facturados. La confirmacion de WhatsApp NO se dispara
+   * (el guard del service exige ready-for-handling).
+   */
+  private async importExternal(
+    http: AxiosInstance,
+    prisma: Parameters<VtexOrderService['upsertFromDetail']>[0],
+    tenantId: string,
+    accountName: string,
+    orderId: string,
+  ): Promise<boolean> {
+    try {
+      const detail = await withRetry(() => this.vtex.getOrder(http, orderId), MAX_RETRY_PER_ORDER);
+      if (detail.status === 'canceled' || detail.status === 'ready-for-handling') return false;
+      await this.orders.upsertFromDetail(prisma, accountName, detail, tenantId);
+      if (detail.status === 'invoiced') {
+        const row = await prisma.order.findUnique({
+          where: { provider_externalId: { provider: 'vtex', externalId: orderId } },
+          select: { id: true },
+        });
+        if (row) {
+          const already = await prisma.orderEvent.findFirst({
+            where: { orderId: row.id, type: 'vtex_invoiced_external' },
+            select: { id: true },
+          });
+          if (!already) {
+            await prisma.orderEvent.create({
+              data: { orderId: row.id, type: 'vtex_invoiced_external', actorId: null, actorName: 'VTEX', data: {} },
+            });
+          }
+        }
+      }
+      await this.realtime.publish(tenantId, { kind: 'order.upserted', externalId: orderId });
+      return true;
+    } catch (err) {
+      this.logger.warn({ err: extractAxiosErr(err), orderId }, 'importExternal failed — continuing');
+      return false;
+    }
+  }
+
+  /**
    * Pedidos cuyo ID ya no esta en el conjunto vivo de VTEX: se consulta su
-   * estado REAL. Si llego a 'invoiced' (facturado POR FUERA de SmartLogistica)
-   * se CONSERVA marcado como invoiced (trazabilidad, va a Generales >
-   * Facturados); cualquier otro estado (cancelado, etc.) se borra como antes.
+   * estado REAL. CUALQUIER avance mas alla de ready-for-handling (handling,
+   * invoiced...) se CONSERVA con trazabilidad (Generales > Facturados) — nada
+   * de lo procesado POR FUERA se pierde. Solo los CANCELADOS se borran.
    */
   private async removeStale(
     http: AxiosInstance,
@@ -139,7 +207,8 @@ export class VtexBackfillProcessor extends WorkerHost {
     // CRITICO: solo podamos pedidos SIN asignar (warehouseId null). Los pedidos
     // ya asignados a una sede estan "reclamados" y tienen ciclo propio — no se
     // borran aunque VTEX ya no los liste como ready-for-handling. Los ya
-    // marcados 'invoiced' (facturados por fuera) tampoco se re-revisan.
+    // marcados 'invoiced' (cerrados por fuera) tampoco se re-revisan; los que
+    // quedaron en estados intermedios (handling...) SI, hasta que se resuelvan.
     const base = {
       provider: 'vtex',
       accountName,
@@ -150,7 +219,7 @@ export class VtexBackfillProcessor extends WorkerHost {
 
     const stale = await prisma.order.findMany({
       where,
-      select: { id: true, externalId: true },
+      select: { id: true, externalId: true, status: true },
     });
     if (stale.length === 0) return 0;
 
@@ -167,25 +236,31 @@ export class VtexBackfillProcessor extends WorkerHost {
         continue; // sin estado confirmado NO borramos (red de seguridad)
       }
 
-      if (vtexStatus === 'invoiced') {
-        // Facturado por fuera: conservar con trazabilidad.
-        await prisma.order.update({ where: { id: s.id }, data: { status: 'invoiced' } });
-        const already = await prisma.orderEvent.findFirst({
-          where: { orderId: s.id, type: 'vtex_invoiced_external' },
-          select: { id: true },
-        });
-        if (!already) {
-          await prisma.orderEvent.create({
-            data: {
-              orderId: s.id,
-              type: 'vtex_invoiced_external',
-              actorId: null,
-              actorName: 'VTEX',
-              data: {},
-            },
-          });
+      if (vtexStatus !== 'canceled') {
+        // Procesado por fuera: conservar con su estado real.
+        if (vtexStatus !== s.status) {
+          await prisma.order.update({ where: { id: s.id }, data: { status: vtexStatus } });
         }
-        await this.realtime.publish(tenantId, { kind: 'order.upserted', externalId: s.externalId });
+        if (vtexStatus === 'invoiced') {
+          const already = await prisma.orderEvent.findFirst({
+            where: { orderId: s.id, type: 'vtex_invoiced_external' },
+            select: { id: true },
+          });
+          if (!already) {
+            await prisma.orderEvent.create({
+              data: {
+                orderId: s.id,
+                type: 'vtex_invoiced_external',
+                actorId: null,
+                actorName: 'VTEX',
+                data: {},
+              },
+            });
+          }
+        }
+        if (vtexStatus !== s.status) {
+          await this.realtime.publish(tenantId, { kind: 'order.upserted', externalId: s.externalId });
+        }
         continue;
       }
 

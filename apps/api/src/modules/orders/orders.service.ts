@@ -164,9 +164,10 @@ export class OrdersService {
       if (!isAdmin(auth)) throw new ForbiddenException('Sin acceso a pedidos generales');
       where.warehouseId = null;
       if (query.state === 'invoiced') {
-        // Trazabilidad: facturados POR FUERA de SmartLogistica (el reconcile los
-        // conserva marcados como invoiced en vez de borrarlos del espejo).
-        where.status = 'invoiced';
+        // Trazabilidad TOTAL de lo que se procesa POR FUERA de SmartLogistica:
+        // TODO pedido sin asignar que avanzo mas alla de ready-for-handling
+        // (handling, invoiced, lo que sea) vive aqui — nada se borra.
+        where.status = { not: 'ready-for-handling' };
       } else {
         // Espejo de VTEX en ready-for-handling.
         where.status = 'ready-for-handling';
@@ -342,7 +343,10 @@ export class OrdersService {
               ? { some: { type: { in: FINALIZED_EVENTS } } }
               : { none: { type: { in: FINALIZED_EVENTS } } },
         }
-      : { warehouseId: null, status: state === 'invoiced' ? 'invoiced' : 'ready-for-handling' };
+      : {
+          warehouseId: null,
+          status: state === 'invoiced' ? { not: 'ready-for-handling' } : 'ready-for-handling',
+        };
 
     // groupBy, NO findMany+distinct: sin el preview nativeDistinct, Prisma
     // deduplica `distinct` EN MEMORIA y el take no limita el SQL (traeria
@@ -547,9 +551,14 @@ export class OrdersService {
       }),
       prisma.order.findMany({
         where: { id: { in: input.orderIds } },
-        select: { id: true, warehouseId: true, provider: true },
+        select: { id: true, warehouseId: true, provider: true, status: true },
       }),
     ]);
+    // Los EXTERNOS (sin asignar y ya avanzados en VTEX) son solo trazabilidad:
+    // no se asignan a sedes.
+    if (prior.some((p) => !p.warehouseId && p.provider === 'vtex' && p.status !== 'ready-for-handling')) {
+      throw new BadRequestException('Ese pedido se procesó por fuera: es solo trazabilidad, no se puede asignar');
+    }
 
     if (input.warehouseId && (!wh || wh.archived)) {
       throw new NotFoundException('Sede no encontrada o archivada');

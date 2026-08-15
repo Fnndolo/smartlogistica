@@ -97,13 +97,19 @@ export class VtexClient {
 
   async listOrders(
     http: AxiosInstance,
-    params: { status: string; page: number; perPage: number },
+    params: { status: string; page: number; perPage: number; createdFrom?: Date },
   ): Promise<VtexOrderListResponse> {
     const res: AxiosResponse<VtexOrderListResponse> = await http.get('/api/oms/pvt/orders', {
       params: {
         f_status: params.status,
         per_page: params.perPage,
         page: params.page,
+        // Ventana por fecha de creacion (el barrido de trazabilidad externa).
+        ...(params.createdFrom
+          ? {
+              f_creationDate: `creationDate:[${params.createdFrom.toISOString()} TO ${new Date().toISOString()}]`,
+            }
+          : {}),
       },
     });
     return res.data;

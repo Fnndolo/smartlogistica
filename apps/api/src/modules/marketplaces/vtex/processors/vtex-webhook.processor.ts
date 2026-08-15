@@ -110,27 +110,30 @@ export class VtexWebhookProcessor extends WorkerHost {
       return;
     }
 
-    // Facturado POR FUERA de SmartLogistica: se conserva con trazabilidad
-    // (Generales > Facturados) en vez de desaparecer del espejo.
-    if (newStatus === 'invoiced') {
-      await prisma.order.update({ where: { id: order.id }, data: { status: 'invoiced' } });
-      const already = await prisma.orderEvent.findFirst({
-        where: { orderId: order.id, type: 'vtex_invoiced_external' },
-        select: { id: true },
-      });
-      if (!already) {
-        await prisma.orderEvent.create({
-          data: {
-            orderId: order.id,
-            type: 'vtex_invoiced_external',
-            actorId: null,
-            actorName: 'VTEX',
-            data: {},
-          },
+    // Procesado POR FUERA de SmartLogistica: CUALQUIER avance mas alla de
+    // ready-for-handling (handling, invoiced...) se CONSERVA con trazabilidad
+    // en Generales > Facturados. Solo los CANCELADOS se borran del espejo.
+    if (newStatus !== 'canceled') {
+      await prisma.order.update({ where: { id: order.id }, data: { status: newStatus } });
+      if (newStatus === 'invoiced') {
+        const already = await prisma.orderEvent.findFirst({
+          where: { orderId: order.id, type: 'vtex_invoiced_external' },
+          select: { id: true },
         });
+        if (!already) {
+          await prisma.orderEvent.create({
+            data: {
+              orderId: order.id,
+              type: 'vtex_invoiced_external',
+              actorId: null,
+              actorName: 'VTEX',
+              data: {},
+            },
+          });
+        }
       }
       await this.realtime.publish(tenantId, { kind: 'order.upserted', externalId });
-      this.logger.log(`Webhook: ${externalId} facturado POR FUERA (se conserva marcado)`);
+      this.logger.log(`Webhook: ${externalId} avanzo POR FUERA a ${newStatus} (se conserva)`);
       return;
     }
 

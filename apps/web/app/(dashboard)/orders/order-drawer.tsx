@@ -310,7 +310,7 @@ function DrawerContent({
 
   // Facturado POR FUERA de SmartLogistica (cerrado directo en VTEX, sin sede):
   // solo trazabilidad — sin Facturar ni Guia.
-  const external = !order.warehouseId && order.status === 'invoiced';
+  const external = !order.warehouseId && order.status !== 'ready-for-handling';
 
   // PRECARGAR Facturar y Guia apenas se abre el pedido: cuando el usuario
   // entra a esas pestañas, el contenido ya esta en cache (antes esperaba
@@ -597,7 +597,7 @@ function DetalleTab({
   onDeleted?: () => void;
 }) {
   const items = detail?.items ?? order.items;
-  const external = !order.warehouseId && order.status === 'invoiced';
+  const external = !order.warehouseId && order.status !== 'ready-for-handling';
   const me = useCurrentUser();
   const isAdminRole = me?.role === 'OWNER' || me?.role === 'ADMIN';
   // Nombre de plataforma contra el CATALOGO (igual que el badge de la tabla):
