@@ -168,6 +168,54 @@ export function OrderDrawer({
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
+  // ===== Ancho REDIMENSIONABLE (solo escritorio) =====
+  // Minimo = que las pestañas quepan SIN scroll lateral (se mide el nav real).
+  // Maximo = toda la pantalla. Se arrastra desde el borde izquierdo y el ancho
+  // elegido queda guardado (localStorage) para las proximas veces.
+  const asideRef = useRef<HTMLElement>(null);
+  const minWRef = useRef(560);
+  const [width, setWidth] = useState<number | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const saved = Number(window.localStorage.getItem('order-drawer-width'));
+    return Number.isFinite(saved) && saved > 0 ? saved : null;
+  });
+  useEffect(() => {
+    if (!rendered) return;
+    // Medir despues de pintar: scrollWidth del nav de pestañas + su padding.
+    const raf = requestAnimationFrame(() => {
+      const nav = asideRef.current?.querySelector<HTMLElement>('[data-drawer-tabs]');
+      if (!nav) return;
+      const min = Math.min(Math.max(560, nav.scrollWidth + 26), window.innerWidth);
+      minWRef.current = min;
+      setWidth((w) => Math.min(Math.max(w ?? min, min), window.innerWidth));
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [rendered]);
+  const onResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) => {
+      const next = Math.min(
+        Math.max(window.innerWidth - ev.clientX, minWRef.current),
+        window.innerWidth,
+      );
+      setWidth(next);
+    };
+    const up = (ev: PointerEvent) => {
+      handle.releasePointerCapture(e.pointerId);
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', up);
+      const finalW = Math.min(
+        Math.max(window.innerWidth - ev.clientX, minWRef.current),
+        window.innerWidth,
+      );
+      window.localStorage.setItem('order-drawer-width', String(Math.round(finalW)));
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+  };
+
   useEffect(() => {
     if (order) {
       setRendered(order);
@@ -205,15 +253,28 @@ export function OrderDrawer({
         onClick={onClose}
       />
       <aside
+        ref={asideRef}
         role="dialog"
         aria-modal="true"
         className={cn(
-          // Movil: pantalla completa. Escritorio (md+): panel lateral de max-w-xl.
+          // Movil: pantalla completa. Escritorio (md+): panel lateral con ancho
+          // AJUSTABLE (arrastrando el borde izquierdo); por defecto, el minimo
+          // que deja ver TODAS las pestañas sin scroll.
           // bg-card: el drawer es una SUPERFICIE blanca (el lienzo es gris).
-          'shadow-pop absolute right-0 top-0 flex h-full w-full max-w-none flex-col bg-card transition-transform duration-200 ease-out md:max-w-[560px] md:border-l md:border-border',
+          'shadow-pop absolute right-0 top-0 flex h-full w-full max-w-none flex-col bg-card transition-transform duration-200 ease-out md:w-[var(--drawer-w,640px)] md:border-l md:border-border',
           shown ? 'translate-x-0' : 'translate-x-full',
         )}
+        style={width ? ({ '--drawer-w': `${width}px` } as React.CSSProperties) : undefined}
       >
+        {/* Agarradera para redimensionar (solo escritorio). */}
+        <div
+          onPointerDown={onResizeStart}
+          className="group absolute left-0 top-0 z-20 hidden h-full w-2 cursor-col-resize touch-none md:block"
+          aria-label="Ajustar ancho"
+          title="Arrastra para ajustar el ancho"
+        >
+          <div className="mx-auto h-full w-[3px] bg-transparent transition-colors group-hover:bg-primary/35 group-active:bg-primary/55" />
+        </div>
         <DrawerContent
           key={rendered.id}
           order={rendered}
@@ -354,7 +415,7 @@ function DrawerContent({
       {/* Tabs */}
       {/* overflow-y-hidden: NUNCA scroll vertical aqui (aparecia una barrita
           sin sentido). El lateral (auto) solo sale si las tabs no caben. */}
-      <nav className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-border px-3">
+      <nav data-drawer-tabs className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-border px-3">
         {tabs.map((t) => {
           const active = tab === t.id;
           return (

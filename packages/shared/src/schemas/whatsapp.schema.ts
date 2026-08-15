@@ -35,8 +35,18 @@ export type Dialog360TestResult = z.infer<typeof dialog360TestResultSchema>;
 
 // === Mensajes ===
 
-export const waMessageKindSchema = z.enum(['text', 'image', 'video', 'audio', 'file']);
+export const waMessageKindSchema = z.enum(['text', 'image', 'video', 'audio', 'file', 'sticker']);
 export type WaMessageKind = z.infer<typeof waMessageKindSchema>;
+
+/** Cita dentro de un mensaje (respuesta): resumen del mensaje citado. */
+export const waReplyRefSchema = z.object({
+  id: z.string(),
+  direction: z.enum(['in', 'out']),
+  kind: waMessageKindSchema,
+  body: z.string().nullable(),
+  authorName: z.string().nullable(),
+});
+export type WaReplyRef = z.infer<typeof waReplyRefSchema>;
 
 export const waMessageSchema = z.object({
   id: z.string(),
@@ -49,6 +59,12 @@ export const waMessageSchema = z.object({
   authorName: z.string().nullable(),
   /** Botones del mensaje (titulos) — se PINTAN en el hilo igual que en el cel. */
   buttons: z.array(z.string()).default([]),
+  /** Mensaje citado (respuesta con quote), como en WhatsApp. */
+  replyTo: waReplyRefSchema.nullable().default(null),
+  /** Reacciones sobre el mensaje (emoji chips): mine = del negocio. */
+  reactions: z.array(z.object({ emoji: z.string(), mine: z.boolean() })).default([]),
+  /** Chulitos de salientes: sent | delivered | read | failed (null = sin dato). */
+  status: z.enum(['sent', 'delivered', 'read', 'failed']).nullable().default(null),
   createdAt: z.string(),
 });
 export type WaMessage = z.infer<typeof waMessageSchema>;

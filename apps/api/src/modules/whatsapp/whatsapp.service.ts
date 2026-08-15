@@ -136,8 +136,15 @@ interface WaMessageRow {
   mediaUrl: string | null;
   authorName: string | null;
   buttons?: unknown;
+  replyToId?: string | null;
+  reactions?: unknown;
+  status?: string | null;
   createdAt: Date;
 }
+
+const WA_KINDS = ['text', 'image', 'video', 'audio', 'file', 'sticker'] as const;
+const waKindOf = (k: string): WaMessageDto['kind'] =>
+  (WA_KINDS as readonly string[]).includes(k) ? (k as WaMessageDto['kind']) : 'text';
 
 /** Ultimos 10 digitos (CO): "+57 300 123 4567" -> "3001234567". */
 function tenDigits(phone: string): string {
@@ -283,11 +290,12 @@ export class WhatsappService {
       prisma.waContact.findUnique({ where: { phone } }),
     ]);
 
+    const byId = new Map(rows.map((r) => [r.id, r] as const));
     return {
       phone,
       connected: Boolean(conn),
       contactName: contact?.name ?? null,
-      messages: await Promise.all(rows.map((r) => this.toDto(r))),
+      messages: await Promise.all(rows.map((r) => this.toDto(r, byId))),
     };
   }
 
@@ -314,6 +322,7 @@ export class WhatsappService {
         authorId: auth.userId,
         authorName: auth.name?.trim() || auth.email,
         externalId: wamid,
+        status: wamid ? 'sent' : null,
       },
     });
     await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
@@ -363,6 +372,7 @@ export class WhatsappService {
         authorId: auth.userId,
         authorName: auth.name?.trim() || auth.email,
         externalId: wamid,
+        status: wamid ? 'sent' : null,
       },
     });
     await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
@@ -482,6 +492,7 @@ export class WhatsappService {
         authorId: auth.userId,
         authorName: auth.name?.trim() || auth.email,
         externalId: wamid,
+        status: wamid ? 'sent' : null,
         ...(tpl.buttons.length
           ? { buttons: tpl.buttons as unknown as Prisma.InputJsonValue }
           : {}),
@@ -563,12 +574,17 @@ export class WhatsappService {
         }
         // Estados: 'failed' = Meta NO entrego (ej. 131049) -> el hilo lo anota
         // y, si era una confirmacion, el pedido VUELVE a "Sin enviar".
+        // sent/delivered/read -> chulitos del mensaje (como WhatsApp).
         for (const s of v.statuses ?? []) {
-          if (s?.status === 'failed' && s?.id) {
+          if (!s?.id) continue;
+          if (s.status === 'failed') {
             const phone = await this.handleFailedStatus(tenantId, prisma, s).catch((err) => {
               this.logger.warn(`Status failed no procesado: ${err instanceof Error ? err.message : err}`);
               return null;
             });
+            if (phone) touched.add(phone);
+          } else if (['sent', 'delivered', 'read'].includes(String(s.status))) {
+            const phone = await this.applyDeliveryStatus(prisma, s).catch(() => null);
             if (phone) touched.add(phone);
           }
         }
@@ -750,6 +766,10 @@ export class WhatsappService {
 
     const msg = await prisma.waMessage.findUnique({ where: { externalId: wamid } });
     if (!msg) return null;
+    // Chulito rojo del mensaje que no llego.
+    await prisma.waMessage
+      .update({ where: { id: msg.id }, data: { status: 'failed' } })
+      .catch(() => null);
 
     // Nota en el hilo (dedup natural: externalId unico "fail:<wamid>").
     try {
@@ -790,6 +810,23 @@ export class WhatsappService {
     return msg.phone;
   }
 
+  /**
+   * Chulito del mensaje (sent -> delivered -> read), sin degradar nunca
+   * (los webhooks pueden llegar en desorden). Devuelve el telefono del hilo.
+   */
+  private async applyDeliveryStatus(prisma: PrismaClient, s: Any): Promise<string | null> {
+    const rank: Record<string, number> = { sent: 1, delivered: 2, read: 3, failed: 4 };
+    const next = String(s.status);
+    const row = await prisma.waMessage.findUnique({
+      where: { externalId: String(s.id) },
+      select: { id: true, phone: true, status: true },
+    });
+    if (!row) return null;
+    if ((rank[row.status ?? ''] ?? 0) >= (rank[next] ?? 0)) return null;
+    await prisma.waMessage.update({ where: { id: row.id }, data: { status: next } });
+    return row.phone;
+  }
+
   /** Guarda UN mensaje del payload Cloud (con dedup por wamid). Devuelve el telefono. */
   private async storeCloudMessage(
     tenantId: string,
@@ -812,6 +849,33 @@ export class WhatsappService {
       }
 
       const type = String(m.type ?? 'text');
+
+      // REACCION: no es una burbuja — se pega al mensaje reaccionado (como en
+      // WhatsApp). emoji vacio = quitar la reaccion. mine = reaccion del negocio.
+      if (type === 'reaction') {
+        const targetWamid = typeof m.reaction?.message_id === 'string' ? m.reaction.message_id : null;
+        if (!targetWamid) return null;
+        const target = await prisma.waMessage.findUnique({
+          where: { externalId: targetWamid },
+          select: { id: true, reactions: true },
+        });
+        if (!target) return null;
+        const emoji = typeof m.reaction?.emoji === 'string' ? m.reaction.emoji : '';
+        const mine = direction === 'out';
+        const prev = (Array.isArray(target.reactions) ? target.reactions : []) as Array<{
+          emoji: string;
+          mine: boolean;
+        }>;
+        // Una reaccion por lado (cliente/negocio): se reemplaza o se quita.
+        const rest = prev.filter((r) => r.mine !== mine);
+        const next = emoji ? [...rest, { emoji, mine }] : rest;
+        await prisma.waMessage.update({
+          where: { id: target.id },
+          data: { reactions: next as unknown as Prisma.InputJsonValue },
+        });
+        return phone;
+      }
+
       let kind: WaMessageDto['kind'] = 'text';
       let body: string | null = null;
       let attachmentKey: string | null = null;
@@ -821,7 +885,7 @@ export class WhatsappService {
         body = m.text?.body ?? null;
       } else if (['image', 'video', 'audio', 'document', 'sticker'].includes(type)) {
         const media = m[type] ?? {};
-        kind = type === 'document' ? 'file' : type === 'sticker' ? 'image' : (type as WaMessageDto['kind']);
+        kind = type === 'document' ? 'file' : (type as WaMessageDto['kind']);
         body = media.caption ?? media.filename ?? null;
         // Bajar el medio YA (la URL de Meta expira en 5 min) y guardarlo nuestro.
         if (media.id) {
@@ -860,6 +924,17 @@ export class WhatsappService {
         body = `[${type}]`;
       }
 
+      // CITA (responder deslizando): context.id = wamid del mensaje citado.
+      let replyToId: string | null = null;
+      const quotedWamid = typeof m.context?.id === 'string' ? m.context.id : null;
+      if (quotedWamid) {
+        const quoted = await prisma.waMessage.findUnique({
+          where: { externalId: quotedWamid },
+          select: { id: true },
+        });
+        replyToId = quoted?.id ?? null;
+      }
+
       await prisma.waMessage.create({
         data: {
           phone,
@@ -868,6 +943,9 @@ export class WhatsappService {
           body,
           attachmentKey,
           mediaUrl,
+          replyToId,
+          // Los echoes del celular ya salieron entregados al servidor.
+          status: direction === 'out' ? 'sent' : null,
           // contactId reutilizado como stash de diagnostico del media id fallido.
           contactId: (m as Any).__failedMediaId ? `media:${(m as Any).__failedMediaId}` : null,
           authorName:
@@ -1069,6 +1147,7 @@ export class WhatsappService {
             body: rendered,
             authorName: 'SmartLogística',
             externalId: wamid,
+            status: wamid ? 'sent' : null,
             buttons: (d360.mode === 'sandbox'
               ? ['Datos correctos ✅', 'Modificar dirección']
               : tplButtons) as unknown as Prisma.InputJsonValue,
@@ -1084,21 +1163,38 @@ export class WhatsappService {
 
   // === Helpers ===
 
-  private async toDto(r: WaMessageRow): Promise<WaMessageDto> {
+  private async toDto(r: WaMessageRow, byId?: Map<string, WaMessageRow>): Promise<WaMessageDto> {
     const mediaUrl = r.attachmentKey
       ? await this.storage.getSignedUrl(r.attachmentKey).catch(() => null)
       : r.mediaUrl;
-    const kind = ['text', 'image', 'video', 'audio', 'file'].includes(r.kind)
-      ? (r.kind as WaMessageDto['kind'])
-      : 'text';
+    const quoted = r.replyToId && byId ? byId.get(r.replyToId) : undefined;
+    const reactions = Array.isArray(r.reactions)
+      ? (r.reactions as Array<{ emoji?: unknown; mine?: unknown }>)
+          .filter((x) => x && typeof x.emoji === 'string' && x.emoji)
+          .map((x) => ({ emoji: String(x.emoji), mine: Boolean(x.mine) }))
+      : [];
+    const status = ['sent', 'delivered', 'read', 'failed'].includes(r.status ?? '')
+      ? (r.status as WaMessageDto['status'])
+      : null;
     return {
       id: r.id,
       direction: r.direction === 'out' ? 'out' : 'in',
-      kind,
+      kind: waKindOf(r.kind),
       body: r.body,
       mediaUrl,
       authorName: r.authorName,
       buttons: Array.isArray(r.buttons) ? (r.buttons as unknown[]).map(String) : [],
+      replyTo: quoted
+        ? {
+            id: quoted.id,
+            direction: quoted.direction === 'out' ? 'out' : 'in',
+            kind: waKindOf(quoted.kind),
+            body: quoted.body,
+            authorName: quoted.authorName,
+          }
+        : null,
+      reactions,
+      status,
       createdAt: r.createdAt.toISOString(),
     };
   }

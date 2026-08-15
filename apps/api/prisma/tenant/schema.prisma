@@ -190,6 +190,12 @@ model WaMessage {
   contactId     String? // legado (id de contacto del proveedor anterior) / stash "media:<id>"
   // Botones del mensaje (titulos, solo para PINTARLOS en el hilo como en el cel).
   buttons       Json?
+  // Cita (responder deslizando): id del WaMessage citado.
+  replyToId     String?
+  // Reacciones sobre el mensaje: [{ emoji, mine }] (mine = del negocio).
+  reactions     Json?
+  // Chulitos de salientes: sent | delivered | read | failed.
+  status        String?
   // Id del mensaje en WhatsApp (wamid de la Cloud API): dedup de reentregas.
   externalId    String?  @unique
   createdAt     DateTime @default(now())
