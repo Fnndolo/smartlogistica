@@ -96,14 +96,6 @@ const emojiCount = (s: string): number => {
   }
 };
 
-/** Color estable por autor (como los nombres en los grupos de WhatsApp). */
-const NAME_COLORS = ['#e17bb5', '#53bdeb', '#06cf9c', '#fa6533', '#ffbc38', '#a791f5', '#02a698'];
-const nameColor = (name: string): string => {
-  let h = 0;
-  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
-  return NAME_COLORS[Math.abs(h) % NAME_COLORS.length] ?? '#06cf9c';
-};
-
 const timeOf = (iso: string): string => format(new Date(iso), 'h:mm aaaa', { locale: es });
 
 const dayLabel = (iso: string): string => {
@@ -647,7 +639,7 @@ function WaBubble({ message: m, prev }: { message: WaMessage; prev?: WaMessage }
                     : 'rounded-[7.5px] rounded-tl-none',
               )}
             >
-              <BubbleContent message={m} mine={mine} pending={pending} grouped={Boolean(grouped)} />
+              <BubbleContent message={m} mine={mine} pending={pending} />
             </div>
             <ReactionChips message={m} mine={mine} />
           </div>
@@ -676,7 +668,7 @@ function BareMessage({
       {sticker ? (
         m.mediaUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={m.mediaUrl} alt="Sticker" decoding="async" className="h-auto w-[160px]" />
+          <img src={m.mediaUrl} alt="Sticker" decoding="async" className="h-auto w-[180px]" />
         ) : (
           <span className="text-[13px] italic text-[#54656f] dark:text-[#8696a0]">🩵 Sticker (no se pudo descargar)</span>
         )
@@ -752,12 +744,10 @@ function BubbleContent({
   message: m,
   mine,
   pending,
-  grouped,
 }: {
   message: WaMessage;
   mine: boolean;
   pending: boolean;
-  grouped: boolean;
 }) {
   const timeRow = (onMedia = false) => (
     <span
@@ -771,19 +761,11 @@ function BubbleContent({
     </span>
   );
 
-  const authorRow =
-    mine && m.authorName && !grouped ? (
-      <p className="px-2 pt-1 text-[12.5px] font-semibold" style={{ color: nameColor(m.authorName) }}>
-        {m.authorName}
-      </p>
-    ) : null;
-
   // ===== Medios (foto / video) =====
   if ((m.kind === 'image' || m.kind === 'video') && m.mediaUrl) {
     const caption = m.body && !/\.(jpe?g|png|gif|webp|mp4|mov|3gp)$/i.test(m.body) ? m.body : null;
     return (
       <div className="p-[3px]">
-        {authorRow}
         {m.replyTo ? <ReplyQuote replyTo={m.replyTo} mine={mine} /> : null}
         <div className="relative overflow-hidden rounded-[6px]">
           {m.kind === 'image' ? (
@@ -814,7 +796,6 @@ function BubbleContent({
   if (m.kind === 'audio' && m.mediaUrl) {
     return (
       <div className="px-2 py-1.5">
-        {authorRow}
         <audio src={m.mediaUrl} controls className="my-1 w-[240px] max-w-full" />
         <div className="flex justify-end">{timeRow()}</div>
       </div>
@@ -825,7 +806,6 @@ function BubbleContent({
   if (m.kind === 'file' && m.mediaUrl) {
     return (
       <div className="p-[5px]">
-        {authorRow}
         {m.replyTo ? <ReplyQuote replyTo={m.replyTo} mine={mine} /> : null}
         <DocCard name={m.body ?? 'Documento'} url={m.mediaUrl} mine={mine} />
         <div className="flex justify-end px-1 pt-0.5">{timeRow()}</div>
@@ -839,7 +819,6 @@ function BubbleContent({
       m.kind === 'image' ? '📷 Foto' : m.kind === 'video' ? '🎬 Video' : m.kind === 'audio' ? '🎙️ Audio' : '📎 Archivo';
     return (
       <div className="px-2 py-1.5">
-        {authorRow}
         <p className="italic text-[#667781] dark:text-[#8696a0]">
           {label}
           {m.body ? ` · ${m.body}` : ' (no se pudo descargar)'}
@@ -849,18 +828,21 @@ function BubbleContent({
     );
   }
 
-  // ===== Texto (con cita, botones de plantilla y hora "flotada" al final) =====
+  // ===== Texto (con cita y botones de plantilla) =====
+  // La hora va ANCLADA abajo-derecha (como WhatsApp): el espaciador invisible
+  // al final del texto le reserva el campo en la ultima linea.
   return (
     <div>
-      {authorRow}
       {m.replyTo ? <ReplyQuote replyTo={m.replyTo} mine={mine} /> : null}
-      <div className="px-2 pb-1.5 pt-1">
+      <div className="relative px-2 pb-[7px] pt-[6px]">
         <p className="whitespace-pre-wrap break-words">
           {m.body}
-          {/* espaciador invisible para que la hora quepa a la derecha */}
-          <span className="invisible inline-block h-0 pl-[70px]" aria-hidden />
+          <span
+            className={cn('inline-block h-0', mine ? 'w-[88px]' : 'w-[62px]')}
+            aria-hidden
+          />
         </p>
-        <span className="float-right -mt-[15px] ml-2">{timeRow()}</span>
+        <span className="absolute bottom-[3px] right-[7px]">{timeRow()}</span>
       </div>
       {m.buttons && m.buttons.length > 0 ? (
         <div>

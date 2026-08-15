@@ -1168,6 +1168,12 @@ export class WhatsappService {
       ? await this.storage.getSignedUrl(r.attachmentKey).catch(() => null)
       : r.mediaUrl;
     const quoted = r.replyToId && byId ? byId.get(r.replyToId) : undefined;
+    // Stickers de ANTES del kind propio: quedaron como image .webp — se
+    // retro-detectan para pintarlos como sticker (sueltos, sin burbuja).
+    const kind =
+      waKindOf(r.kind) === 'image' && (r.attachmentKey ?? '').toLowerCase().endsWith('.webp')
+        ? ('sticker' as const)
+        : waKindOf(r.kind);
     const reactions = Array.isArray(r.reactions)
       ? (r.reactions as Array<{ emoji?: unknown; mine?: unknown }>)
           .filter((x) => x && typeof x.emoji === 'string' && x.emoji)
@@ -1179,7 +1185,7 @@ export class WhatsappService {
     return {
       id: r.id,
       direction: r.direction === 'out' ? 'out' : 'in',
-      kind: waKindOf(r.kind),
+      kind,
       body: r.body,
       mediaUrl,
       authorName: r.authorName,
