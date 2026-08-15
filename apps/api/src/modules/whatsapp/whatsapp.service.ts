@@ -572,6 +572,40 @@ export class WhatsappService {
           const phone = await this.storeCloudMessage(tenantId, prisma, m, 'out', names);
           if (phone) touched.add(phone);
         }
+        // HISTORIAL de coexistencia (hasta 6 meses del celular, en fases y
+        // chunks): se importa TODO con su fecha/estado originales (dedup por
+        // wamid). Sin SSE por mensaje (pueden ser miles) — refetch al final.
+        const bizPhone = tenDigits(String(v.metadata?.display_phone_number ?? ''));
+        for (const h of v.history ?? []) {
+          let imported = 0;
+          for (const th of h.threads ?? []) {
+            for (const hm of th.messages ?? []) {
+              const dir =
+                bizPhone && tenDigits(String(hm?.from ?? '')) === bizPhone ? 'out' : 'in';
+              const phone = await this.storeCloudMessage(tenantId, prisma, hm, dir, names, {
+                instant: false,
+              });
+              if (phone) {
+                touched.add(phone);
+                imported++;
+              }
+            }
+          }
+          this.logger.log(
+            `Historial coexistencia: fase ${h?.metadata?.phase ?? '?'} chunk ${h?.metadata?.chunk_order ?? '?'} ` +
+              `progreso ${h?.metadata?.progress ?? '?'} -> ${imported} mensajes importados`,
+          );
+        }
+        // Contactos del celular (smb_app_state_sync): nombres para los hilos.
+        for (const s of v.state_sync ?? []) {
+          if (s?.type !== 'contact' || !s.contact?.phone_number) continue;
+          const p = tenDigits(String(s.contact.phone_number));
+          const name = String(s.contact.full_name ?? s.contact.first_name ?? '').trim();
+          if (p.length < 7 || !name || s.action === 'remove') continue;
+          await prisma.waContact
+            .upsert({ where: { phone: p }, create: { phone: p, contactId: '', name }, update: { name } })
+            .catch(() => null);
+        }
         // Estados: 'failed' = Meta NO entrego (ej. 131049) -> el hilo lo anota
         // y, si era una confirmacion, el pedido VUELVE a "Sin enviar".
         // sent/delivered/read -> chulitos del mensaje (como WhatsApp).
@@ -828,13 +862,17 @@ export class WhatsappService {
     return row.phone;
   }
 
-  /** Guarda UN mensaje del payload Cloud (con dedup por wamid). Devuelve el telefono. */
+  /**
+   * Guarda UN mensaje del payload Cloud (con dedup por wamid). Devuelve el
+   * telefono. `instant:false` (import de historial) no publica SSE por mensaje.
+   */
   private async storeCloudMessage(
     tenantId: string,
     prisma: PrismaClient,
     m: Any,
     direction: 'in' | 'out',
     names: Map<string, string>,
+    opts: { instant?: boolean } = {},
   ): Promise<string | null> {
     try {
       const rawPhone = direction === 'in' ? m.from : (m.to ?? m.recipient_id ?? m.from);
@@ -936,6 +974,24 @@ export class WhatsappService {
         replyToId = quoted?.id ?? null;
       }
 
+      // Fecha original del mensaje (clave para el HISTORIAL importado) y
+      // estado real si viene del historial (history_context).
+      const ts = Number(m.timestamp);
+      const createdAt = Number.isFinite(ts) && ts > 1_000_000_000 ? new Date(ts * 1000) : null;
+      const hStatus =
+        typeof m.history_context?.status === 'string'
+          ? String(m.history_context.status).toLowerCase()
+          : null;
+      const outStatus = hStatus
+        ? hStatus === 'read' || hStatus === 'played'
+          ? 'read'
+          : hStatus === 'delivered'
+            ? 'delivered'
+            : hStatus === 'error'
+              ? 'failed'
+              : 'sent'
+        : 'sent';
+
       const row = await prisma.waMessage.create({
         data: {
           phone,
@@ -945,8 +1001,8 @@ export class WhatsappService {
           attachmentKey,
           mediaUrl,
           replyToId,
-          // Los echoes del celular ya salieron entregados al servidor.
-          status: direction === 'out' ? 'sent' : null,
+          ...(createdAt ? { createdAt } : {}),
+          status: direction === 'out' ? outStatus : null,
           // contactId reutilizado como stash de diagnostico del media id fallido.
           contactId: (m as Any).__failedMediaId ? `media:${(m as Any).__failedMediaId}` : null,
           authorName:
@@ -956,8 +1012,9 @@ export class WhatsappService {
           externalId,
         },
       });
-      // Pintado INSTANTANEO en los paneles abiertos (el mensaje va en el evento).
-      await this.publishWaMessage(tenantId, prisma, row);
+      // Pintado INSTANTANEO en los paneles abiertos (el mensaje va en el
+      // evento). En import de historial NO (pueden ser miles).
+      if (opts.instant !== false) await this.publishWaMessage(tenantId, prisma, row);
 
       // Refrescar el nombre del contacto si WhatsApp lo trae.
       const name = names.get(String(rawPhone));
