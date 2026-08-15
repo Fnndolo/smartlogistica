@@ -1040,9 +1040,9 @@ function SendConfirmationButton({ orderId }: { orderId: string }) {
   const qc = useQueryClient();
   const [sending, setSending] = useState(false);
 
-  // TEMPORAL: mientras la integracion de WhatsApp madura, SOLO el propietario
-  // ve el estado/boton; los demas ven el badge normal (como si nada).
-  if (me?.role !== 'OWNER') {
+  // El estado/boton lo ven los ADMINISTRADORES; los operadores ven el badge
+  // normal (el server igual exige rol de admin para enviar).
+  if (me?.role !== 'OWNER' && me?.role !== 'ADMIN') {
     return <Badge dot variant="outline" className="whitespace-nowrap">Sin responder</Badge>;
   }
 

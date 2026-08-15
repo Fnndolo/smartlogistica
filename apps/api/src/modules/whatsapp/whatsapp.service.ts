@@ -325,7 +325,7 @@ export class WhatsappService {
         status: wamid ? 'sent' : null,
       },
     });
-    await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    await this.publishWaMessage(tenantId, prisma, row);
     return this.toDto(row);
   }
 
@@ -375,7 +375,7 @@ export class WhatsappService {
         status: wamid ? 'sent' : null,
       },
     });
-    await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    await this.publishWaMessage(tenantId, prisma, row);
     return this.toDto(row);
   }
 
@@ -498,7 +498,7 @@ export class WhatsappService {
           : {}),
       },
     });
-    await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    await this.publishWaMessage(tenantId, prisma, row);
     return this.toDto(row);
   }
 
@@ -626,14 +626,14 @@ export class WhatsappService {
     const to = `57${phone}`;
     const say = async (body: string): Promise<void> => {
       const wamid = await this.dialog360.sendText(d360.http, d360.mode, to, body);
-      await prisma.waMessage.create({
-        data: { phone, direction: 'out', kind: 'text', body, authorName: 'SmartLogística', externalId: wamid },
+      const row = await prisma.waMessage.create({
+        data: { phone, direction: 'out', kind: 'text', body, authorName: 'SmartLogística', externalId: wamid, status: wamid ? 'sent' : null },
       });
-      await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+      await this.publishWaMessage(tenantId, prisma, row);
     };
     const sayButtons = async (body: string, buttons: Array<{ id: string; title: string }>): Promise<void> => {
       const wamid = await this.dialog360.sendInteractiveButtons(d360.http, d360.mode, to, body, buttons);
-      await prisma.waMessage.create({
+      const row = await prisma.waMessage.create({
         data: {
           phone,
           direction: 'out',
@@ -641,10 +641,11 @@ export class WhatsappService {
           body,
           authorName: 'SmartLogística',
           externalId: wamid,
+          status: wamid ? 'sent' : null,
           buttons: buttons.map((b) => b.title) as Prisma.InputJsonValue,
         },
       });
-      await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+      await this.publishWaMessage(tenantId, prisma, row);
     };
     const setState = async (flowState: FlowState | null, draftAddress: string | null): Promise<void> => {
       await prisma.waContact.upsert({
@@ -935,7 +936,7 @@ export class WhatsappService {
         replyToId = quoted?.id ?? null;
       }
 
-      await prisma.waMessage.create({
+      const row = await prisma.waMessage.create({
         data: {
           phone,
           direction,
@@ -955,6 +956,8 @@ export class WhatsappService {
           externalId,
         },
       });
+      // Pintado INSTANTANEO en los paneles abiertos (el mensaje va en el evento).
+      await this.publishWaMessage(tenantId, prisma, row);
 
       // Refrescar el nombre del contacto si WhatsApp lo trae.
       const name = names.get(String(rawPhone));
@@ -1127,7 +1130,7 @@ export class WhatsappService {
         throw this.translateError(err, '360dialog no pudo enviar la confirmación');
       }
 
-      await Promise.all([
+      const [, waRow] = await Promise.all([
         prisma.orderEvent.create({
           data: {
             orderId,
@@ -1154,7 +1157,7 @@ export class WhatsappService {
           },
         }),
       ]);
-      await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+      await this.publishWaMessage(tenantId, prisma, waRow);
       this.logger.log(`Confirmacion Cloud enviada: pedido ${order.externalId} -> ${phone}`);
       return;
     }
@@ -1187,6 +1190,32 @@ export class WhatsappService {
   }
 
   // === Helpers ===
+
+  /**
+   * Publica wa.message CON el mensaje ya montado: el panel lo PINTA AL
+   * INSTANTE (cero refetch). El evento generico {phone} queda como respaldo.
+   */
+  private async publishWaMessage(
+    tenantId: string,
+    prisma: PrismaClient,
+    row: WaMessageRow & { phone: string },
+  ): Promise<void> {
+    try {
+      let byId: Map<string, WaMessageRow> | undefined;
+      if (row.replyToId) {
+        const quoted = await prisma.waMessage.findUnique({ where: { id: row.replyToId } });
+        if (quoted) byId = new Map([[quoted.id, quoted as WaMessageRow]]);
+      }
+      const message = await this.toDto(row, byId);
+      await this.realtime.publish(tenantId, {
+        kind: 'wa.message',
+        phone: row.phone,
+        message: message as unknown as Record<string, unknown>,
+      });
+    } catch {
+      await this.realtime.publish(tenantId, { kind: 'wa.message', phone: row.phone });
+    }
+  }
 
   private async toDto(r: WaMessageRow, byId?: Map<string, WaMessageRow>): Promise<WaMessageDto> {
     const mediaUrl = r.attachmentKey
@@ -1231,11 +1260,9 @@ export class WhatsappService {
   }
 
   private assertAdmin(auth: AuthContext): void {
-    // TEMPORAL (pedido del propietario): mientras la integracion de WhatsApp
-    // madura, TODO WhatsApp es SOLO del OWNER (el primer administrador) — los
-    // demas ni lo ven. Para abrirlo al resto de admins: volver a isAdmin(auth).
-    if (auth.role !== 'OWNER') {
-      throw new ForbiddenException('WhatsApp está en pruebas: solo el propietario puede usarlo');
+    // WhatsApp es de ADMINISTRADORES (propietario + admins); operadores no.
+    if (auth.role !== 'OWNER' && auth.role !== 'ADMIN') {
+      throw new ForbiddenException('WhatsApp es solo para administradores');
     }
   }
 

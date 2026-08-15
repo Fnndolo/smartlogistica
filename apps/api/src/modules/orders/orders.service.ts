@@ -225,12 +225,7 @@ export class OrdersService {
     }
     if (query.q) {
       const q = query.q;
-      where.OR = [
-        { customerName: { contains: q, mode: 'insensitive' } },
-        { externalId: { contains: q, mode: 'insensitive' } },
-        { customerDocument: { contains: q, mode: 'insensitive' } },
-        { items: { some: { name: { contains: q, mode: 'insensitive' } } } },
-      ];
+      where.OR = this.searchConditions(q);
     }
 
     const orderBy = this.buildOrderBy(query.sort, query.dir);
@@ -1365,6 +1360,26 @@ export class OrdersService {
    * facturados) por cliente, N.º, cedula o producto. Un operador solo busca en
    * sus sedes. Devuelve lo minimo para abrir el pedido donde corresponde.
    */
+  /**
+   * Condiciones del buscador (lista + buscador global): nombre, N° de pedido,
+   * cedula, producto y TELEFONO. Para el telefono se busca tambien solo con
+   * los digitos (los VTEX guardan "+57..." y los manuales los 10 digitos).
+   */
+  private searchConditions(q: string): Prisma.OrderWhereInput[] {
+    const conditions: Prisma.OrderWhereInput[] = [
+      { customerName: { contains: q, mode: 'insensitive' } },
+      { externalId: { contains: q, mode: 'insensitive' } },
+      { customerDocument: { contains: q, mode: 'insensitive' } },
+      { customerPhone: { contains: q, mode: 'insensitive' } },
+      { items: { some: { name: { contains: q, mode: 'insensitive' } } } },
+    ];
+    const digits = q.replace(/\D/g, '');
+    if (digits.length >= 4 && digits !== q) {
+      conditions.push({ customerPhone: { contains: digits } });
+    }
+    return conditions;
+  }
+
   async globalSearch(q: string, auth: AuthContext): Promise<OrderSearchResult[]> {
     const { prisma } = getTenantContext();
     const scope = await this.warehouses.accessibleWarehouseIds(auth);
@@ -1372,12 +1387,7 @@ export class OrdersService {
     const rows = await prisma.order.findMany({
       where: {
         ...(scope ? { warehouseId: { in: scope } } : {}),
-        OR: [
-          { customerName: { contains: q, mode: 'insensitive' } },
-          { externalId: { contains: q, mode: 'insensitive' } },
-          { customerDocument: { contains: q, mode: 'insensitive' } },
-          { items: { some: { name: { contains: q, mode: 'insensitive' } } } },
-        ],
+        OR: this.searchConditions(q),
       },
       orderBy: { marketplaceCreatedAt: 'desc' },
       take: 20,

@@ -176,6 +176,18 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
       (event) => {
         if (event?.kind !== 'wa.message') return;
         if (event.phone && phoneRef.current && event.phone !== phoneRef.current) return;
+        // INSTANTANEO: si el evento trae el mensaje completo, se pinta YA
+        // (cero refetch). El evento generico {phone} queda como respaldo.
+        const msg = (event as { message?: WaMessage }).message;
+        if (msg?.id) {
+          qc.setQueryData<WaThread>(['wa-thread', orderId], (old) => {
+            if (!old) return old;
+            return old.messages.some((x) => x.id === msg.id)
+              ? { ...old, messages: old.messages.map((x) => (x.id === msg.id ? msg : x)) }
+              : { ...old, messages: [...old.messages, msg] };
+          });
+          return;
+        }
         qc.invalidateQueries({ queryKey: ['wa-thread', orderId] });
       },
       [qc, orderId],
@@ -225,11 +237,17 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
       appendMessage({ ...optimistic(vars.body), id: vars.tempId });
     },
     onSuccess: (msg, vars) => {
-      qc.setQueryData<WaThread>(['wa-thread', orderId], (old) =>
-        old
-          ? { ...old, messages: old.messages.map((x) => (x.id === vars.tempId ? msg : x)) }
-          : old,
-      );
+      // Si el SSE ya trajo el mensaje real, solo se quita la burbuja temporal.
+      qc.setQueryData<WaThread>(['wa-thread', orderId], (old) => {
+        if (!old) return old;
+        const already = old.messages.some((x) => x.id === msg.id);
+        return {
+          ...old,
+          messages: already
+            ? old.messages.filter((x) => x.id !== vars.tempId)
+            : old.messages.map((x) => (x.id === vars.tempId ? msg : x)),
+        };
+      });
     },
     onError: (err, vars) => {
       qc.setQueryData<WaThread>(['wa-thread', orderId], (old) =>
@@ -263,11 +281,17 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
       });
     },
     onSuccess: (msg, vars) => {
-      qc.setQueryData<WaThread>(['wa-thread', orderId], (old) =>
-        old
-          ? { ...old, messages: old.messages.map((x) => (x.id === vars.tempId ? msg : x)) }
-          : old,
-      );
+      // Si el SSE ya trajo el mensaje real, solo se quita la burbuja temporal.
+      qc.setQueryData<WaThread>(['wa-thread', orderId], (old) => {
+        if (!old) return old;
+        const already = old.messages.some((x) => x.id === msg.id);
+        return {
+          ...old,
+          messages: already
+            ? old.messages.filter((x) => x.id !== vars.tempId)
+            : old.messages.map((x) => (x.id === vars.tempId ? msg : x)),
+        };
+      });
     },
     onError: (err, vars) => {
       qc.setQueryData<WaThread>(['wa-thread', orderId], (old) =>

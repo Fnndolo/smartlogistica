@@ -347,9 +347,8 @@ function DrawerContent({
           icon: typeof Info;
         }[])
       : []),
-    // WhatsApp de ULTIMA. TEMPORAL: solo el PROPIETARIO (primer administrador)
-    // mientras la integracion de WhatsApp madura — los demas ni la ven.
-    ...(me?.role === 'OWNER'
+    // WhatsApp de ULTIMA, para todos los administradores.
+    ...(canManage
       ? ([{ id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle }] as {
           id: Tab;
           label: string;
@@ -477,7 +476,7 @@ function DrawerContent({
             <ActividadTab orderId={order.id} />
           </TabPane>
         ) : null}
-        {me?.role === 'OWNER' ? (
+        {canManage ? (
           <TabPane active={tab === 'whatsapp'}>
             <WhatsappPanel orderId={order.id} active={tab === 'whatsapp'} />
           </TabPane>

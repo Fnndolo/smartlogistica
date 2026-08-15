@@ -29,7 +29,7 @@ const ICON_TILE =
 export function Dialog360ConnectionCard({ initial }: { initial?: Dialog360ConnectionSummary | null }) {
   const qc = useQueryClient();
   const user = useCurrentUser();
-  const canManage = user?.role === 'OWNER';
+  const canManage = user?.role === 'OWNER' || user?.role === 'ADMIN';
 
   const {
     data: connection,
