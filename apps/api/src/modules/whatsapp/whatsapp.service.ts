@@ -55,14 +55,17 @@ const CONFIRMATION_MAX_AGE_MS = 48 * 3_600_000;
 // nuestra plataforma responde sola segun el boton / la direccion que escriban.
 
 /** Nombre/idioma de la plantilla aprobada (ajustar el dia de la migracion). */
-// OJO: el nombre "order_confirmation" esta VETADO en Meta para este negocio
-// (quedo asociado a categoria MARKETING); la UTILITY nueva es esta.
-const D360_TEMPLATE_NAME = process.env.D360_CONFIRMATION_TEMPLATE ?? 'confirmacion_datos_pedido';
+// PREDETERMINADA: la plantilla ORIGINAL del negocio (emojis), aprobada como
+// UTILITY. OJO: el nombre "order_confirmation" esta VETADO en Meta para este
+// negocio (quedo asociado a categoria MARKETING).
+const D360_TEMPLATE_NAME = process.env.D360_CONFIRMATION_TEMPLATE ?? 'confirmacion_compra_smart';
 const D360_TEMPLATE_LANG = process.env.D360_CONFIRMATION_LANG ?? 'es';
 /**
- * Prioridad de plantillas de confirmacion: se usa la PRIMERA que este aprobada
- * en la WABA. La original con emojis manda; la sobria es el respaldo (ambas
- * UTILITY, creadas por API el dia de la migracion a 360dialog).
+ * Prioridad de plantillas de confirmacion — lista FIJA de nombres (una
+ * plantilla nueva en la WABA jamas se cuela aqui): se usa la primera que este
+ * APROBADA. La original con emojis es la predeterminada; la sobria
+ * (confirmacion_datos_pedido) es solo el respaldo si Meta llegara a
+ * pausar/rechazar la principal.
  */
 const CONFIRMATION_TEMPLATE_PRIORITY = [
   ...(process.env.D360_CONFIRMATION_TEMPLATE ? [process.env.D360_CONFIRMATION_TEMPLATE] : []),
@@ -71,17 +74,21 @@ const CONFIRMATION_TEMPLATE_PRIORITY = [
 ];
 
 /**
- * Cuerpo de la plantilla ({{1}} nombre, {{2}} productos, {{3}} direccion).
- * REDACCION UTILITY (transaccional, sobria): la version con emojis/tono promo
- * quedaba categorizada MARKETING en Meta y chocaba con el tope por usuario
- * (error 131049). DEBE ser identico al texto aprobado en la WABA.
+ * Cuerpo de la plantilla predeterminada ({{1}} nombre, {{2}} productos,
+ * {{3}} direccion): la ORIGINAL del negocio, aprobada como UTILITY en la WABA
+ * (confirmacion_compra_smart). Es solo el RESPALDO para renderizar el hilo /
+ * el sandbox — en produccion el texto se relee de la WABA al enviar.
  */
 const tplBody = (nombre: string, productos: string, direccion: string): string =>
-  `Hola ${nombre}, le escribimos de Smart Gadgets para confirmar los datos de su pedido.\n\n` +
-  `Productos: ${productos}\n` +
-  `Dirección de entrega: ${direccion}\n\n` +
-  `Si desea agregar información adicional a la dirección, quedamos atentos para incluirla ` +
-  `en la guía. ¿Nos confirma que sus datos son correctos?`;
+  `¡Hola ${nombre}! 👋 Es un gusto saludarle 😃\n\n` +
+  `Le escribimos de Smart Gadgets para confirmar su compra de:\n` +
+  `📱 ${productos}\n` +
+  `Por nuestra plataforma de ADDI 💙\n\n` +
+  `📍 A la dirección:\n` +
+  `${direccion}\n\n` +
+  `Si desea agregar alguna información adicional o más específica, quedamos atentos ` +
+  `para incluirla en la guía 😉\n\n` +
+  `🔍 ¿Me confirma si sus datos son correctos? ‼️`;
 
 /** Cuantas variables {{n}} usa el cuerpo de una plantilla. */
 const templateVarCount = (body: string): number =>
