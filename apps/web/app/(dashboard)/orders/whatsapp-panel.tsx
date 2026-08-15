@@ -12,10 +12,14 @@ import {
   FileText,
   Loader2,
   MessageCircle,
+  Mic,
   Paperclip,
+  Pause,
   Phone,
+  Play,
   Plug,
   Send,
+  User,
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -412,7 +416,7 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
             </div>
           ) : (
             thread.messages.map((m, i) => (
-              <WaBubble key={m.id} message={m} prev={thread.messages[i - 1]} />
+              <WaBubble key={m.id} message={m} prev={thread.messages[i - 1]} orderId={orderId} />
             ))
           )}
         </div>
@@ -593,7 +597,15 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
 
 /* ============================== Burbujas ============================== */
 
-function WaBubble({ message: m, prev }: { message: WaMessage; prev?: WaMessage }) {
+function WaBubble({
+  message: m,
+  prev,
+  orderId,
+}: {
+  message: WaMessage;
+  prev?: WaMessage;
+  orderId: string;
+}) {
   const mine = m.direction === 'out';
   const pending = m.id.startsWith('temp-');
   const day = (iso: string) => new Date(iso).toDateString();
@@ -601,7 +613,14 @@ function WaBubble({ message: m, prev }: { message: WaMessage; prev?: WaMessage }
   const grouped = !newDay && prev && prev.direction === m.direction;
   const hasReactions = m.reactions.length > 0;
 
-  const emojiOnly = m.kind === 'text' && isEmojiOnly(m.body) && m.buttons.length === 0 && !m.replyTo;
+  // Solo UN emoji va suelto y gigante; de dos en adelante van EN burbuja
+  // (mas grandes que el texto), calcado a WhatsApp.
+  const emojiOnly =
+    m.kind === 'text' &&
+    isEmojiOnly(m.body) &&
+    emojiCount(m.body ?? '') === 1 &&
+    m.buttons.length === 0 &&
+    !m.replyTo;
   const sticker = m.kind === 'sticker';
 
   return (
@@ -639,7 +658,7 @@ function WaBubble({ message: m, prev }: { message: WaMessage; prev?: WaMessage }
                     : 'rounded-[7.5px] rounded-tl-none',
               )}
             >
-              <BubbleContent message={m} mine={mine} pending={pending} />
+              <BubbleContent message={m} mine={mine} pending={pending} orderId={orderId} />
             </div>
             <ReactionChips message={m} mine={mine} />
           </div>
@@ -661,8 +680,6 @@ function BareMessage({
   pending: boolean;
   sticker: boolean;
 }) {
-  const n = m.body ? emojiCount(m.body) : 0;
-  const sizeClass = n <= 1 ? 'text-[44px] leading-[52px]' : n <= 3 ? 'text-[34px] leading-[42px]' : 'text-[26px] leading-[34px]';
   return (
     <div className={cn('relative flex max-w-[85%] flex-col md:max-w-[65%]', mine ? 'items-end' : 'items-start')}>
       {sticker ? (
@@ -673,9 +690,17 @@ function BareMessage({
           <span className="text-[13px] italic text-[#54656f] dark:text-[#8696a0]">🩵 Sticker (no se pudo descargar)</span>
         )
       ) : (
-        <p className={cn('whitespace-pre-wrap break-words', sizeClass)}>{m.body}</p>
+        <p className="whitespace-pre-wrap break-words text-[44px] leading-[52px]">{m.body}</p>
       )}
-      <span className="mt-0.5 flex items-center gap-1 text-[11px] text-[#667781] dark:text-[#8696a0]">
+      {/* Pastillita de hora + chulitos (verde/blanca), como en WhatsApp. */}
+      <span
+        className={cn(
+          'mt-1 flex items-center gap-1 rounded-[7.5px] px-1.5 py-[2px] text-[11px] shadow-[0_1px_0.5px_rgba(11,20,26,0.13)]',
+          mine
+            ? 'bg-[#d9fdd3] text-[#667781] dark:bg-[#005c4b] dark:text-[#8696a0]'
+            : 'bg-white text-[#667781] dark:bg-[#202c33] dark:text-[#8696a0]',
+        )}
+      >
         {timeOf(m.createdAt)}
         {mine ? <Ticks status={m.status} pending={pending} /> : null}
       </span>
@@ -744,10 +769,12 @@ function BubbleContent({
   message: m,
   mine,
   pending,
+  orderId,
 }: {
   message: WaMessage;
   mine: boolean;
   pending: boolean;
+  orderId: string;
 }) {
   const timeRow = (onMedia = false) => (
     <span
@@ -792,14 +819,9 @@ function BubbleContent({
     );
   }
 
-  // ===== Audio =====
+  // ===== Audio (nota de voz calcada a WhatsApp) =====
   if (m.kind === 'audio' && m.mediaUrl) {
-    return (
-      <div className="px-2 py-1.5">
-        <audio src={m.mediaUrl} controls className="my-1 w-[240px] max-w-full" />
-        <div className="flex justify-end">{timeRow()}</div>
-      </div>
-    );
+    return <WaAudio message={m} mine={mine} pending={pending} orderId={orderId} />;
   }
 
   // ===== Documento =====
@@ -831,11 +853,13 @@ function BubbleContent({
   // ===== Texto (con cita y botones de plantilla) =====
   // La hora va ANCLADA abajo-derecha (como WhatsApp): el espaciador invisible
   // al final del texto le reserva el campo en la ultima linea.
+  // Emojis solos (2 o mas): en burbuja pero MAS GRANDES, como WhatsApp.
+  const emojiBig = isEmojiOnly(m.body) && m.buttons.length === 0;
   return (
     <div>
       {m.replyTo ? <ReplyQuote replyTo={m.replyTo} mine={mine} /> : null}
       <div className="relative px-2 pb-[7px] pt-[6px]">
-        <p className="whitespace-pre-wrap break-words">
+        <p className={cn('whitespace-pre-wrap break-words', emojiBig && 'text-[28px] leading-[38px]')}>
           {m.body}
           <span
             className={cn('inline-block h-0', mine ? 'w-[88px]' : 'w-[62px]')}
@@ -856,6 +880,178 @@ function BubbleContent({
           ))}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/* ===================== Nota de voz (estilo WhatsApp) ===================== */
+
+const BAR_COUNT = 40;
+
+/** Barras de respaldo (si el audio no se puede decodificar): onda suave estable. */
+const fallbackBars = (seed: string): number[] => {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
+  return Array.from({ length: BAR_COUNT }, (_, i) => {
+    const v = Math.abs(Math.sin(i * 0.55 + (h % 17)) * 0.7 + Math.sin(i * 1.7 + h) * 0.3);
+    return 0.2 + v * 0.8;
+  });
+};
+
+const fmtSecs = (s: number): string => {
+  if (!Number.isFinite(s) || s < 0) return '0:00';
+  const m = Math.floor(s / 60);
+  return `${m}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+};
+
+/**
+ * Reproductor de nota de voz CALCADO a WhatsApp: avatar con microfono, play,
+ * ONDAS REALES del audio (Web Audio API decodifica y saca los picos; si el
+ * navegador no puede, onda de respaldo), punto de progreso, duracion y hora.
+ */
+function WaAudio({
+  message: m,
+  mine,
+  pending,
+  orderId,
+}: {
+  message: WaMessage;
+  mine: boolean;
+  pending: boolean;
+  orderId: string;
+}) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [dur, setDur] = useState<number | null>(null);
+  const [t, setT] = useState(0);
+  const [peaks, setPeaks] = useState<number[] | null>(null);
+  // Primero por NUESTRA API (misma origen: la onda se puede decodificar sin
+  // CORS); si el audio viejo solo tiene URL externa, se cae a esa.
+  const apiSrc = `/v1/orders/${orderId}/whatsapp/audio/${m.id}`;
+  const [src, setSrc] = useState(apiSrc);
+
+  // Ondas REALES: decodificar el audio y muestrear los picos por bloque.
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        let res = await fetch(apiSrc, { credentials: 'include' });
+        if (!res.ok && m.mediaUrl) res = await fetch(m.mediaUrl);
+        if (!res.ok) return;
+        const buf = await res.arrayBuffer();
+        type AC = typeof AudioContext;
+        const Ctx: AC | undefined =
+          window.AudioContext ?? (window as unknown as { webkitAudioContext?: AC }).webkitAudioContext;
+        if (!Ctx) return;
+        const ctx = new Ctx();
+        const decoded = await ctx.decodeAudioData(buf);
+        const ch = decoded.getChannelData(0);
+        const block = Math.max(1, Math.floor(ch.length / BAR_COUNT));
+        const p: number[] = [];
+        for (let i = 0; i < BAR_COUNT; i++) {
+          let peak = 0;
+          for (let j = 0; j < block; j += 32) peak = Math.max(peak, Math.abs(ch[i * block + j] ?? 0));
+          p.push(peak);
+        }
+        const max = Math.max(...p, 0.01);
+        if (alive) {
+          setPeaks(p.map((v) => Math.max(0.18, v / max)));
+          if (Number.isFinite(decoded.duration)) setDur(decoded.duration);
+        }
+        void ctx.close();
+      } catch {
+        /* CORS o formato raro: quedan las barras de respaldo */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [apiSrc, m.mediaUrl]);
+
+  const bars = peaks ?? fallbackBars(m.id);
+  const progress = dur && dur > 0 ? Math.min(1, t / dur) : 0;
+
+  const toggle = () => {
+    const a = audioRef.current;
+    if (!a) return;
+    if (playing) a.pause();
+    else void a.play();
+  };
+  const seek = (e: React.MouseEvent<HTMLDivElement>) => {
+    const a = audioRef.current;
+    if (!a || !dur) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    a.currentTime = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1) * dur;
+  };
+
+  const barPlayed = mine ? 'bg-[#4f7d68] dark:bg-[#94b8ab]' : 'bg-[#7a8a93] dark:bg-[#8696a0]';
+  const barIdle = mine ? 'bg-[#a9cbb7] dark:bg-[#1d5c4d]' : 'bg-[#cdd4d8] dark:bg-[#3b4a54]';
+
+  return (
+    <div className="flex w-[300px] max-w-full items-center gap-2.5 px-2 pb-1 pt-2">
+      <audio
+        ref={audioRef}
+        src={src}
+        preload="metadata"
+        className="hidden"
+        onError={() => {
+          if (m.mediaUrl && src !== m.mediaUrl) setSrc(m.mediaUrl);
+        }}
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => {
+          setPlaying(false);
+          setT(0);
+        }}
+        onTimeUpdate={(e) => setT(e.currentTarget.currentTime)}
+        onLoadedMetadata={(e) => {
+          const d = e.currentTarget.duration;
+          if (Number.isFinite(d)) setDur(d);
+        }}
+      />
+      {/* Avatar con microfono (la Cloud API no expone la foto del contacto). */}
+      <span className="relative h-[45px] w-[45px] shrink-0">
+        <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#dfe5e7] text-[#9aa8b0] dark:bg-[#2a3942] dark:text-[#667781]">
+          <User className="h-7 w-7 translate-y-1" strokeWidth={1.6} fill="currentColor" />
+        </span>
+        <Mic className={cn('absolute -left-1 bottom-0 h-4 w-4', mine ? 'text-[#00a884]' : 'text-[#53bdeb]')} />
+      </span>
+      <button
+        type="button"
+        onClick={toggle}
+        className="shrink-0 text-[#667781] transition-colors hover:text-[#54656f] dark:text-[#8696a0]"
+        aria-label={playing ? 'Pausar' : 'Reproducir'}
+      >
+        {playing ? <Pause className="h-7 w-7 fill-current" /> : <Play className="h-7 w-7 fill-current" />}
+      </button>
+      <div className="min-w-0 flex-1">
+        {/* Onda + punto de progreso */}
+        <div className="relative flex h-[26px] cursor-pointer items-center gap-[2px]" onClick={seek}>
+          {bars.map((v, i) => (
+            <span
+              key={i}
+              className={cn(
+                'w-[2.5px] shrink-0 rounded-full',
+                i / BAR_COUNT <= progress && (playing || t > 0) ? barPlayed : barIdle,
+              )}
+              style={{ height: `${Math.round(4 + v * 20)}px` }}
+            />
+          ))}
+          {playing || t > 0 ? (
+            <span
+              className="absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-[#4fc3f7] shadow"
+              style={{ left: `calc(${(progress * 100).toFixed(2)}% - 6px)` }}
+            />
+          ) : null}
+        </div>
+        <div className="mt-0.5 flex items-center justify-between text-[11px] text-[#667781] dark:text-[#8696a0]">
+          <span>{fmtSecs(playing || t > 0 ? t : (dur ?? 0))}</span>
+          <span className="flex items-center gap-1">
+            {timeOf(m.createdAt)}
+            {mine ? <Ticks status={m.status} pending={pending} /> : null}
+          </span>
+        </div>
+      </div>
     </div>
   );
 }

@@ -106,6 +106,22 @@ export class StorageService implements OnModuleInit {
     return url;
   }
 
+  /** Baja un objeto completo (p. ej. audio para servirlo same-origin). */
+  async get(key: string): Promise<{ buffer: Buffer; contentType: string } | null> {
+    this.assertReady();
+    try {
+      const res = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+      const bytes = await res.Body?.transformToByteArray();
+      if (!bytes) return null;
+      return {
+        buffer: Buffer.from(bytes),
+        contentType: res.ContentType ?? 'application/octet-stream',
+      };
+    } catch {
+      return null;
+    }
+  }
+
   async delete(key: string): Promise<void> {
     this.assertReady();
     this.urlCache.delete(key);

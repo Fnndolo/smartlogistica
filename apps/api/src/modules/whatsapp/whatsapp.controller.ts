@@ -9,11 +9,12 @@ import {
   Post,
   Put,
   Req,
+  Res,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import {
   dialog360CredentialsSchema,
   sendWaTemplateSchema,
@@ -103,6 +104,20 @@ export class OrderWhatsappController {
     @CurrentUser() user: AuthContext,
   ): Promise<{ ok: true }> {
     return this.whatsapp.sendConfirmationManual(id, user);
+  }
+
+  /** Audio de una nota de voz del hilo, servido same-origin (onda real sin CORS). */
+  @Get(':id/whatsapp/audio/:messageId')
+  async audio(
+    @Param('id') id: string,
+    @Param('messageId') messageId: string,
+    @CurrentUser() user: AuthContext,
+    @Res() res: Response,
+  ): Promise<void> {
+    const { buffer, contentType } = await this.whatsapp.audioFile(id, messageId, user);
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(buffer);
   }
 
   /** Plantillas de la WABA + sugerencias del pedido (el picker de "/"). */

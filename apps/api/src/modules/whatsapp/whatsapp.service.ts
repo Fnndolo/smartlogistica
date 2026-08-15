@@ -1161,6 +1161,31 @@ export class WhatsappService {
 
   }
 
+  /**
+   * Sirve el AUDIO de un mensaje del hilo del pedido por nuestra API (misma
+   * origen): asi el navegador puede DECODIFICAR la onda real sin pelear con
+   * CORS de las URLs firmadas del storage.
+   */
+  async audioFile(
+    orderId: string,
+    messageId: string,
+    auth: AuthContext,
+  ): Promise<{ buffer: Buffer; contentType: string }> {
+    this.assertAdmin(auth);
+    const { prisma } = getTenantContext();
+    const { phone } = await this.orderPhone(orderId);
+    const msg = await prisma.waMessage.findUnique({
+      where: { id: messageId },
+      select: { phone: true, kind: true, attachmentKey: true },
+    });
+    if (!msg || msg.phone !== phone || msg.kind !== 'audio' || !msg.attachmentKey) {
+      throw new NotFoundException('Audio no encontrado');
+    }
+    const obj = await this.storage.get(msg.attachmentKey);
+    if (!obj) throw new NotFoundException('Audio no disponible');
+    return obj;
+  }
+
   // === Helpers ===
 
   private async toDto(r: WaMessageRow, byId?: Map<string, WaMessageRow>): Promise<WaMessageDto> {
