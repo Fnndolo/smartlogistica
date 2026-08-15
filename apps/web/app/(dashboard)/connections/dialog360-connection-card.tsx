@@ -21,7 +21,7 @@ const ICON_TILE =
   'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-sky-500/20 bg-sky-500/10 text-sky-600 dark:text-sky-400';
 
 /**
- * Conexion a 360dialog (Cloud API de Meta, api-first): el reemplazo de Whapify.
+ * Conexion a 360dialog (Cloud API de Meta, api-first): EL canal de WhatsApp.
  * Al conectar, el webhook del numero queda apuntando SOLO a esta plataforma
  * (mensajes, medios y echoes del celular entran directo al hilo del pedido).
  * TEMPORAL: solo el propietario, igual que el resto de WhatsApp.
@@ -49,7 +49,7 @@ export function Dialog360ConnectionCard({ initial }: { initial?: Dialog360Connec
   if (!canManage) return null;
 
   const disconnect = async () => {
-    if (!confirm('¿Desconectar 360dialog? Los envíos volverán a salir por Whapify (si está conectado).'))
+    if (!confirm('¿Desconectar 360dialog? La plataforma quedará SIN WhatsApp (confirmaciones y chat).'))
       return;
     setDisconnecting(true);
     try {

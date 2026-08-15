@@ -18,11 +18,10 @@ const timeFmt = new Intl.DateTimeFormat('es-CO', {
 });
 
 /**
- * Registro de llamadas del webhook de confirmacion de direccion (Whapify).
- * Es la herramienta de diagnostico: cada vez que Whapify llama a la plataforma
- * queda una fila aqui, se haya aplicado o no. Si un cliente confirmo en
- * WhatsApp y NO hay fila, el flujo de Whapify no ejecuto la Solicitud de API
- * Externa (el problema esta alla, no aca).
+ * Registro de respuestas del cliente al flujo de confirmacion de direccion.
+ * Herramienta de diagnostico: cada confirmacion/modificacion que procesa la
+ * plataforma queda como fila aqui, se haya aplicado o no. Si un cliente
+ * confirmo en WhatsApp y NO hay fila, la respuesta nunca llego (webhook).
  */
 export function ConfirmationLogCard() {
   const { data, isFetching, refetch } = useQuery({
@@ -44,8 +43,8 @@ export function ConfirmationLogCard() {
           <div className="min-w-0">
             <h3 className="text-sm font-semibold">Confirmaciones de WhatsApp</h3>
             <p className="mt-0.5 text-sm text-muted-foreground">
-              Cada llamada que Whapify hace a la plataforma queda registrada aquí. Si un cliente
-              confirmó y no aparece, el flujo de Whapify no ejecutó la Solicitud de API Externa.
+              Cada respuesta del cliente (confirmar o modificar la dirección) queda registrada
+              aquí. Si un cliente confirmó y no aparece, la respuesta nunca llegó a la plataforma.
             </p>
           </div>
         </div>
@@ -61,7 +60,7 @@ export function ConfirmationLogCard() {
 
       {rows.length === 0 ? (
         <p className="mt-4 rounded-lg border border-dashed border-border px-3 py-4 text-center text-sm text-muted-foreground">
-          Aún no se registran llamadas de Whapify.
+          Aún no se registran respuestas de confirmación.
         </p>
       ) : (
         <ul className="mt-4 divide-y divide-border">

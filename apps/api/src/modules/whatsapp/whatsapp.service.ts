@@ -14,13 +14,9 @@ import type {
   Dialog360TestResult,
   SendWaTemplateInput,
   SendWaTextInput,
-  WaInboundInput,
   WaMessage as WaMessageDto,
   WaTemplateList,
   WaThread,
-  WhapifyConnectionSummary,
-  WhapifyCredentialsInput,
-  WhapifyTestResult,
 } from '@smartlogistica/shared';
 import type { Prisma, PrismaClient } from '.prisma/tenant-client';
 
@@ -31,30 +27,24 @@ import { RealtimeService } from '../../infrastructure/realtime/realtime.service'
 import { StorageService } from '../../infrastructure/storage/storage.service';
 import { getTenantContext } from '../../infrastructure/tenant-context';
 import { Dialog360Client } from './dialog360-client.service';
-import { WhapifyClient } from './whapify-client.service';
 
 /** Ultimos mensajes que carga el hilo (el historial completo queda guardado). */
 const THREAD_TAKE = 500;
 
 /**
- * CONFIRMACION DE PEDIDO (calcada del workflow "Confirmador de pedidos" de n8n,
- * ahora nativa): cuando llega un pedido NUEVO de VTEX en ready-for-handling se
- * crea/actualiza el contacto en Whapify, se le setean la direccion y los
- * productos (custom fields del flujo) y se dispara el flow de confirmacion.
- * Ids de la cuenta Whapify del negocio (los mismos que usaba n8n).
+ * CONFIRMACION DE PEDIDO (nativa, por la Cloud API de Meta via 360dialog):
+ * cuando llega un pedido NUEVO de VTEX en ready-for-handling se envia la
+ * plantilla de confirmacion; los botones/respuestas los procesa
+ * handleFlowReply (webhook de la Cloud API).
  */
-const CONFIRMATION_FLOW_ID = '1765216079186'; // flow "order_confirmation"
-const CF_ADDRESS_ID = '942316'; // custom field: direccion de envio
-const CF_PRODUCTS_ID = '557415'; // custom field: productos y cantidades
 /** Solo pedidos RECIENTES: un backfill de pedidos viejos JAMAS debe escribirle a nadie. */
 const CONFIRMATION_MAX_AGE_MS = 48 * 3_600_000;
 
 // ============ Confirmacion NATIVA por Cloud API (360dialog) ============
-// El "flujo" de Whapify calcado textual: la plantilla inicial (aprobada en la
-// WABA; en sandbox se emula con texto + botones de sesion) y las ramas que
-// nuestra plataforma responde sola segun el boton / la direccion que escriban.
+// La plantilla inicial (aprobada en la WABA; en sandbox se emula con texto +
+// botones de sesion) y las ramas que nuestra plataforma responde sola segun
+// el boton / la direccion que escriba el cliente.
 
-/** Nombre/idioma de la plantilla aprobada (ajustar el dia de la migracion). */
 // PREDETERMINADA: la plantilla ORIGINAL del negocio (emojis), aprobada como
 // UTILITY. OJO: el nombre "order_confirmation" esta VETADO en Meta para este
 // negocio (quedo asociado a categoria MARKETING).
@@ -155,15 +145,7 @@ function tenDigits(phone: string): string {
   return d.length > 10 ? d.slice(-10) : d;
 }
 
-/** Nombre partido para crear el contacto en Whapify. */
-function splitName(full: string): { firstName: string | null; lastName: string | null } {
-  const parts = full.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return { firstName: null, lastName: null };
-  const mid = Math.max(1, parts.length - 2);
-  return { firstName: parts.slice(0, mid).join(' '), lastName: parts.slice(mid).join(' ') || null };
-}
-
-/** Tipo de envio de Whapify segun el mime del archivo. */
+/** Tipo de mensaje de WhatsApp segun el mime del archivo. */
 function waTypeOf(mime: string): 'image' | 'video' | 'audio' | 'file' {
   if (mime.startsWith('image/')) return 'image';
   if (mime.startsWith('video/')) return 'video';
@@ -172,16 +154,16 @@ function waTypeOf(mime: string): 'image' | 'video' | 'audio' | 'file' {
 }
 
 /**
- * WhatsApp por pedido (Whapify). El historial vive en WaMessage (por telefono):
- * los salientes se guardan al enviarlos desde aqui; los entrantes llegan por el
- * webhook (flow de Whapify / espejo de n8n). Solo administradores.
+ * WhatsApp por pedido (Cloud API de Meta via 360dialog). El historial vive en
+ * WaMessage (por telefono): los salientes se guardan al enviarlos desde aqui;
+ * TODO lo demas (entrantes, medios, echoes del celular con coexistencia,
+ * estados) llega por el webhook de la Cloud API. Solo administradores.
  */
 @Injectable()
 export class WhatsappService {
   private readonly logger = new Logger(WhatsappService.name);
 
   constructor(
-    private readonly client: WhapifyClient,
     private readonly dialog360: Dialog360Client,
     private readonly envelope: EnvelopeService,
     private readonly storage: StorageService,
@@ -189,80 +171,7 @@ export class WhatsappService {
     private readonly control: ControlPlaneService,
   ) {}
 
-  // === Conexion (token global, cifrado) ===
-
-  async getConnection(auth: AuthContext): Promise<WhapifyConnectionSummary | null> {
-    this.assertAdmin(auth);
-    const { prisma } = getTenantContext();
-    const conn = await prisma.whapifyConnection.findFirst({ orderBy: { createdAt: 'desc' } });
-    if (!conn) return null;
-    return {
-      accountName: conn.accountName,
-      totalContacts: conn.totalContacts,
-      status: conn.status === 'error' ? 'error' : 'connected',
-      lastError: conn.lastError,
-      createdAt: conn.createdAt.toISOString(),
-    };
-  }
-
-  async test(input: WhapifyCredentialsInput, auth: AuthContext): Promise<WhapifyTestResult> {
-    this.assertAdmin(auth);
-    try {
-      const r = await this.client.testToken(input.token);
-      return { ok: true, ...r };
-    } catch (err) {
-      throw this.translateError(err, 'No se pudo conectar a Whapify');
-    }
-  }
-
-  async connect(input: WhapifyCredentialsInput, auth: AuthContext): Promise<WhapifyConnectionSummary> {
-    this.assertAdmin(auth);
-    const { tenantId, prisma } = getTenantContext();
-
-    let info: { accountName: string | null; totalContacts: number | null };
-    try {
-      info = await this.client.testToken(input.token);
-    } catch (err) {
-      throw this.translateError(err, 'El token de Whapify es invalido');
-    }
-
-    const encryptedToken = await this.envelope.encryptField(tenantId, input.token);
-    // Singleton: se reemplaza la conexion anterior (si existia).
-    await prisma.whapifyConnection.deleteMany({});
-    const conn = await prisma.whapifyConnection.create({
-      data: {
-        encryptedToken,
-        accountName: info.accountName,
-        totalContacts: info.totalContacts,
-        status: 'connected',
-        lastError: null,
-      },
-    });
-    return {
-      accountName: conn.accountName,
-      totalContacts: conn.totalContacts,
-      status: 'connected',
-      lastError: null,
-      createdAt: conn.createdAt.toISOString(),
-    };
-  }
-
-  async disconnect(auth: AuthContext): Promise<void> {
-    this.assertAdmin(auth);
-    const { prisma } = getTenantContext();
-    await prisma.whapifyConnection.deleteMany({});
-  }
-
-  /** Axios autenticado con el token guardado (null si no hay conexion). */
-  private async httpOrNull(): Promise<AxiosInstance | null> {
-    const { tenantId, prisma } = getTenantContext();
-    const conn = await prisma.whapifyConnection.findFirst({ orderBy: { createdAt: 'desc' } });
-    if (!conn) return null;
-    const token = await this.envelope.decryptField(tenantId, conn.encryptedToken);
-    return this.client.buildHttp(token);
-  }
-
-  // === Conexion 360dialog (Cloud API cruda — reemplazo de Whapify) ===
+  // === Conexion 360dialog (Cloud API de Meta) ===
 
   async getDialog360(auth: AuthContext): Promise<Dialog360ConnectionSummary | null> {
     this.assertAdmin(auth);
@@ -360,12 +269,7 @@ export class WhatsappService {
     if (!order) throw new NotFoundException('Pedido no encontrado');
 
     const phone = order.customerPhone ? tenDigits(order.customerPhone) : '';
-    // Conectado = CUALQUIERA de los dos proveedores (Whapify o 360dialog).
-    const [whapify, d360] = await Promise.all([
-      prisma.whapifyConnection.findFirst({ select: { id: true } }),
-      prisma.dialog360Connection.findFirst({ select: { id: true } }),
-    ]);
-    const conn = whapify ?? d360;
+    const conn = await prisma.dialog360Connection.findFirst({ select: { id: true } });
     if (!phone) {
       return { phone: null, connected: Boolean(conn), contactName: null, messages: [] };
     }
@@ -392,40 +296,15 @@ export class WhatsappService {
     this.assertAdmin(auth);
     const { tenantId, prisma } = getTenantContext();
 
-    // Ruteo: 360dialog SOLO si gobierna este pedido (produccion, o sandbox con
-    // pedido de prueba); si no, Whapify (abajo).
     const d360 = await this.dialog360OrNull(tenantId, prisma);
-    const { phone: targetPhone360, provider } = await this.orderPhone(orderId);
-    if (d360 && this.d360Governs(d360, provider)) {
-      const phone = targetPhone360;
-      let wamid: string | null = null;
-      try {
-        wamid = await this.dialog360.sendText(d360.http, d360.mode, `57${phone}`, input.text);
-      } catch (err) {
-        throw this.translateError(err, '360dialog no pudo enviar el mensaje');
-      }
-      const row = await prisma.waMessage.create({
-        data: {
-          phone,
-          direction: 'out',
-          kind: 'text',
-          body: input.text,
-          authorId: auth.userId,
-          authorName: auth.name?.trim() || auth.email,
-          externalId: wamid,
-        },
-      });
-      await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
-      return this.toDto(row);
-    }
-
-    const { phone, contact, http } = await this.resolveTarget(orderId);
+    const { phone, provider } = await this.orderPhone(orderId);
+    this.requireD360(d360, provider);
+    let wamid: string | null = null;
     try {
-      await this.client.sendText(http, contact.id, input.text);
+      wamid = await this.dialog360.sendText(d360!.http, d360!.mode, `57${phone}`, input.text);
     } catch (err) {
-      throw this.translateError(err, 'Whapify no pudo enviar el mensaje');
+      throw this.translateError(err, 'No se pudo enviar el mensaje');
     }
-
     const row = await prisma.waMessage.create({
       data: {
         phone,
@@ -434,7 +313,7 @@ export class WhatsappService {
         body: input.text,
         authorId: auth.userId,
         authorName: auth.name?.trim() || auth.email,
-        contactId: contact.id,
+        externalId: wamid,
       },
     });
     await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
@@ -448,56 +327,45 @@ export class WhatsappService {
     if (!this.storage.isConfigured()) {
       throw new BadRequestException('El almacenamiento de archivos no esta configurado');
     }
-    const d360raw = await this.dialog360OrNull(tenantId, prisma);
-    const { phone: phone360, provider } = await this.orderPhone(orderId);
-    // Mismo ruteo que sendText: sandbox solo gobierna pedidos de prueba.
-    const d360 = d360raw && this.d360Governs(d360raw, provider) ? d360raw : null;
-    const target = d360 ? null : await this.resolveTarget(orderId);
-    const targetPhone = target?.phone ?? phone360;
+    const d360 = await this.dialog360OrNull(tenantId, prisma);
+    const { phone, provider } = await this.orderPhone(orderId);
+    this.requireD360(d360, provider);
 
     const name = file.originalname || 'archivo';
     const ext = /\.([a-z0-9]{1,8})$/i.exec(name)?.[1];
-    const key = `tenants/${tenantId}/whatsapp/${targetPhone}/${randomUUID()}${ext ? `.${ext.toLowerCase()}` : ''}`;
+    const key = `tenants/${tenantId}/whatsapp/${phone}/${randomUUID()}${ext ? `.${ext.toLowerCase()}` : ''}`;
     await this.storage.put(key, file.buffer, file.mimetype || 'application/octet-stream');
     const url = await this.storage.getSignedUrl(key);
 
     let wamid: string | null = null;
     try {
-      if (d360) {
-        const kind = waTypeOf(file.mimetype || '');
-        wamid = await this.dialog360.sendMediaLink(
-          d360.http,
-          d360.mode,
-          `57${targetPhone}`,
-          kind === 'file' ? 'document' : kind,
-          url,
-          kind === 'file' ? name : undefined,
-        );
-      } else {
-        await this.client.sendFile(target!.http, target!.contact.id, url, waTypeOf(file.mimetype || ''));
-      }
+      const kind = waTypeOf(file.mimetype || '');
+      wamid = await this.dialog360.sendMediaLink(
+        d360!.http,
+        d360!.mode,
+        `57${phone}`,
+        kind === 'file' ? 'document' : kind,
+        url,
+        kind === 'file' ? name : undefined,
+      );
     } catch (err) {
       await this.storage.delete(key).catch(() => null);
-      throw this.translateError(
-        err,
-        d360 ? '360dialog no pudo enviar el archivo' : 'Whapify no pudo enviar el archivo',
-      );
+      throw this.translateError(err, 'No se pudo enviar el archivo');
     }
 
     const row = await prisma.waMessage.create({
       data: {
-        phone: targetPhone,
+        phone,
         direction: 'out',
         kind: waTypeOf(file.mimetype || ''),
         body: name,
         attachmentKey: key,
         authorId: auth.userId,
         authorName: auth.name?.trim() || auth.email,
-        contactId: target?.contact.id ?? null,
         externalId: wamid,
       },
     });
-    await this.realtime.publish(tenantId, { kind: 'wa.message', phone: targetPhone });
+    await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
     return this.toDto(row);
   }
 
@@ -637,8 +505,8 @@ export class WhatsappService {
   }
 
   /**
-   * ¿Este envio va por 360dialog? El SANDBOX solo alcanza el numero de prueba
-   * -> solo pedidos MONTADOS a mano; lo demas va por Whapify hasta produccion.
+   * ¿360dialog gobierna este pedido? En PRODUCCION gobierna todo; el SANDBOX
+   * solo alcanza el numero de prueba vinculado -> solo pedidos MONTADOS a mano.
    */
   private d360Governs(
     d360: { mode: Dialog360Mode } | null,
@@ -647,37 +515,16 @@ export class WhatsappService {
     return Boolean(d360 && (d360.mode === 'production' || provider === 'manual'));
   }
 
-  /**
-   * ENTRANTE (o espejo de n8n) via webhook. Corre FUERA del contexto tenant
-   * (el controller resuelve tenant + prisma como el webhook de confirmacion).
-   */
-  async inbound(tenantId: string, prisma: PrismaClient, input: WaInboundInput): Promise<void> {
-    const phone = tenDigits(input.phone);
-    if (phone.length < 7) return;
-
-    await prisma.waMessage.create({
-      data: {
-        phone,
-        direction: input.direction,
-        kind: input.type ?? (input.mediaUrl ? 'file' : 'text'),
-        body: input.text ?? null,
-        mediaUrl: input.mediaUrl ?? null,
-        authorName: input.direction === 'out' ? (input.authorName ?? 'n8n') : (input.name ?? null),
-      } as Prisma.WaMessageUncheckedCreateInput,
-    });
-
-    // Nombre del contacto: se refresca con lo que mande el flow.
-    if (input.name?.trim()) {
-      await prisma.waContact
-        .upsert({
-          where: { phone },
-          create: { phone, contactId: '', name: input.name.trim() },
-          update: { name: input.name.trim() },
-        })
-        .catch(() => null);
+  /** Corta con error claro si no hay conexion 360dialog que gobierne el pedido. */
+  private requireD360(d360: { mode: Dialog360Mode } | null, provider: string): void {
+    if (!d360) {
+      throw new BadRequestException('WhatsApp no está conectado. Configura 360dialog en Conexiones.');
     }
-
-    await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    if (!this.d360Governs(d360, provider)) {
+      throw new BadRequestException(
+        'El SANDBOX de 360dialog solo puede escribirle al número de prueba. Conecta 360dialog en PRODUCCIÓN.',
+      );
+    }
   }
 
   /**
@@ -737,7 +584,7 @@ export class WhatsappService {
   }
 
   /**
-   * MOTOR del flujo de confirmacion (calcado del de Whapify): interpreta los
+   * MOTOR del flujo de confirmacion: interpreta los
    * botones y la direccion que escribe el cliente, responde las ramas y
    * actualiza la columna Direccion. Estado por telefono en WaContact.flowState.
    */
@@ -748,7 +595,7 @@ export class WhatsappService {
     m: Any,
   ): Promise<void> {
     const d360 = await this.dialog360OrNull(tenantId, prisma);
-    if (!d360) return; // sin Cloud API, el flujo vive en Whapify
+    if (!d360) return; // sin conexion no hay como responder
 
     const contact = await prisma.waContact.findUnique({ where: { phone } });
     const state = (contact?.flowState ?? null) as FlowState | null;
@@ -840,7 +687,7 @@ export class WhatsappService {
 
   /**
    * Aplica la confirmacion/modificacion de direccion a los pedidos PENDIENTES
-   * del telefono (calcado del webhook de Whapify, pero nativo). Los mensajes ya
+   * del telefono (nativo, por la Cloud API). Los mensajes ya
    * quedaron en el hilo via el webhook Cloud — aqui solo columna + log.
    */
   private async applyAddressNative(
@@ -1056,7 +903,7 @@ export class WhatsappService {
   /**
    * Envio MANUAL de la confirmacion (el boton "Sin enviar" de la columna
    * Direccion): mismo flujo que el automatico pero con errores VISIBLES y sin
-   * el limite de frescura (si Whapify estuvo caido dias, igual se puede enviar).
+   * el limite de frescura (si el envio fallo dias atras, igual se puede enviar).
    */
   async sendConfirmationManual(orderId: string, auth: AuthContext): Promise<{ ok: true }> {
     this.assertAdmin(auth);
@@ -1085,13 +932,9 @@ export class WhatsappService {
       if (manual) throw new BadRequestException(msg);
     };
 
-    const [whapifyConn, d360] = await Promise.all([
-      prisma.whapifyConnection.findFirst({ orderBy: { createdAt: 'desc' } }),
-      this.dialog360OrNull(tenantId, prisma),
-    ]);
-    if (!whapifyConn && !d360) {
-      // auto: n8n (u nadie) sigue a cargo
-      return fail('WhatsApp no está conectado (ni 360dialog ni Whapify). Configúralo en Conexiones.');
+    const d360 = await this.dialog360OrNull(tenantId, prisma);
+    if (!d360) {
+      return fail('WhatsApp no está conectado. Configura 360dialog en Conexiones.');
     }
 
     const order = await prisma.order.findUnique({
@@ -1125,11 +968,10 @@ export class WhatsappService {
     });
     if (already) return fail('La confirmación de este pedido ya se había enviado.');
 
-    // Datos del rawPayload de VTEX, igual que el flujo de n8n.
+    // Datos del rawPayload de VTEX (los manuales imitan esta forma).
     const raw = (order.rawPayload ?? {}) as Record<string, any>;
     const cpd = raw.clientProfileData ?? {};
     const a = raw.shippingData?.address ?? {};
-    const email = typeof raw.openTextField?.value === 'string' ? raw.openTextField.value : null;
     const direccion = [
       [a.street, a.neighborhood, a.city].filter(Boolean).join(', '),
       [a.state, a.complement].filter(Boolean).join(' '),
@@ -1138,20 +980,22 @@ export class WhatsappService {
       .join(', ');
     const productos = order.items.map((i) => `${i.quantity} ${i.name}`).join(', ');
 
-    // ===== Camino CLOUD API (360dialog): plantilla en produccion, emulacion
-    // con botones de sesion en sandbox. Las ramas las responde handleFlowReply.
-    // REGLA DE RUTEO: el SANDBOX solo puede escribirle al numero de prueba
-    // vinculado -> solo toma los pedidos MONTADOS a mano (ensayos). Los VTEX
-    // REALES siguen saliendo por WHAPIFY (abajo) hasta tener 360dialog en
-    // PRODUCCION — el sandbox JAMAS les roba el turno.
-    const viaD360 = Boolean(d360 && (d360.mode === 'production' || order.provider === 'manual'));
-    if (viaD360 && d360) {
+    // Plantilla en PRODUCCION; en sandbox se emula con botones de sesion (y
+    // solo para pedidos MONTADOS a mano: el sandbox no alcanza clientes reales).
+    // Las respuestas/botones los procesa handleFlowReply.
+    if (!this.d360Governs(d360, order.provider)) {
+      return fail(
+        'El SANDBOX de 360dialog solo puede escribirle al número de prueba. Conecta 360dialog en PRODUCCIÓN.',
+      );
+    }
+    {
       const nombre =
         `${cpd.firstName ?? ''} ${cpd.lastName ?? ''}`.trim() || (order.customerName ?? 'cliente');
       const params = [nombre, productos || '—', direccion || '—'];
       let rendered = tplBody(nombre, productos || '—', direccion || '—');
       let tplName = D360_TEMPLATE_NAME;
       let tplLang = D360_TEMPLATE_LANG;
+      let tplButtons = ['Mis datos son correctos.', 'Modificar mi dirección.'];
       // La MEJOR plantilla de confirmacion APROBADA en la WABA, por prioridad
       // (la original con emojis primero; si Meta aun no la aprueba, la sobria).
       // Asi el cambio se activa SOLO, sin redesplegar, y el hilo guarda el
@@ -1166,6 +1010,7 @@ export class WhatsappService {
             tplName = pick.name;
             tplLang = pick.language;
             rendered = renderTemplateBody(pick.body, params);
+            if (pick.buttons.length) tplButtons = pick.buttons;
           }
         } catch (err) {
           this.logger.warn(`No se pudieron listar plantillas: ${(err as Error).message}`);
@@ -1226,7 +1071,7 @@ export class WhatsappService {
             externalId: wamid,
             buttons: (d360.mode === 'sandbox'
               ? ['Datos correctos ✅', 'Modificar dirección']
-              : ['Mis datos son correctos.', 'Modificar mi dirección.']) as unknown as Prisma.InputJsonValue,
+              : tplButtons) as unknown as Prisma.InputJsonValue,
           },
         }),
       ]);
@@ -1235,123 +1080,9 @@ export class WhatsappService {
       return;
     }
 
-    // ===== Camino WHAPIFY (flujo) — se mantiene hasta la migracion.
-    if (!whapifyConn) {
-      return fail(
-        'Solo está conectado el SANDBOX de 360dialog y no puede escribirle a clientes reales. Conecta Whapify (o 360dialog en producción).',
-      );
-    }
-    const token = await this.envelope.decryptField(tenantId, whapifyConn.encryptedToken);
-    const http = this.client.buildHttp(token);
-
-    let contact;
-    try {
-      // 1. Crear/actualizar contacto (Whapify hace upsert por telefono).
-      contact = await this.client.createContact(http, {
-        phone: typeof cpd.phone === 'string' && cpd.phone ? cpd.phone : `+57${phone}`,
-        firstName: cpd.firstName ?? null,
-        lastName: cpd.lastName ?? null,
-        email,
-      });
-      if (!contact) {
-        this.logger.warn(`Confirmacion WA: no se pudo crear el contacto (pedido ${order.externalId})`);
-        return fail('Whapify no pudo crear el contacto del cliente');
-      }
-
-      // 2. Custom fields del flow (direccion + productos) y 3. disparar el flow.
-      if (direccion) await this.client.setCustomField(http, contact.id, CF_ADDRESS_ID, direccion);
-      if (productos) await this.client.setCustomField(http, contact.id, CF_PRODUCTS_ID, productos);
-      await this.client.sendFlow(http, contact.id, CONFIRMATION_FLOW_ID);
-    } catch (err) {
-      // Manual: error claro al usuario. Automatico: se propaga al catch del
-      // background (queda en el log y el pedido queda "Sin enviar" en la tabla).
-      if (err instanceof BadRequestException) throw err;
-      throw this.translateError(err, 'Whapify no pudo enviar la confirmación');
-    }
-
-    // 4. Registrar: evento del pedido + mensaje en el hilo + cache del contacto.
-    await Promise.all([
-      prisma.orderEvent.create({
-        data: {
-          orderId,
-          type: 'wa_confirmation',
-          actorName: 'SmartLogística',
-          data: { flowId: CONFIRMATION_FLOW_ID, phone } as Prisma.InputJsonValue,
-        },
-      }),
-      prisma.waMessage.create({
-        data: {
-          phone,
-          direction: 'out',
-          kind: 'text',
-          // El TEXTO literal del flujo vive en Whapify (su API no lo expone);
-          // aqui queda lo que sabemos que se le envio: el pedido y los datos
-          // inyectados al flujo (productos + direccion a confirmar).
-          body: [
-            `📋 Confirmación del pedido ${order.externalId} enviada`,
-            productos ? `📦 ${productos}` : null,
-            direccion ? `📍 ${direccion}` : null,
-          ]
-            .filter(Boolean)
-            .join('\n'),
-          authorName: 'SmartLogística',
-          contactId: contact.id,
-        },
-      }),
-      prisma.waContact.upsert({
-        where: { phone },
-        create: { phone, contactId: contact.id, name: contact.name },
-        update: { contactId: contact.id, ...(contact.name ? { name: contact.name } : {}) },
-      }),
-    ]);
-    await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
-    this.logger.log(`Confirmacion WA enviada: pedido ${order.externalId} -> ${phone}`);
   }
 
   // === Helpers ===
-
-  /** Conexion + contacto de Whapify del CLIENTE del pedido (crea el contacto si no existe). */
-  private async resolveTarget(orderId: string): Promise<{
-    phone: string;
-    contact: { id: string; name: string | null };
-    http: AxiosInstance;
-  }> {
-    const { prisma } = getTenantContext();
-    const order = await prisma.order.findUnique({
-      where: { id: orderId },
-      select: { customerPhone: true, customerName: true },
-    });
-    if (!order) throw new NotFoundException('Pedido no encontrado');
-    const phone = order.customerPhone ? tenDigits(order.customerPhone) : '';
-    if (!phone) throw new BadRequestException('Este pedido no tiene teléfono del cliente');
-
-    const http = await this.httpOrNull();
-    if (!http) {
-      throw new BadRequestException('Whapify no esta conectado. Configúralo en Conexiones.');
-    }
-
-    // Cache local -> buscar en Whapify -> crear si no existe.
-    const cached = await prisma.waContact.findUnique({ where: { phone } });
-    if (cached?.contactId) return { phone, contact: { id: cached.contactId, name: cached.name }, http };
-
-    let contact = await this.client.findContactByPhone(http, `57${phone}`).catch(() => null);
-    if (!contact) {
-      contact = await this.client
-        .createContact(http, { phone: `+57${phone}`, ...splitName(order.customerName ?? '') })
-        .catch(() => null);
-    }
-    if (!contact) {
-      throw new BadRequestException(
-        'No se pudo encontrar ni crear el contacto en Whapify para este teléfono',
-      );
-    }
-    await prisma.waContact.upsert({
-      where: { phone },
-      create: { phone, contactId: contact.id, name: contact.name },
-      update: { contactId: contact.id, ...(contact.name ? { name: contact.name } : {}) },
-    });
-    return { phone, contact, http };
-  }
 
   private async toDto(r: WaMessageRow): Promise<WaMessageDto> {
     const mediaUrl = r.attachmentKey
@@ -1373,7 +1104,7 @@ export class WhatsappService {
   }
 
   private assertAdmin(auth: AuthContext): void {
-    // TEMPORAL (pedido del propietario): mientras la integracion con Whapify
+    // TEMPORAL (pedido del propietario): mientras la integracion de WhatsApp
     // madura, TODO WhatsApp es SOLO del OWNER (el primer administrador) — los
     // demas ni lo ven. Para abrirlo al resto de admins: volver a isAdmin(auth).
     if (auth.role !== 'OWNER') {
@@ -1381,22 +1112,34 @@ export class WhatsappService {
     }
   }
 
+  /**
+   * Traduce el error del API de WhatsApp (360dialog) a un mensaje UTIL: SIEMPRE
+   * incluye el detalle real que devolvio el servidor (leccion aprendida: un
+   * generico "rechazo el token" escondia "number blocked due to lack of payment").
+   */
   private translateError(err: unknown, fallback: string): BadRequestException {
     if (isAxiosError(err)) {
       const status = err.response?.status;
-      if (status === 401 || status === 403) {
-        return new BadRequestException('Whapify rechazo el token (401/403)');
-      }
-      const data = err.response?.data as { message?: string } | string | undefined;
-      const msg =
-        data && typeof data === 'object' && typeof data.message === 'string'
-          ? data.message
-          : typeof data === 'string'
-            ? data.slice(0, 200)
+      const data = err.response?.data as
+        | { message?: string; error?: unknown; meta?: { developer_message?: string } }
+        | string
+        | undefined;
+      // Formas de error de 360dialog/Meta: {error: "..."}, {meta: {developer_message}}, {message}.
+      const detail =
+        typeof data === 'string'
+          ? data.slice(0, 300)
+          : data && typeof data === 'object'
+            ? typeof data.error === 'string'
+              ? data.error
+              : (data.meta?.developer_message ?? data.message ?? null)
             : null;
-      return new BadRequestException(msg ? `Whapify: ${msg}` : `${fallback} (HTTP ${status ?? '?'})`);
+      return new BadRequestException(
+        detail
+          ? `WhatsApp (360dialog): ${String(detail).slice(0, 300)}`
+          : `${fallback} (HTTP ${status ?? '?'})`,
+      );
     }
-    this.logger.warn(`Whapify error: ${err instanceof Error ? err.message : err}`);
+    this.logger.warn(`WhatsApp error: ${err instanceof Error ? err.message : err}`);
     return new BadRequestException(fallback);
   }
 }

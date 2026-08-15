@@ -1013,7 +1013,7 @@ const ADDRESS_FALLBACK = { label: 'Confirmada', variant: 'success' } as const;
 
 function AddressCell({ order }: { order: OrderSummary }) {
   if (!order.addressStatus) {
-    // El MENSAJE de confirmacion no salio (Whapify caido / sin saldo cuando
+    // El MENSAJE de confirmacion no salio (WhatsApp caido / bloqueado cuando
     // llego el pedido): badge-BOTON que lo envia a mano (mismo flujo). Solo
     // aparece para admins (el server igual lo exige).
     if (order.waConfirmation === 'unsent') {
@@ -1066,7 +1066,7 @@ function SendConfirmationButton({ orderId }: { orderId: string }) {
       type="button"
       onClick={send}
       disabled={sending}
-      title="La confirmación automática no salió (¿Whapify caído/sin saldo?). Clic para enviarla ahora."
+      title="La confirmación automática no salió (¿WhatsApp caído o bloqueado?). Clic para enviarla ahora."
       className="inline-flex items-center gap-[5px] whitespace-nowrap rounded-full border border-destructive/30 bg-destructive/10 px-[10px] py-[3px] text-[10.5px] font-semibold uppercase tracking-[0.06em] text-destructive transition-colors hover:bg-destructive/20 disabled:opacity-60 md:px-[9px] md:py-[2.5px] md:text-[10px]"
     >
       {sending ? (

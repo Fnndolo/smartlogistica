@@ -11,7 +11,7 @@ import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module';
 
 // KEEP-ALIVE global para TODO el trafico saliente (Alegra, VTEX, Coordinadora,
-// Whapify...): reutiliza las conexiones TLS en vez de abrir una por request.
+// 360dialog...): reutiliza las conexiones TLS en vez de abrir una por request.
 // Con 10-20 usuarios facturando a la vez, cada handshake ahorrado son
 // ~100-300ms menos por llamada externa.
 axios.defaults.httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 64 });

@@ -27,9 +27,10 @@ import { useOrdersStream } from './use-orders-stream';
 
 /**
  * Pestaña WHATSAPP del pedido (solo administradores): el hilo con el cliente
- * via Whapify. El API de Whapify no expone historial, asi que aqui vive el
- * NUESTRO: todo lo que se envia desde la plataforma + lo entrante que reenvia
- * el flow de Whapify al webhook. Se puede responder y mandar archivos.
+ * via la Cloud API de Meta (360dialog). El historial vive AQUI: todo lo que se
+ * envia desde la plataforma + todo lo que llega o sale por el numero (webhook
+ * de la Cloud API, incluidos los echoes del celular). Responder, archivos y
+ * plantillas con "/".
  */
 /** Reemplaza {{n}} por los valores — el mismo render que hace el server. */
 const renderTpl = (body: string, params: string[]): string =>

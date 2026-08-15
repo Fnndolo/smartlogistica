@@ -171,20 +171,8 @@ model WarehouseMember {
 // Conexion a un proveedor de IA con vision (OpenAI / Gemini / Anthropic) a nivel
 // tenant. Una sola por tenant (el modelo a utilizar). Se usa para extraer el IMEI
 // de la foto. La API key va cifrada con la DEK del tenant (envelope).
-// Conexion global a Whapify (WhatsApp del negocio). Singleton por tenant.
-model WhapifyConnection {
-  id             String   @id @default(cuid())
-  encryptedToken Bytes
-  accountName    String?
-  totalContacts  Int?
-  status         String   @default("connected")
-  lastError      String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-}
-
-// Historial de WhatsApp (Whapify no lo expone por API: se guarda AQUI todo lo
-// que pasa — salientes al enviarlos desde la plataforma, entrantes via webhook).
+// Historial de WhatsApp (se guarda AQUI todo lo que pasa por el numero —
+// salientes al enviarlos desde la plataforma, entrantes via webhook Cloud API).
 // El hilo se arma por TELEFONO (10 digitos CO): un cliente comparte hilo entre
 // sus pedidos.
 model WaMessage {
@@ -199,7 +187,7 @@ model WaMessage {
   mediaUrl      String?
   authorId      String? // usuario de la plataforma que lo envio (salientes)
   authorName    String?
-  contactId     String? // id del contacto en Whapify
+  contactId     String? // legado (id de contacto del proveedor anterior) / stash "media:<id>"
   // Botones del mensaje (titulos, solo para PINTARLOS en el hilo como en el cel).
   buttons       Json?
   // Id del mensaje en WhatsApp (wamid de la Cloud API): dedup de reentregas.
@@ -209,9 +197,9 @@ model WaMessage {
   @@index([phone, createdAt])
 }
 
-// Conexion a 360dialog (Cloud API de Meta, BSP api-first). Singleton. Reemplazo
-// de Whapify: con ella los envios salen por la Cloud API y el webhook recibe
-// TODO (mensajes, medios, echoes del celular con coexistencia).
+// Conexion a 360dialog (Cloud API de Meta, BSP api-first). Singleton: los
+// envios salen por la Cloud API y el webhook recibe TODO (mensajes, medios,
+// echoes del celular con coexistencia).
 model Dialog360Connection {
   id              String   @id @default(cuid())
   encryptedApiKey Bytes
@@ -223,7 +211,7 @@ model Dialog360Connection {
   updatedAt       DateTime @updatedAt
 }
 
-// Cache telefono -> contacto de Whapify (evita buscar/crear en cada envio).
+// Contacto de WhatsApp por telefono (nombre + estado del flujo de confirmacion).
 model WaContact {
   phone        String   @id
   contactId    String
@@ -313,7 +301,7 @@ model Order {
   shippingStatus       String? // descripcion cruda de Coordinadora
   shippingUpdatedAt    DateTime?
 
-  // Confirmacion de direccion por WhatsApp (Whapify): el cliente confirma o
+  // Confirmacion de direccion por WhatsApp: el cliente confirma o
   // modifica su direccion desde el mensaje de confirmacion del pedido.
   addressStatus        String? // null=sin responder | confirmed | modified
   confirmedAddress     String? // texto de la nueva direccion cuando modified
@@ -453,9 +441,9 @@ model WebhookEvent {
   @@index([status, receivedAt])
 }
 
-/// Cada llamada que hace Whapify al webhook de confirmacion de direccion.
+/// Cada respuesta del cliente al flujo de confirmacion de direccion.
 /// Fuente de verdad para diagnosticar: si el cliente confirmo en WhatsApp y
-/// no hay fila aqui, Whapify nunca llamo a la plataforma.
+/// no hay fila aqui, la respuesta nunca llego a la plataforma.
 model ConfirmationLog {
   id        String   @id @default(cuid())
   phone     String

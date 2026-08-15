@@ -18,7 +18,6 @@ import {
   dialog360CredentialsSchema,
   sendWaTemplateSchema,
   sendWaTextSchema,
-  whapifyCredentialsSchema,
   type Dialog360ConnectionSummary,
   type Dialog360CredentialsInput,
   type Dialog360TestResult,
@@ -27,9 +26,6 @@ import {
   type WaMessage,
   type WaTemplateList,
   type WaThread,
-  type WhapifyConnectionSummary,
-  type WhapifyCredentialsInput,
-  type WhapifyTestResult,
 } from '@smartlogistica/shared';
 
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -41,40 +37,6 @@ interface UploadedWaFile {
   buffer: Buffer;
   mimetype: string;
   originalname?: string;
-}
-
-/** Conexion global a Whapify (token del API). Solo administradores. */
-@Controller('connections/whapify')
-export class WhapifyConnectionController {
-  constructor(private readonly whatsapp: WhatsappService) {}
-
-  @Get()
-  async get(@CurrentUser() user: AuthContext): Promise<WhapifyConnectionSummary | null> {
-    return this.whatsapp.getConnection(user);
-  }
-
-  @Post('test')
-  @HttpCode(200)
-  async test(
-    @Body(new ZodValidationPipe(whapifyCredentialsSchema)) body: WhapifyCredentialsInput,
-    @CurrentUser() user: AuthContext,
-  ): Promise<WhapifyTestResult> {
-    return this.whatsapp.test(body, user);
-  }
-
-  @Put()
-  async connect(
-    @Body(new ZodValidationPipe(whapifyCredentialsSchema)) body: WhapifyCredentialsInput,
-    @CurrentUser() user: AuthContext,
-  ): Promise<WhapifyConnectionSummary> {
-    return this.whatsapp.connect(body, user);
-  }
-
-  @Delete()
-  @HttpCode(204)
-  async disconnect(@CurrentUser() user: AuthContext): Promise<void> {
-    await this.whatsapp.disconnect(user);
-  }
 }
 
 /**
@@ -132,7 +94,7 @@ export class OrderWhatsappController {
 
   /**
    * Envio MANUAL de la confirmacion del pedido (el boton "Sin enviar" de la
-   * columna Direccion): mismo flujo de Whapify que el automatico.
+   * columna Direccion): misma plantilla/flujo que el automatico.
    */
   @Post(':id/whatsapp/confirmation')
   @HttpCode(200)

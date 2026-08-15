@@ -22,7 +22,7 @@ export type AddressStatus = z.infer<typeof addressStatusSchema>;
 export const addressFilterSchema = z.enum(['confirmed', 'modified', 'pending']);
 export type AddressFilter = z.infer<typeof addressFilterSchema>;
 
-/** Cuerpo que manda Whapify (Solicitud de API Externa) al confirmar/modificar la direccion. */
+/** Cuerpo del webhook de confirmacion/modificacion de direccion (legado externo). */
 export const confirmAddressWebhookSchema = z.object({
   phone: z.string().trim().min(5).max(30),
   action: addressStatusSchema, // 'confirmed' | 'modified'
@@ -85,11 +85,11 @@ export const orderSummarySchema = z.object({
   addressStatus: addressStatusSchema.nullable(),
   confirmedAddress: z.string().nullable(),
   addressConfirmedAt: z.string().datetime().nullable(),
-  // Estado del MENSAJE de confirmacion (el flujo de Whapify):
-  // 'unsent' = deberia haberse enviado y NO salio (Whapify caido/sin saldo) ->
+  // Estado del MENSAJE de confirmacion (plantilla de WhatsApp):
+  // 'unsent' = deberia haberse enviado y NO salio (WhatsApp caido/bloqueado) ->
   // la columna Direccion muestra un BOTON para enviarlo a mano.
   // 'sent' = ya se envio desde la plataforma. null = no aplica (pedido de antes
-  // de conectar Whapify, manual, sin telefono...).
+  // de que la plataforma enviara confirmaciones, manual, sin telefono...).
   waConfirmation: z.enum(['sent', 'unsent']).nullable().default(null),
   // Plataforma de origen de un pedido MONTADO a mano (Krediya, Mercado Libre...).
   // null en los de marketplace (su plataforma es el provider: VTEX). El color

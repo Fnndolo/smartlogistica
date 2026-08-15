@@ -287,7 +287,7 @@ function DrawerContent({
         }[])
       : []),
     // WhatsApp de ULTIMA. TEMPORAL: solo el PROPIETARIO (primer administrador)
-    // mientras la integracion con Whapify madura — los demas ni la ven.
+    // mientras la integracion de WhatsApp madura — los demas ni la ven.
     ...(me?.role === 'OWNER'
       ? ([{ id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle }] as {
           id: Tab;
@@ -493,7 +493,7 @@ function TabPane({
 
 // === Tab: Detalle ===
 
-/** Estado de la confirmacion de direccion por WhatsApp (Whapify). */
+/** Estado de la confirmacion de direccion por WhatsApp. */
 function AddressConfirmation({ order }: { order: OrderSummary }) {
   if (!order.addressStatus) {
     return (

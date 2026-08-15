@@ -258,10 +258,7 @@ export class OrdersService {
             new Map<string, UnreadInfo>(),
             new Map<string, OrderSummary['reactions']>(),
             new Set<string>(),
-            { whapify: null, d360: null } as {
-              whapify: { createdAt: Date } | null;
-              d360: { createdAt: Date; mode: string } | null;
-            },
+            { d360: null } as { d360: { createdAt: Date; mode: string } | null },
           ]
         : await Promise.all([
             prisma.orderMessage
@@ -279,33 +276,27 @@ export class OrdersService {
                 distinct: ['orderId'],
               })
               .then((g) => new Set(g.map((x) => x.orderId))),
-            // Conexiones de WhatsApp (Whapify y 360dialog, con su modo).
-            Promise.all([
-              prisma.whapifyConnection.findFirst({ select: { createdAt: true } }),
-              prisma.dialog360Connection.findFirst({ select: { createdAt: true, mode: true } }),
-            ]).then(([whapify, d360]) => ({ whapify, d360 })),
+            // Conexion de WhatsApp (360dialog, con su modo).
+            prisma.dialog360Connection
+              .findFirst({ select: { createdAt: true, mode: true } })
+              .then((d360) => ({ d360 })),
           ]);
 
-    // 'unsent' SOLO desde que existe una conexion de WhatsApp QUE GOBIERNE ese
-    // pedido (los de la era n8n no tienen evento aca aunque SI se les envio):
-    // - El SANDBOX de 360dialog solo puede escribirle al numero de prueba ->
-    //   solo gobierna los pedidos MONTADOS a mano (los de ensayo). Los VTEX
-    //   reales siguen siendo de n8n/Whapify hasta conectar PRODUCCION.
+    // 'unsent' SOLO desde que la PLATAFORMA esta a cargo de las confirmaciones
+    // (los pedidos de la era n8n no tienen evento aca aunque SI se les envio).
+    // El corte es la fecha de la conexion Whapify original (ya purgada): desde
+    // ahi todo pedido sin evento realmente quedo sin mensaje.
+    // El SANDBOX solo gobierna pedidos MONTADOS a mano (los de ensayo).
+    const WA_CONFIRMATION_SINCE = new Date('2026-08-14T01:32:33Z');
     const waStateOf = (o: OrderWithItems): OrderSummary['waConfirmation'] => {
       if (!o.customerPhone) return null;
       if (o.provider !== 'vtex' && o.provider !== 'manual') return null;
-      const d360Rules = waConn.d360 && (o.provider === 'manual' || waConn.d360.mode === 'production');
-      const conn =
-        waConn.whapify && d360Rules
-          ? waConn.whapify.createdAt <= waConn.d360!.createdAt
-            ? waConn.whapify
-            : waConn.d360!
-          : (waConn.whapify ?? (d360Rules ? waConn.d360 : null));
-      if (!conn) return null;
+      const governs = waConn.d360 && (o.provider === 'manual' || waConn.d360.mode === 'production');
+      if (!governs) return null;
       if (waSent.has(o.id)) return 'sent';
-      return o.status === 'ready-for-handling' && o.marketplaceCreatedAt >= conn.createdAt
-        ? 'unsent'
-        : null;
+      const since =
+        waConn.d360!.createdAt < WA_CONFIRMATION_SINCE ? waConn.d360!.createdAt : WA_CONFIRMATION_SINCE;
+      return o.status === 'ready-for-handling' && o.marketplaceCreatedAt >= since ? 'unsent' : null;
     };
 
     return {
