@@ -59,6 +59,16 @@ const CONFIRMATION_MAX_AGE_MS = 48 * 3_600_000;
 // (quedo asociado a categoria MARKETING); la UTILITY nueva es esta.
 const D360_TEMPLATE_NAME = process.env.D360_CONFIRMATION_TEMPLATE ?? 'confirmacion_datos_pedido';
 const D360_TEMPLATE_LANG = process.env.D360_CONFIRMATION_LANG ?? 'es';
+/**
+ * Prioridad de plantillas de confirmacion: se usa la PRIMERA que este aprobada
+ * en la WABA. La original con emojis manda; la sobria es el respaldo (ambas
+ * UTILITY, creadas por API el dia de la migracion a 360dialog).
+ */
+const CONFIRMATION_TEMPLATE_PRIORITY = [
+  ...(process.env.D360_CONFIRMATION_TEMPLATE ? [process.env.D360_CONFIRMATION_TEMPLATE] : []),
+  'confirmacion_compra_smart',
+  'confirmacion_datos_pedido',
+];
 
 /**
  * Cuerpo de la plantilla ({{1}} nombre, {{2}} productos, {{3}} direccion).
@@ -1131,7 +1141,29 @@ export class WhatsappService {
     if (viaD360 && d360) {
       const nombre =
         `${cpd.firstName ?? ''} ${cpd.lastName ?? ''}`.trim() || (order.customerName ?? 'cliente');
-      const rendered = tplBody(nombre, productos || '—', direccion || '—');
+      const params = [nombre, productos || '—', direccion || '—'];
+      let rendered = tplBody(nombre, productos || '—', direccion || '—');
+      let tplName = D360_TEMPLATE_NAME;
+      let tplLang = D360_TEMPLATE_LANG;
+      // La MEJOR plantilla de confirmacion APROBADA en la WABA, por prioridad
+      // (la original con emojis primero; si Meta aun no la aprueba, la sobria).
+      // Asi el cambio se activa SOLO, sin redesplegar, y el hilo guarda el
+      // texto REAL de la que salio. Si la consulta falla: defaults del env.
+      if (d360.mode === 'production') {
+        try {
+          const list = await this.dialog360.listTemplates(d360.http);
+          const pick = CONFIRMATION_TEMPLATE_PRIORITY.map((name) =>
+            list.find((t) => t.name === name && t.status === 'approved'),
+          ).find(Boolean);
+          if (pick) {
+            tplName = pick.name;
+            tplLang = pick.language;
+            rendered = renderTemplateBody(pick.body, params);
+          }
+        } catch (err) {
+          this.logger.warn(`No se pudieron listar plantillas: ${(err as Error).message}`);
+        }
+      }
       let wamid: string | null = null;
       try {
         if (d360.mode === 'sandbox') {
@@ -1144,8 +1176,8 @@ export class WhatsappService {
             d360.http,
             d360.mode,
             `57${phone}`,
-            D360_TEMPLATE_NAME,
-            D360_TEMPLATE_LANG,
+            tplName,
+            tplLang,
             [
               {
                 type: 'body',

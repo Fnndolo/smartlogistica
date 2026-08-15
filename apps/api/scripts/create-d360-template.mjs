@@ -17,23 +17,28 @@ const stripSsl = (u) => { const x = new URL(u); x.searchParams.delete('sslmode')
 const pgSsl = () => (process.env.TENANT_DB_SSLMODE ?? 'require') === 'disable' ? undefined : { rejectUnauthorized: false };
 const adminDb = (u, db) => { const x = new URL(u); x.pathname = `/${db}`; return x.toString(); };
 
-// DEBE ser identico a tplBody() en whatsapp.service.ts.
+// La plantilla ORIGINAL del negocio (emojis) — intento como UTILITY: si Meta
+// la reclasifica a MARKETING, se queda la version sobria (confirmacion_datos_pedido).
 const BODY =
-  'Hola {{1}}, le escribimos de Smart Gadgets para confirmar los datos de su pedido.\n\n' +
-  'Productos: {{2}}\n' +
-  'Dirección de entrega: {{3}}\n\n' +
-  'Si desea agregar información adicional a la dirección, quedamos atentos para incluirla ' +
-  'en la guía. ¿Nos confirma que sus datos son correctos?';
+  '¡Hola {{1}}! 👋 Es un gusto saludarle 😃\n\n' +
+  'Le escribimos de Smart Gadgets para confirmar su compra de:\n' +
+  '📱 {{2}}\n' +
+  'Por nuestra plataforma de ADDI 💙\n\n' +
+  '📍 A la dirección:\n' +
+  '{{3}}\n\n' +
+  'Si desea agregar alguna información adicional o más específica, quedamos atentos ' +
+  'para incluirla en la guía 😉\n\n' +
+  '🔍 ¿Me confirma si sus datos son correctos? ‼️';
 
 const TEMPLATE = {
-  name: 'confirmacion_datos_pedido',
+  name: 'confirmacion_compra_smart',
   language: 'es',
   category: 'UTILITY',
   components: [
     {
       type: 'BODY',
       text: BODY,
-      example: { body_text: [['Carlos', '1 HONOR X6c 256GB', 'Calle 12 # 3-45, Medellín, Antioquia']] },
+      example: { body_text: [['DAVID CASTRO', '1 IPHONE 17 PRO MAX 256', 'CALLE 16 # 23-71 CENTRO']] },
     },
     {
       type: 'BUTTONS',
