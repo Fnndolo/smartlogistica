@@ -320,7 +320,10 @@ export class WhatsappService {
     // ESTE usuario). Sin marca previa no se pinta divisor (chat nunca abierto).
     let firstUnreadId: string | null = null;
     let unreadCount = 0;
-    if (readMark) {
+    // Regla: si el ULTIMO mensaje es NUESTRO (bot/admin), el chat quedo
+    // respondido -> sin divisor ni conteo.
+    const lastRow = rows[rows.length - 1];
+    if (readMark && lastRow?.direction === 'in') {
       for (const r of rows) {
         if (r.direction !== 'in' || r.createdAt <= readMark.lastReadAt) continue;
         if (!firstUnreadId) firstUnreadId = r.id;
@@ -517,7 +520,9 @@ export class WhatsappService {
           m.direction === 'out' && ['sent', 'delivered', 'read', 'failed'].includes(m.status ?? '')
             ? (m.status as 'sent' | 'delivered' | 'read' | 'failed')
             : null,
-        unread: unread.get(m.phone) ?? 0,
+        // Si el ULTIMO mensaje es NUESTRO (bot del flujo o un admin), el chat
+        // ya quedo respondido: NO cuenta como no leido.
+        unread: m.direction === 'out' ? 0 : (unread.get(m.phone) ?? 0),
       }));
     const labels = [...new Set(chats.flatMap((c) => c.labels))].sort((a, b) => a.localeCompare(b));
     return { chats, labels };

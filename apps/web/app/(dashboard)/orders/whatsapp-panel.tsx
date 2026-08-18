@@ -196,7 +196,7 @@ export function WhatsappPanel({
   const [tplParams, setTplParams] = useState<string[]>([]);
   const slashMode = !tpl && text.startsWith('/');
 
-  const { data: thread, isLoading, isFetchedAfterMount } = useQuery({
+  const { data: thread, isLoading, isFetchedAfterMount, dataUpdatedAt } = useQuery({
     queryKey: ['wa-thread', base],
     queryFn: () => api.get<WaThread>(base),
     // Respaldo por si el SSE se cae; el canal primario es wa.message.
@@ -438,12 +438,14 @@ export function WhatsappPanel({
   const [dividerCount, setDividerCount] = useState(0);
   const [dividerDone, setDividerDone] = useState(false);
   useEffect(() => {
-    // Solo con respuesta FRESCA del server (la cache vieja ya venia "leida").
-    if (dividerDone || !thread || !isFetchedAfterMount) return;
+    // Solo con datos FRESCOS: respuesta post-montaje o precarga reciente
+    // (<20s). La cache vieja ya venia "leida" y borraria el divisor.
+    const fresh = isFetchedAfterMount || Date.now() - dataUpdatedAt < 20_000;
+    if (dividerDone || !thread || !fresh) return;
     setDividerId(thread.firstUnreadId);
     setDividerCount(thread.unreadCount);
     setDividerDone(true);
-  }, [thread, dividerDone, isFetchedAfterMount]);
+  }, [thread, dividerDone, isFetchedAfterMount, dataUpdatedAt]);
 
   // Posicionamiento INSTANTANEO (antes de pintar): apenas hay mensajes
   // (cache incluida) el chat ya nace ABAJO — sin "pensar y bajar". El bucle
@@ -726,9 +728,25 @@ export function WhatsappPanel({
   };
 
   if (isLoading) {
+    // SIN spinner: se pinta el lienzo del chat (fondo doodle + barra) y los
+    // mensajes aparecen en cuanto llegan — se siente instantaneo.
     return (
-      <div className="flex justify-center py-10">
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+      <div className="flex h-full flex-col">
+        <div className="relative min-h-0 flex-1 bg-[#efe7dd] dark:bg-[#0b141a]">
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 dark:hidden"
+            style={{ backgroundImage: WA_BG_LIGHT, backgroundSize: '360px 360px' }}
+          />
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 hidden dark:block"
+            style={{ backgroundImage: WA_BG_DARK, backgroundSize: '360px 360px' }}
+          />
+        </div>
+        <div className="bg-[#f0f2f5] px-2 py-2 dark:bg-[#202c33] md:px-3">
+          <div className="h-10" />
+        </div>
       </div>
     );
   }

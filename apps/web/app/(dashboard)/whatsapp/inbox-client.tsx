@@ -6,7 +6,7 @@ import { format, isToday, isYesterday } from 'date-fns';
 import { es } from 'date-fns/locale/es';
 import { ArrowLeft, Loader2, MessageCircle, Plus, Search, Tag, X } from 'lucide-react';
 import { toast } from 'sonner';
-import type { WaInbox, WaInboxItem, WaMessage } from '@smartlogistica/shared';
+import type { WaInbox, WaInboxItem, WaMessage, WaThread } from '@smartlogistica/shared';
 
 import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { ApiError, api } from '@/lib/api-client';
@@ -133,6 +133,26 @@ export function WhatsappInbox() {
     [qc],
   );
 
+  // PRE-CARGA de hilos (cero pantalla de carga al abrir): los primeros de la
+  // lista apenas llega la bandeja + el que este bajo el mouse.
+  const prefetchedRef = useRef(new Set<string>());
+  const prefetchThread = useCallback(
+    (phone: string) => {
+      if (prefetchedRef.current.has(phone)) return;
+      prefetchedRef.current.add(phone);
+      void qc.prefetchQuery({
+        queryKey: ['wa-thread', `/v1/whatsapp/chats/${phone}`],
+        queryFn: () => api.get<WaThread>(`/v1/whatsapp/chats/${phone}`),
+        staleTime: 15_000,
+      });
+    },
+    [qc],
+  );
+  const topChats = inbox?.chats;
+  useEffect(() => {
+    (topChats ?? []).slice(0, 15).forEach((c) => prefetchThread(c.phone));
+  }, [topChats, prefetchThread]);
+
   const openChat = (phone: string) => {
     setSelected(phone);
     clearUnread(phone);
@@ -165,8 +185,9 @@ export function WhatsappInbox() {
             lastBody: msg.body,
             lastDirection: msg.direction,
             lastStatus: msg.direction === 'out' ? msg.status : null,
-            unread:
-              msg.direction === 'in' && !isOpen ? (existing?.unread ?? 0) + 1 : (isOpen ? 0 : (existing?.unread ?? 0)),
+            // Regla: si el ultimo mensaje es NUESTRO (bot/admin), el chat quedo
+            // respondido -> 0. Entrante con el chat cerrado -> suma.
+            unread: msg.direction === 'out' ? 0 : isOpen ? 0 : (existing?.unread ?? 0) + 1,
           };
           const rest = old.chats.filter((c) => c.phone !== phone);
           return { ...old, chats: [updated, ...rest] };
@@ -277,6 +298,7 @@ export function WhatsappInbox() {
                 key={c.phone}
                 type="button"
                 onClick={() => openChat(c.phone)}
+                onMouseEnter={() => prefetchThread(c.phone)}
                 className={cn(
                   'flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-[#f5f6f6] dark:hover:bg-[#202c33]',
                   selected === c.phone && 'bg-[#f0f2f5] dark:bg-[#2a3942]',
