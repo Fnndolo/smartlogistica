@@ -447,6 +447,13 @@ export class WhatsappService {
         // Chromium) ni links firmados (131053). Se TRANSCODIFICA a OGG/Opus
         // (el formato de nota de voz real) y se sube por media id.
         const ogg = await this.toOggOpus(file.buffer, file.mimetype || '');
+        if (!ogg && (file.mimetype ?? '').includes('webm')) {
+          // WebM sin transcodificar JAMAS llega (Meta lo rechaza async con
+          // 131053): mejor fallar YA con la causa real.
+          throw new BadRequestException(
+            'No se pudo convertir la nota de voz (ffmpeg no disponible en el servidor). Avisa al administrador.',
+          );
+        }
         const up = ogg ?? { buffer: file.buffer, mime: file.mimetype || 'audio/mp4' };
         const mediaId = await this.dialog360.uploadMedia(
           d360!.apiKey,
@@ -1231,6 +1238,16 @@ export class WhatsappService {
           this.logger.warn(
             `Webhook Cloud con campos NO procesados [${extra.join(', ')}]: ${JSON.stringify(v).slice(0, 900)}`,
           );
+          await prisma.webhookEvent
+            .create({
+              data: {
+                provider: 'wa-debug',
+                eventId: `extra-${randomUUID()}`,
+                payload: v as Prisma.InputJsonValue,
+                status: 'captured',
+              },
+            })
+            .catch(() => null);
         }
         // HISTORIAL de coexistencia (hasta 6 meses del celular, en fases y
         // chunks): se importa TODO con su fecha/estado originales (dedup por
@@ -1562,7 +1579,19 @@ export class WhatsappService {
             }
           }
         }
+        // CAPTURA para diagnostico: el payload queda en la DB (WebhookEvent
+        // provider 'wa-debug') para implementar la forma exacta con datos.
         this.logger.warn(`Edicion no aplicada (forma desconocida): ${JSON.stringify(m).slice(0, 800)}`);
+        await prisma.webhookEvent
+          .create({
+            data: {
+              provider: 'wa-debug',
+              eventId: `edit-${randomUUID()}`,
+              payload: m as Prisma.InputJsonValue,
+              status: 'captured',
+            },
+          })
+          .catch(() => null);
         return phone;
       }
 

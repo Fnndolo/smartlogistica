@@ -2424,7 +2424,7 @@ function WaAudio({
         <User className="h-9 w-9 translate-y-1" strokeWidth={1.6} fill="currentColor" />
       </span>
       <MicFilled
-        className={cn('absolute bottom-0 h-[17px] w-[17px]', mine ? '-right-1.5' : '-left-1.5')}
+        className={cn('absolute bottom-0 h-[17px] w-[17px]', mine ? '-right-1.5' : '-left-0.5')}
         style={{ color: micColor }}
       />
     </span>
@@ -2469,9 +2469,10 @@ function WaAudio({
   );
 
   return (
-    // ~2cm de alto. AVATAR, play y ONDA en LA MISMA linea (items-center: la
-    // mitad de la onda = la mitad del avatar); duracion y hora cuelgan abajo.
-    <div className="w-[310px] max-w-full px-1.5 py-2.5">
+    // AVATAR, play y ONDA en LA MISMA linea (la mitad de la onda = la mitad
+    // del avatar); duracion y hora SUBEN para quedar al filo inferior del
+    // circulo del avatar. Mismo alto SIEMPRE (enviado y recibido).
+    <div className="w-[310px] max-w-full px-1.5 pb-1 pt-2.5">
       <audio
         ref={audioRef}
         src={src}
@@ -2503,14 +2504,14 @@ function WaAudio({
           <>
             {playBtn}
             {waveRow}
-            <span className="pl-2">{avatar}</span>
+            <span className="shrink-0 pl-2">{avatar}</span>
           </>
         )}
       </div>
-      {/* Debajo: duracion bajo la ONDA y hora+chulitos a la derecha. */}
+      {/* Duracion y hora SUBIDAS: su borde inferior al filo del avatar. */}
       <div
         className={cn(
-          'mt-0.5 flex items-center justify-between text-[11px] text-[#667781] dark:text-[#8696a0]',
+          '-mt-[15px] flex items-center justify-between text-[11px] leading-[14px] text-[#667781] dark:text-[#8696a0]',
           mine ? 'pl-[104px] pr-1' : 'pl-[50px] pr-[62px]',
         )}
       >

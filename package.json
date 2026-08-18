@@ -23,5 +23,15 @@
     "prettier": "^3.3.3",
     "turbo": "^2.3.3",
     "typescript": "^5.7.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "ffmpeg-static",
+      "sharp",
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "esbuild"
+    ]
   }
 }
