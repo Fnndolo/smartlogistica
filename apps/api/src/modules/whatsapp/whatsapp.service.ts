@@ -147,6 +147,7 @@ interface WaMessageRow {
   replyToId?: string | null;
   reactions?: unknown;
   status?: string | null;
+  error?: string | null;
   starred?: boolean;
   createdAt: Date;
 }
@@ -1298,26 +1299,12 @@ export class WhatsappService {
 
     const msg = await prisma.waMessage.findUnique({ where: { externalId: wamid } });
     if (!msg) return null;
-    // Chulito rojo del mensaje que no llego.
+    if (msg.status === 'failed') return null; // ya procesado (reintentos del webhook)
+    // Bolita roja + detalle del error EN el mensaje (nada de notas al hilo:
+    // el detalle se ve al tocar la bolita).
     await prisma.waMessage
-      .update({ where: { id: msg.id }, data: { status: 'failed' } })
+      .update({ where: { id: msg.id }, data: { status: 'failed', error: `Meta: ${detail}` } })
       .catch(() => null);
-
-    // Nota en el hilo (dedup natural: externalId unico "fail:<wamid>").
-    try {
-      await prisma.waMessage.create({
-        data: {
-          phone: msg.phone,
-          direction: 'out',
-          kind: 'text',
-          body: `⚠️ El mensaje anterior NO se entregó (Meta: ${detail}).`,
-          authorName: 'Sistema',
-          externalId: `fail:${wamid}`,
-        },
-      });
-    } catch {
-      return null; // ya se habia procesado este fallo
-    }
 
     // ¿Era una confirmacion? Revertir el evento -> badge "Sin enviar" de nuevo.
     const events = await prisma.orderEvent.findMany({
@@ -1826,6 +1813,7 @@ export class WhatsappService {
         : null,
       reactions,
       status,
+      error: r.error ?? null,
       starred: Boolean(r.starred),
       createdAt: r.createdAt.toISOString(),
     };

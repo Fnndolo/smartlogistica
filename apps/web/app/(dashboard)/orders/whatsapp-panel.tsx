@@ -123,6 +123,13 @@ const emojiCount = (s: string): number => {
 
 const timeOf = (iso: string): string => format(new Date(iso), 'h:mm aaaa', { locale: es });
 
+/** Toast NEGRO con el motivo del fallo (al tocar la bolita roja). */
+const showFailToast = (m: WaMessage): void => {
+  toast(m.error ?? 'Meta no entregó este mensaje.', {
+    style: { background: '#111b21', color: '#ffffff', border: 'none' },
+  });
+};
+
 const dayLabel = (iso: string): string => {
   const d = new Date(iso);
   if (isToday(d)) return 'HOY';
@@ -130,20 +137,32 @@ const dayLabel = (iso: string): string => {
   return format(d, "d 'de' MMMM 'de' yyyy", { locale: es }).toUpperCase();
 };
 
-/** Chulitos de WhatsApp: reloj (enviando), ✓, ✓✓, ✓✓ azul, ! rojo. */
+/** Chulitos de WhatsApp: reloj (enviando), ✓, ✓✓, ✓✓ azul, ! rojo (clic = detalle). */
 export function Ticks({
   status,
   pending,
   onMedia = false,
+  onFail,
 }: {
   status: WaMessage['status'];
   pending: boolean;
   onMedia?: boolean;
+  /** Con handler, la bolita roja es CLICABLE (muestra el error). */
+  onFail?: () => void;
 }) {
   const base = onMedia ? 'text-white' : 'text-[#667781] dark:text-[#8696a0]';
   if (pending) return <Clock3 className={cn('h-[13px] w-[13px]', base)} />;
   if (!status) return null;
-  if (status === 'failed') return <AlertCircle className="h-[13px] w-[13px] text-[#f15c6d]" />;
+  if (status === 'failed') {
+    const icon = <AlertCircle className="h-[13px] w-[13px] text-[#f15c6d]" />;
+    return onFail ? (
+      <button type="button" onClick={onFail} aria-label="Ver por qué falló" title="Ver por qué falló">
+        {icon}
+      </button>
+    ) : (
+      icon
+    );
+  }
   const double = status !== 'sent';
   const color = status === 'read' ? 'text-[#53bdeb]' : base;
   return (
@@ -266,6 +285,7 @@ export function WhatsappPanel({
     replyTo: null,
     reactions: [],
     status: null,
+    error: null,
     starred: false,
     createdAt: new Date().toISOString(),
   });
@@ -1142,6 +1162,7 @@ export function WhatsappPanel({
               onKeyDown={(e) => {
                 if (e.key === 'Escape' && slashMode) {
                   e.preventDefault();
+                  e.stopPropagation(); // no cerrar el chat: solo salir del modo "/"
                   setText('');
                   return;
                 }
@@ -1419,9 +1440,12 @@ function AnchoredReactionBar({
       <div
         className={cn('wa-pop absolute z-40 flex flex-col gap-1', mine ? 'items-end' : 'items-start')}
         style={{
-          top: '-19px',
-          // 3 casillas (~36px c/u) quedan SOBRE la burbuja; el resto sale.
-          ...(mine ? { right: 'calc(100% - 112px)' } : { left: 'calc(100% - 112px)' }),
+          // Apenas ~3px de solape con la burbuja (encima "por un milimetro").
+          top: '-34px',
+          // Casillas FIJAS de 30px: el 3er emoji (recibidos) o el 5o
+          // (enviados) queda AL PIXEL del borde de la burbuja:
+          // borde + padding(5) + 3 casillas(90) = 95px.
+          ...(mine ? { right: 'calc(100% - 95px)' } : { left: 'calc(100% - 95px)' }),
           transformOrigin: mine ? 'top right' : 'top left',
         }}
       >
@@ -1432,7 +1456,7 @@ function AnchoredReactionBar({
               type="button"
               onClick={() => pick(e)}
               className={cn(
-                'rounded-full p-[4px] text-[19px] leading-[24px] transition-transform hover:scale-125',
+                'flex h-[30px] w-[30px] items-center justify-center rounded-full text-[19px] leading-none transition-transform hover:scale-125',
                 myEmoji === e && 'bg-black/10 dark:bg-white/15',
               )}
             >
@@ -1640,7 +1664,7 @@ function BareMessage({
         )}
       >
         {timeOf(m.createdAt)}
-        {mine ? <Ticks status={m.status} pending={pending} /> : null}
+        {mine ? <Ticks status={m.status} pending={pending} onFail={() => showFailToast(m)} /> : null}
       </span>
       <ReactionChips message={m} mine={mine} bare actions={actions} />
     </div>
@@ -1741,7 +1765,9 @@ function BubbleContent({
     >
       {m.starred ? <Star className="h-[11px] w-[11px] fill-current" /> : null}
       {timeOf(m.createdAt)}
-      {mine ? <Ticks status={m.status} pending={pending} onMedia={onMedia} /> : null}
+      {mine ? (
+        <Ticks status={m.status} pending={pending} onMedia={onMedia} onFail={() => showFailToast(m)} />
+      ) : null}
     </span>
   );
 
@@ -2005,7 +2031,7 @@ function WaAudio({
           <span>{fmtSecs(playing || t > 0 ? t : (dur ?? 0))}</span>
           <span className="flex items-center gap-1">
             {timeOf(m.createdAt)}
-            {mine ? <Ticks status={m.status} pending={pending} /> : null}
+            {mine ? <Ticks status={m.status} pending={pending} onFail={() => showFailToast(m)} /> : null}
           </span>
         </div>
       </div>

@@ -65,6 +65,8 @@ export const waMessageSchema = z.object({
   reactions: z.array(z.object({ emoji: z.string(), mine: z.boolean() })).default([]),
   /** Chulitos de salientes: sent | delivered | read | failed (null = sin dato). */
   status: z.enum(['sent', 'delivered', 'read', 'failed']).nullable().default(null),
+  /** Detalle del FALLO de entrega (se muestra al tocar la bolita roja). */
+  error: z.string().nullable().default(null),
   /** Destacado (estrella), como en WhatsApp. */
   starred: z.boolean().default(false),
   createdAt: z.string(),

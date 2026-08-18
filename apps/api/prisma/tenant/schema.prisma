@@ -196,6 +196,8 @@ model WaMessage {
   reactions     Json?
   // Chulitos de salientes: sent | delivered | read | failed.
   status        String?
+  // Detalle del FALLO de entrega (Meta) — se muestra al tocar la bolita roja.
+  error         String?
   // Destacado (estrella), como en WhatsApp.
   starred       Boolean  @default(false)
   // Id del mensaje en WhatsApp (wamid de la Cloud API): dedup de reentregas.

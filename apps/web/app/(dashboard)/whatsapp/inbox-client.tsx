@@ -158,6 +158,16 @@ export function WhatsappInbox() {
     clearUnread(phone);
   };
 
+  // ESC cierra el chat abierto (como WhatsApp Web).
+  useEffect(() => {
+    if (!selected) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSelected(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected]);
+
   // Tiempo real: el evento trae el MENSAJE -> actualizar la lista al instante
   // (subir el chat, vista previa, contador). Si el chat esta ABIERTO, se marca
   // leido de una. Sin mensaje (reacciones/estados/etiquetas) -> refetch.
