@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { format, isToday, isYesterday } from 'date-fns';
@@ -445,31 +445,27 @@ export function WhatsappPanel({
     setDividerDone(true);
   }, [thread, dividerDone, isFetchedAfterMount]);
 
-  // Primer posicionamiento: al divisor (centrado) o al FONDO. Mientras cargan
-  // fotos/stickers el contenido CRECE, asi que se PINEA en bucle ~1.5s hasta
-  // que el usuario interactue (rueda/tacto) — adios a quedar "a mitad".
+  // Posicionamiento INSTANTANEO (antes de pintar): apenas hay mensajes
+  // (cache incluida) el chat ya nace ABAJO — sin "pensar y bajar". El bucle
+  // de ~1.5s lo mantiene abajo mientras las fotos/stickers estiran el
+  // contenido, hasta que el usuario interactue (rueda/tacto).
   const userMovedRef = useRef(false);
-  useEffect(() => {
-    if (!active || count === 0 || !dividerDone || initialScrollDoneRef.current) return;
+  useLayoutEffect(() => {
+    if (!active || count === 0 || initialScrollDoneRef.current) return;
     initialScrollDoneRef.current = true;
     const el = scrollRef.current;
     if (!el) return;
+    el.scrollTop = el.scrollHeight;
     const markMoved = () => {
       userMovedRef.current = true;
     };
     el.addEventListener('wheel', markMoved, { passive: true });
     el.addEventListener('touchstart', markMoved, { passive: true });
     const until = Date.now() + 1500;
-    const divider = () => el.querySelector<HTMLElement>('[data-unread-divider]');
     const pin = () => {
       if (userMovedRef.current) return;
-      const d = divider();
-      if (d) {
-        stickBottomRef.current = false;
-        d.scrollIntoView({ block: 'center' });
-      } else {
-        el.scrollTop = el.scrollHeight;
-      }
+      // Si ya aparecio el divisor de no leidos, ese manda (efecto de abajo).
+      if (!el.querySelector('[data-unread-divider]')) el.scrollTop = el.scrollHeight;
       if (Date.now() < until) requestAnimationFrame(pin);
     };
     requestAnimationFrame(pin);
@@ -477,7 +473,20 @@ export function WhatsappPanel({
       el.removeEventListener('wheel', markMoved);
       el.removeEventListener('touchstart', markMoved);
     };
-  }, [active, count, dividerDone, dividerId]);
+  }, [active, count]);
+
+  // Divisor de no leidos (llega con la respuesta fresca): centrarlo — salvo
+  // que el usuario ya este navegando.
+  useEffect(() => {
+    if (!dividerId || userMovedRef.current) return;
+    requestAnimationFrame(() => {
+      const d = scrollRef.current?.querySelector<HTMLElement>('[data-unread-divider]');
+      if (d && !userMovedRef.current) {
+        stickBottomRef.current = false;
+        d.scrollIntoView({ block: 'center' });
+      }
+    });
+  }, [dividerId]);
 
   // Mensajes NUEVOS: bajar solo si ya estabamos pegados abajo.
   useEffect(() => {

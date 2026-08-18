@@ -730,6 +730,27 @@ export class WhatsappService {
     return this.sendStickerByKey(rawPhone, key, auth);
   }
 
+  /**
+   * Meta EXIGE stickers estaticos webp 512x512 de MENOS de 100KB: los que
+   * pasan de ahi los ACEPTA al subir pero los rechaza al ENTREGAR (131053
+   * silencioso). Se re-comprimen aca con sharp hasta caber.
+   */
+  private async normalizeSticker(buffer: Buffer): Promise<Buffer> {
+    const LIMIT = 95 * 1024;
+    if (buffer.length <= LIMIT) return buffer;
+    const sharp = (await import('sharp')).default;
+    const encode = (quality: number) =>
+      sharp(buffer)
+        .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+        .webp({ quality })
+        .toBuffer();
+    for (const q of [80, 65, 50, 35, 25]) {
+      const out = await encode(q);
+      if (out.length <= LIMIT) return out;
+    }
+    return encode(15);
+  }
+
   private async sendStickerByKey(rawPhone: string, key: string, auth: AuthContext): Promise<WaMessageDto> {
     const { tenantId, prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
@@ -738,26 +759,21 @@ export class WhatsappService {
     this.requireD360(d360, 'external');
     let wamid: string | null = null;
     try {
-      // SUBIR a Meta y enviar por id (el envio por link firmado fallaba con
-      // 131053 Media upload error); si la subida falla, se intenta por link.
+      // Normalizar (<100KB, 512x512) + SUBIR a Meta + enviar por media id.
       const obj = await this.storage.get(key);
       if (!obj) throw new NotFoundException('Sticker no disponible en el storage');
-      const mediaId = await this.dialog360
-        .uploadMedia(d360!.apiKey, d360!.mode, obj.buffer, 'image/webp', 'sticker.webp')
-        .catch((err) => {
-          this.logger.warn(`Upload de sticker fallo: ${err instanceof Error ? err.message : err}`);
-          return null;
-        });
-      wamid = mediaId
-        ? await this.dialog360.sendMediaId(d360!.http, d360!.mode, `57${phone}`, 'sticker', mediaId)
-        : await this.dialog360.sendMediaLink(
-            d360!.http,
-            d360!.mode,
-            `57${phone}`,
-            'sticker',
-            await this.storage.getSignedUrl(key),
-          );
+      const webp = await this.normalizeSticker(obj.buffer);
+      const mediaId = await this.dialog360.uploadMedia(
+        d360!.apiKey,
+        d360!.mode,
+        webp,
+        'image/webp',
+        'sticker.webp',
+      );
+      if (!mediaId) throw new BadRequestException('Meta no devolvió el id del sticker');
+      wamid = await this.dialog360.sendMediaId(d360!.http, d360!.mode, `57${phone}`, 'sticker', mediaId);
     } catch (err) {
+      if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
       throw this.translateError(err, 'No se pudo enviar el sticker');
     }
     const row = await prisma.waMessage.create({

@@ -6,6 +6,7 @@
  */
 import pg from 'pg';
 import crypto from 'node:crypto';
+import sharp from 'sharp';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 
 const { Client } = pg;
@@ -45,8 +46,21 @@ async function main() {
     forcePathStyle: true,
   });
   const obj = await s3.send(new GetObjectCommand({ Bucket: process.env.STORAGE_BUCKET, Key: st.attachmentKey }));
-  const buffer = Buffer.from(await obj.Body.transformToByteArray());
+  let buffer = Buffer.from(await obj.Body.transformToByteArray());
   console.log(`Descargado: ${buffer.length} bytes, contentType=${obj.ContentType}`);
+
+  // Normalizar como el server: Meta exige <100KB 512x512 (si no, 131053 al entregar).
+  if (buffer.length > 95 * 1024) {
+    for (const q of [80, 65, 50, 35, 25]) {
+      const out = await sharp(buffer)
+        .resize(512, 512, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+        .webp({ quality: q })
+        .toBuffer();
+      console.log(`  re-encode q=${q}: ${out.length} bytes`);
+      if (out.length <= 95 * 1024) { buffer = out; break; }
+    }
+  }
+  console.log(`A subir: ${buffer.length} bytes`);
 
   const apiKey = decField(conn.encryptedApiKey, dek);
   const base = 'https://waba-v2.360dialog.io';
