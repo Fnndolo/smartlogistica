@@ -110,7 +110,7 @@ const dayLabel = (iso: string): string => {
 };
 
 /** Chulitos de WhatsApp: reloj (enviando), ✓, ✓✓, ✓✓ azul, ! rojo. */
-function Ticks({
+export function Ticks({
   status,
   pending,
   onMedia = false,

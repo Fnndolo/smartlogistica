@@ -129,6 +129,8 @@ export const waInboxItemSchema = z.object({
   lastKind: waMessageKindSchema,
   lastBody: z.string().nullable(),
   lastDirection: z.enum(['in', 'out']),
+  /** Chulitos del ultimo mensaje SALIENTE (sent/delivered/read/failed). */
+  lastStatus: z.enum(['sent', 'delivered', 'read', 'failed']).nullable().default(null),
   /** Mensajes entrantes sin leer POR ESTE usuario (contador verde). */
   unread: z.number().int().min(0),
 });

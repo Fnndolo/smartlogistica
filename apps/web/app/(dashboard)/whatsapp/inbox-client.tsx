@@ -12,7 +12,7 @@ import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { ApiError, api } from '@/lib/api-client';
 import { cn, titleCaseName } from '@/lib/utils';
 
-import { WhatsappPanel } from '../orders/whatsapp-panel';
+import { Ticks, WhatsappPanel } from '../orders/whatsapp-panel';
 import { useOrdersStream } from '../orders/use-orders-stream';
 
 /* =====================================================================
@@ -164,6 +164,7 @@ export function WhatsappInbox() {
             lastKind: msg.kind,
             lastBody: msg.body,
             lastDirection: msg.direction,
+            lastStatus: msg.direction === 'out' ? msg.status : null,
             unread:
               msg.direction === 'in' && !isOpen ? (existing?.unread ?? 0) + 1 : (isOpen ? 0 : (existing?.unread ?? 0)),
           };
@@ -180,6 +181,8 @@ export function WhatsappInbox() {
 
   const chats = inbox?.chats ?? [];
   const labels = inbox?.labels ?? [];
+  // CHATS con no leidos (no mensajes) — el numerito del chip, como WhatsApp.
+  const unreadChats = chats.filter((c) => c.unread > 0).length;
   const query = q.trim().toLowerCase();
   const digits = query.replace(/\D/g, '');
   const filtered = chats.filter((c) => {
@@ -238,7 +241,7 @@ export function WhatsappInbox() {
         <div className="scrollbar-none flex gap-1.5 overflow-x-auto px-3 pb-2">
           {[
             { id: 'all', label: 'Todos' },
-            { id: 'unread', label: 'No leídos' },
+            { id: 'unread', label: unreadChats > 0 ? `No leídos ${unreadChats}` : 'No leídos' },
             ...labels.map((l) => ({ id: l, label: l })),
           ].map((f) => (
             <button
@@ -297,8 +300,12 @@ export function WhatsappInbox() {
                     </span>
                   </span>
                   <span className="mt-0.5 flex items-center justify-between gap-2">
-                    <span className="truncate text-[13px] text-[#667781] dark:text-[#8696a0]">
-                      {preview(c)}
+                    <span className="flex min-w-0 items-center gap-1 text-[13px] text-[#667781] dark:text-[#8696a0]">
+                      {/* Chulitos del ultimo mensaje NUESTRO (como WhatsApp). */}
+                      {c.lastDirection === 'out' && c.lastStatus ? (
+                        <Ticks status={c.lastStatus} pending={false} />
+                      ) : null}
+                      <span className="truncate">{preview(c)}</span>
                     </span>
                     <span className="flex shrink-0 items-center gap-1">
                       {c.labels.slice(0, 2).map((l) => (

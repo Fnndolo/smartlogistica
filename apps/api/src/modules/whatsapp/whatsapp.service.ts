@@ -431,8 +431,15 @@ export class WhatsappService {
 
     const [last, unreadRows, contacts] = await Promise.all([
       prisma.$queryRaw<
-        Array<{ phone: string; kind: string; body: string | null; direction: string; createdAt: Date }>
-      >`SELECT DISTINCT ON (phone) phone, kind, body, direction, "createdAt"
+        Array<{
+          phone: string;
+          kind: string;
+          body: string | null;
+          direction: string;
+          status: string | null;
+          createdAt: Date;
+        }>
+      >`SELECT DISTINCT ON (phone) phone, kind, body, direction, status, "createdAt"
         FROM "WaMessage" ORDER BY phone, "createdAt" DESC`,
       prisma.$queryRaw<Array<{ phone: string; unread: bigint }>>`
         SELECT m.phone, COUNT(*)::bigint AS unread
@@ -462,6 +469,10 @@ export class WhatsappService {
         lastKind: waKindOf(m.kind),
         lastBody: m.body,
         lastDirection: m.direction === 'out' ? ('out' as const) : ('in' as const),
+        lastStatus:
+          m.direction === 'out' && ['sent', 'delivered', 'read', 'failed'].includes(m.status ?? '')
+            ? (m.status as 'sent' | 'delivered' | 'read' | 'failed')
+            : null,
         unread: unread.get(m.phone) ?? 0,
       }));
     const labels = [...new Set(chats.flatMap((c) => c.labels))].sort((a, b) => a.localeCompare(b));
