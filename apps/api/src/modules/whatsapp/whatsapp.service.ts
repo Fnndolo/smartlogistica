@@ -1510,14 +1510,51 @@ export class WhatsappService {
       const phone = tenDigits(String(rawPhone));
       if (phone.length < 7) return null;
       const externalId = typeof m.id === 'string' ? m.id : null;
+      const type = String(m.type ?? 'text');
+
+      // Mensaje EDITADO — se maneja ANTES del dedup: la edicion puede llegar
+      // reutilizando el wamid ORIGINAL (y el dedup la descartaba en silencio).
+      // Se actualiza el original y se marca "Editado"; JAMAS burbuja nueva.
+      if (type === 'edit' || m.edit) {
+        const candidates = [
+          m.edit?.message_id,
+          m.edit?.context?.id,
+          m.edit?.id,
+          m.context?.id,
+          m.message?.context?.id,
+          m.id,
+        ].filter((v): v is string => typeof v === 'string' && v.length > 0);
+        const newBody =
+          m.edit?.body ??
+          m.edit?.text?.body ??
+          m.edit?.message?.text?.body ??
+          m.message?.text?.body ??
+          m.text?.body ??
+          null;
+        if (newBody != null) {
+          for (const wid of [...new Set(candidates)]) {
+            const target = await prisma.waMessage.findUnique({
+              where: { externalId: wid },
+              select: { id: true },
+            });
+            if (target) {
+              await prisma.waMessage.update({
+                where: { id: target.id },
+                data: { body: String(newBody), edited: true },
+              });
+              return phone;
+            }
+          }
+        }
+        this.logger.warn(`Edicion no aplicada (forma desconocida): ${JSON.stringify(m).slice(0, 800)}`);
+        return phone;
+      }
 
       // Dedup: la Cloud API reintenta entregas del webhook.
       if (externalId) {
         const dup = await prisma.waMessage.findUnique({ where: { externalId }, select: { id: true } });
         if (dup) return null;
       }
-
-      const type = String(m.type ?? 'text');
 
       // REACCION: no es una burbuja — se pega al mensaje reaccionado (como en
       // WhatsApp). emoji vacio = quitar la reaccion. mine = reaccion del negocio.
@@ -1542,28 +1579,6 @@ export class WhatsappService {
           where: { id: target.id },
           data: { reactions: next as unknown as Prisma.InputJsonValue },
         });
-        return phone;
-      }
-
-      // Mensaje EDITADO (desde el celular con coexistencia): actualizar el
-      // ORIGINAL y marcar "Editado" — JAMAS crear una burbuja nueva.
-      if (type === 'edit' || m.edit) {
-        const targetWamid = String(m.edit?.message_id ?? m.context?.id ?? '');
-        const newBody = m.edit?.body ?? m.edit?.text?.body ?? m.text?.body ?? null;
-        if (targetWamid && newBody != null) {
-          const target = await prisma.waMessage.findUnique({
-            where: { externalId: targetWamid },
-            select: { id: true },
-          });
-          if (target) {
-            await prisma.waMessage.update({
-              where: { id: target.id },
-              data: { body: String(newBody), edited: true },
-            });
-            return phone;
-          }
-        }
-        this.logger.warn(`Edicion no aplicada (forma desconocida): ${JSON.stringify(m).slice(0, 400)}`);
         return phone;
       }
 
