@@ -244,15 +244,19 @@ export function WhatsappPanel({
     [qc, base],
   );
 
-  // Al fondo al abrir y con cada mensaje nuevo.
+  // ===== SCROLL como WhatsApp: al abrir -> al FONDO (o al divisor de no
+  // leidos); los medios cargan despues y ESTIRAN el contenido, asi que un
+  // ResizeObserver mantiene el fondo pegado mientras el usuario no suba.
   const count = thread?.messages.length ?? 0;
-  useEffect(() => {
-    if (active && count > 0) {
-      requestAnimationFrame(() => {
-        scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-      });
-    }
-  }, [active, count]);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const stickBottomRef = useRef(true);
+  const initialScrollDoneRef = useRef(false);
+
+  const onThreadScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    stickBottomRef.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 120;
+  };
 
   const optimistic = (body: string, buttons: string[] = []): WaMessage => ({
     id: `temp-${crypto.randomUUID()}`,
@@ -432,21 +436,63 @@ export function WhatsappPanel({
 
   // ===== Divisor "N mensajes no leidos" (al entrar desde la bandeja). =====
   const [dividerId, setDividerId] = useState<string | null>(null);
-  const dividerDoneRef = useRef(false);
+  const [dividerDone, setDividerDone] = useState(initialUnread === 0);
   useEffect(() => {
-    if (dividerDoneRef.current || !thread || !initialUnread) return;
-    dividerDoneRef.current = true;
+    if (dividerDone || !thread) return;
+    let found: string | null = null;
     let n = 0;
     for (let i = thread.messages.length - 1; i >= 0; i--) {
       const m = thread.messages[i]!;
       if (m.direction !== 'in') continue;
       n++;
       if (n === initialUnread) {
-        setDividerId(m.id);
+        found = m.id;
         break;
       }
     }
-  }, [thread, initialUnread]);
+    setDividerId(found);
+    setDividerDone(true);
+  }, [thread, initialUnread, dividerDone]);
+
+  // Primer posicionamiento: espera la decision del divisor y baja UNA sola vez
+  // (al divisor si existe; si no, al fondo).
+  useEffect(() => {
+    if (!active || count === 0 || !dividerDone || initialScrollDoneRef.current) return;
+    initialScrollDoneRef.current = true;
+    requestAnimationFrame(() => {
+      const el = scrollRef.current;
+      if (!el) return;
+      const divider = el.querySelector<HTMLElement>('[data-unread-divider]');
+      if (divider) {
+        stickBottomRef.current = false;
+        divider.scrollIntoView({ block: 'center' });
+      } else {
+        el.scrollTop = el.scrollHeight;
+      }
+    });
+  }, [active, count, dividerDone, dividerId]);
+
+  // Mensajes NUEVOS: bajar solo si ya estabamos pegados abajo.
+  useEffect(() => {
+    if (!active || count === 0 || !initialScrollDoneRef.current || !stickBottomRef.current) return;
+    requestAnimationFrame(() => {
+      const el = scrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+  }, [active, count]);
+
+  // Fotos/stickers cargan y CRECEN el hilo: mantener el fondo pegado.
+  const hasThread = Boolean(thread && count > 0);
+  useEffect(() => {
+    const el = contentRef.current;
+    const scroller = scrollRef.current;
+    if (!hasThread || !el || !scroller || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => {
+      if (stickBottomRef.current) scroller.scrollTop = scroller.scrollHeight;
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [hasThread]);
 
   // ===== Acciones de mensaje (menu contextual) =====
   const react = useMutation({
@@ -608,14 +654,24 @@ export function WhatsappPanel({
         const w = img.width * scale;
         const h = img.height * scale;
         ctx.drawImage(img, (512 - w) / 2, (512 - h) / 2, w, h);
-        c.toBlob(
-          (b) =>
-            b
-              ? resolve(new File([b], 'sticker.webp', { type: 'image/webp' }))
-              : reject(new Error('webp')),
-          'image/webp',
-          0.92,
-        );
+        // Meta exige stickers webp de MENOS de 100KB: bajar calidad hasta caber.
+        const tryQuality = (qualities: number[]): void => {
+          const quality = qualities[0] ?? 0.45;
+          const rest = qualities.slice(1);
+          c.toBlob(
+            (b) => {
+              if (!b) return reject(new Error('webp'));
+              if (b.size <= 95 * 1024 || rest.length === 0) {
+                resolve(new File([b], 'sticker.webp', { type: 'image/webp' }));
+              } else {
+                tryQuality(rest);
+              }
+            },
+            'image/webp',
+            quality,
+          );
+        };
+        tryQuality([0.9, 0.75, 0.6, 0.45]);
       };
       img.onerror = () => reject(new Error('img'));
       img.src = URL.createObjectURL(f);
@@ -730,8 +786,13 @@ export function WhatsappPanel({
           className="pointer-events-none absolute inset-0 hidden dark:block"
           style={{ backgroundImage: WA_BG_DARK, backgroundSize: '360px 360px' }}
         />
-        <div ref={scrollRef} className="absolute inset-0 flex flex-col overflow-y-auto px-4 py-2 md:px-[6%]">
+        <div
+          ref={scrollRef}
+          onScroll={onThreadScroll}
+          className="absolute inset-0 flex flex-col overflow-y-auto px-4 py-2 md:px-[6%]"
+        >
           <div className="mt-auto" aria-hidden />
+          <div ref={contentRef} className="flex flex-col">
           {thread.messages.length === 0 ? (
             <div className="py-8 text-center">
               <span className="inline-block rounded-lg bg-[#ffeecd] px-3 py-2 text-[12.5px] text-[#54656f] shadow-sm dark:bg-[#182229] dark:text-[#8696a0]">
@@ -743,8 +804,13 @@ export function WhatsappPanel({
             thread.messages.map((m, i) => (
               <div key={m.id} className="contents">
                 {m.id === dividerId ? (
-                  <div className="my-3 flex justify-center">
-                    <span className="rounded-lg bg-white px-3 py-1 text-[12px] text-[#54656f] shadow-sm dark:bg-[#182229] dark:text-[#8696a0]">
+                  /* BANDA de borde a borde (oscurecida) + pastilla en negrita,
+                     calcada al divisor de WhatsApp. */
+                  <div
+                    data-unread-divider
+                    className="-mx-4 my-2 flex justify-center bg-[#00000010] py-2 dark:bg-[#ffffff0d] md:-mx-[6.82%]"
+                  >
+                    <span className="rounded-full bg-white px-3.5 py-[5px] text-[12.5px] font-semibold text-[#111b21] shadow-sm dark:bg-[#182229] dark:text-[#e9edef]">
                       {initialUnread === 1 ? '1 mensaje no leído' : `${initialUnread} mensajes no leídos`}
                     </span>
                   </div>
@@ -753,6 +819,7 @@ export function WhatsappPanel({
               </div>
             ))
           )}
+          </div>
         </div>
       </div>
 
@@ -1233,6 +1300,117 @@ function MsgMenu({ m, mine, actions }: { m: WaMessage; mine: boolean; actions: B
   );
 }
 
+/** Barra de reacciones flotante (6 rapidos + "+" con todos), como WhatsApp. */
+function ReactionBar({
+  m,
+  actions,
+  onClose,
+  alignRight,
+}: {
+  m: WaMessage;
+  actions: BubbleActions;
+  onClose: () => void;
+  alignRight: boolean;
+}) {
+  const [more, setMore] = useState(false);
+  const pick = (e: string) => {
+    actions.react(m, e);
+    pushRecentEmoji(e);
+    onClose();
+  };
+  return (
+    <>
+      <button type="button" className="fixed inset-0 z-30 cursor-default" onClick={onClose} aria-label="Cerrar" />
+      <div
+        className={cn(
+          'shadow-float absolute bottom-full z-40 mb-2 rounded-3xl border border-border bg-white dark:bg-[#233138]',
+          alignRight ? 'right-0' : 'left-0',
+        )}
+      >
+        {more ? (
+          <div className="h-52 w-72 overflow-y-auto p-2">
+            <div className="flex flex-wrap">
+              {EMOJI_GROUPS.flatMap((g) => splitEmojis(g.list)).map((e, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => pick(e)}
+                  className="rounded-lg p-1 text-[22px] leading-[28px] transition-transform hover:scale-110"
+                >
+                  {e}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-0.5 px-1.5 py-1">
+            {QUICK_REACTIONS.map((e) => (
+              <button
+                key={e}
+                type="button"
+                onClick={() => pick(e)}
+                className="rounded-full p-1 text-[24px] leading-[30px] transition-transform hover:scale-125"
+              >
+                {e}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => setMore(true)}
+              className="ml-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-black/5 text-[#54656f] hover:bg-black/10 dark:bg-white/10 dark:text-[#8696a0]"
+              aria-label="Más emojis"
+            >
+              <Plus className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+/**
+ * Botones FLOTANTES al lado de la burbuja (hover): reaccionar siempre, y
+ * reenviar directo cuando es multimedia/archivo — como WhatsApp Web.
+ */
+function HoverActions({ m, mine, actions }: { m: WaMessage; mine: boolean; actions: BubbleActions }) {
+  const [open, setOpen] = useState(false);
+  const media = m.kind !== 'text';
+  return (
+    <div
+      className={cn(
+        'absolute top-1/2 z-10 flex -translate-y-1/2 items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100',
+        open && 'opacity-100',
+        mine ? 'right-full mr-2' : 'left-full ml-2',
+      )}
+    >
+      {media ? (
+        <button
+          type="button"
+          onClick={() => actions.forward(m)}
+          className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-[#8696a0] shadow-md transition-colors hover:text-[#54656f] dark:bg-[#233138]"
+          aria-label="Reenviar"
+          title="Reenviar"
+        >
+          <Forward className="h-4 w-4" />
+        </button>
+      ) : null}
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-[#8696a0] shadow-md transition-colors hover:text-[#54656f] dark:bg-[#233138]"
+          aria-label="Reaccionar"
+          title="Reaccionar"
+        >
+          <Smile className="h-4 w-4" />
+        </button>
+        {open ? <ReactionBar m={m} actions={actions} onClose={() => setOpen(false)} alignRight={mine} /> : null}
+      </div>
+    </div>
+  );
+}
+
 function WaBubble({
   message: m,
   prev,
@@ -1284,6 +1462,7 @@ function WaBubble({
           <div className={cn('group relative max-w-[85%] md:max-w-[65%]', pending && 'opacity-90')}>
             {!grouped ? <Tail mine={mine} /> : null}
             <MsgMenu m={m} mine={mine} actions={actions} />
+            <HoverActions m={m} mine={mine} actions={actions} />
             <div
               className={cn(
                 'relative overflow-hidden text-[14.2px] leading-[19px] shadow-[0_1px_0.5px_rgba(11,20,26,0.13)]',
@@ -1324,6 +1503,7 @@ function BareMessage({
   return (
     <div className={cn('group relative flex max-w-[85%] flex-col md:max-w-[65%]', mine ? 'items-end' : 'items-start')}>
       <MsgMenu m={m} mine={mine} actions={actions} />
+      <HoverActions m={m} mine={mine} actions={actions} />
       {sticker ? (
         m.mediaUrl ? (
           // Clic en el sticker -> visor con "Añadir a Favoritos" (como WhatsApp).
@@ -1740,40 +1920,97 @@ function DocCard({ name, url, mine }: { name: string; url: string; mine: boolean
 
 /* ==================== Picker de emojis y stickers ==================== */
 
-const EMOJI_GROUPS: Array<{ label: string; list: string }> = [
+/** Categorias como WhatsApp (pestañas arriba con icono + Recientes). */
+const EMOJI_GROUPS: Array<{ icon: string; label: string; list: string }> = [
   {
-    label: 'Caritas',
-    list: '😀😃😄😁😆😅😂🤣😊😇🙂🙃😉😌😍🥰😘😗😙😚😋😛😝😜🤪🤨🧐🤓😎🥸🤩🥳😏😒😞😔😟😕🙁😣😖😫😩🥺😢😭😤😠😡🤬🤯😳🥵🥶😱😨😰😥😓🤗🤔🤭🤫🤥😶😐😑😬🙄😯😦😧😮😲🥱😴🤤😪🤐🥴🤢🤮🤧😷🤒🤕🤑🤠😈👿💀👻👽🤖💩',
+    icon: '😀',
+    label: 'Emoticonos y personas',
+    list:
+      '😀😃😄😁😆😅😂🤣😊😇🙂🙃😉😌😍🥰😘😗😙😚😋😛😝😜🤪🤨🧐🤓😎🥸🤩🥳😏😒😞😔😟😕🙁😣😖😫😩🥺😢😭😤😠😡🤬🤯😳🥵🥶😱😨😰😥😓🤗🤔🤭🤫🤥😶😐😑😬🙄😯😦😧😮😲🥱😴🤤😪🤐🥴🤢🤮🤧😷🤒🤕🤑🤠😈👿💀👻👽🤖💩' +
+      '👍👎👌🤌🤏✌️🤞🤟🤘🤙👈👉👆👇☝️✋🤚🖐️🖖👋🤝🙏✍️💪🖕✊👊🤛🤜👏🙌👐🤲🤳💅👀👁️👄🦷👅👂👃🧠',
   },
   {
-    label: 'Gestos',
-    list: '👍👎👌🤌🤏✌️🤞🤟🤘🤙👈👉👆👇☝️✋🤚🖐️🖖👋🤝🙏✍️💪🖕✊👊🤛🤜👏🙌👐🤲🤳💅👀👁️👄🦷👅👂👃🧠',
+    icon: '🐻',
+    label: 'Animales y naturaleza',
+    list:
+      '🐶🐱🐭🐹🐰🦊🐻🐼🐨🐯🦁🐮🐷🐸🐵🙈🙉🙊🐔🐧🐦🐤🦆🦅🦉🐺🐗🐴🦄🐝🐛🦋🐌🐞🐜🦂🐢🐍🦎🐙🦑🦐🦞🦀🐡🐠🐟🐬🐳🐋🦈🐊🦓🦍🐘🦒🐄🐎🐖🐑🦙🐐🦌🐕🐩🐈🐓🦃🦚🦜🦢🦩🐇🦝🦨🦥🐿️🦔' +
+      '🌵🎄🌲🌳🌴🌱🌿🍀🎍🎋🍃🍂🍁🍄🌾💐🌷🌹🥀🌺🌸🌼🌻🌞🌝🌛🌜🌚🌕🌙⭐🌟💫✨☀️⛅☁️🌧️⛈️🌩️❄️⛄💨💧💦☔🌊🌈🌍🌎🌏',
   },
   {
-    label: 'Corazones',
-    list: '❤️🧡💛💚💙💜🖤🤍🤎💔💕💞💓💗💖💘💝💟😻💋',
-  },
-  {
-    label: 'Animales',
-    list: '🐶🐱🐭🐹🐰🦊🐻🐼🐨🐯🦁🐮🐷🐸🐵🙈🙉🙊🐔🐧🐦🐤🦆🦅🦉🐺🐗🐴🦄🐝🐛🦋🐌🐞🐜🦂🐢🐍🦎🐙🦑🦐🦞🦀🐡🐠🐟🐬🐳🐋🦈🐊🦓🦍🐘🦒🐄🐎🐖🐑🦙🐐🦌🐕🐩🐈🐓🦃🦚🦜🦢🦩🐇🦝🦨🦥🐿️🦔',
-  },
-  {
-    label: 'Comida',
+    icon: '🍔',
+    label: 'Comida y bebidas',
     list: '🍏🍎🍐🍊🍋🍌🍉🍇🍓🫐🍈🍒🍑🥭🍍🥥🥝🍅🍆🥑🥦🥬🥒🌶️🌽🥕🧄🧅🥔🍠🥐🥯🍞🥖🥨🧀🥚🍳🥞🧇🥓🥩🍗🍖🌭🍔🍟🍕🥪🥙🧆🌮🌯🥗🥘🍝🍜🍲🍛🍣🍱🥟🍤🍙🍚🍘🥠🍢🍡🍧🍨🍦🥧🧁🍰🎂🍮🍭🍬🍫🍿🍩🍪🌰🥜🍯🥛🍼☕🍵🧃🥤🧋🍶🍺🍻🥂🍷🥃🍸🍹🍾🧊',
   },
   {
-    label: 'Objetos',
-    list: '⚽🏀🏈⚾🎾🏐🎱🏓🏸⛳🏹🎣🥊🎽🛹🎮🎰🎲🧩🎭🎨🎯🎳🎪🎤🎧🎼🎹🥁🎷🎺🎸🎻📱💻⌨️🖥️🖨️🖱️💽💾💿📀📷📸📹🎥📞☎️📺📻⏰⌚⏳💡🔦🕯️💸💵💰💳💎🪜🧰🔧🔨🛠️⚙️🧲🧨🔪🏺🔮🧿🔭🔬💊💉🩸🧬🧹🧺🧻🚽🚿🛁🧼🧽🛎️🔑🗝️🚪🪑🛋️🛏️🧸🖼️🛍️🎁🎈🎀🎊🎉📦📫📜📃📊📈📉📆📅📇📋📁📂📰📓📚📖🔖📎📐📏📌📍✂️🖊️✒️📝✏️🔍🔎🔐🔒🔓',
+    icon: '⚽',
+    label: 'Actividades',
+    list: '⚽🏀🏈⚾🎾🏐🎱🏓🏸⛳🏹🎣🥊🥋🎽🛹⛸️🎿🛷🥌🏆🥇🥈🥉🏅🎖️🎮🕹️🎰🎲🧩🎭🎨🧵🧶🎯🎳🎪🎤🎧🎼🎹🥁🎷🎺🎸🎻🎬🏹',
   },
   {
-    label: 'Simbolos',
-    list: '✅❌❓❗‼️⁉️💯🔥✨🌟💫⭐🌈☀️⛅🌧️⛈️❄️⛄💨💧💦☔🌊🎵🎶➕➖➗✖️💲™️©️®️🔴🟠🟡🟢🔵🟣⚫⚪🟤🔺🔻🔸🔹🔶🔷⚠️🚫♻️🚀✈️🚗🏠🏢🏥📍🗺️🌍🌎🌏',
+    icon: '🚗',
+    label: 'Viajes y lugares',
+    list: '🚗🚕🚙🚌🚎🏎️🚓🚑🚒🚐🚚🚛🚜🏍️🛵🚲🛴🚨🚔🚖✈️🛫🛬🛩️🚀🛸🚁⛵🚤🛳️⛴️🚢⚓⛽🚧🚦🚥🚏🗺️🗿🗽🗼🏰🏯🏟️🎡🎢🎠⛲⛱️🏖️🏝️🏜️🌋⛰️🏔️🗻🏕️⛺🏠🏡🏘️🏗️🏭🏢🏬🏣🏤🏥🏦🏨🏪🏫💒⛪🕌🛕🕋⛩️🚄🚅🚂🚉🚊🚝🚞🚋🚃🚟🚠🚡',
+  },
+  {
+    icon: '💡',
+    label: 'Objetos',
+    list: '📱💻⌨️🖥️🖨️🖱️💽💾💿📀📷📸📹🎥📞☎️📺📻⏰⌚⏳⌛💡🔦🕯️💸💵💰💳💎🪜🧰🔧🔨🛠️⚙️🧲🧨🔪🏺🔮🧿🔭🔬💊💉🩸🧬🧹🧺🧻🚽🚿🛁🧼🧽🛎️🔑🗝️🚪🪑🛋️🛏️🧸🖼️🛍️🎁🎈🎀🎊🎉📦📫📜📃📊📈📉📆📅📇📋📁📂📰📓📚📖🔖📎📐📏📌📍✂️🖊️✒️📝✏️🔍🔎🔐🔒🔓',
+  },
+  {
+    icon: '🔣',
+    label: 'Símbolos',
+    list: '❤️🧡💛💚💙💜🖤🤍🤎💔💕💞💓💗💖💘💝💟💋✅❌❓❗‼️⁉️💯🔥✨🎵🎶➕➖➗✖️💲™️©️®️🔴🟠🟡🟢🔵🟣⚫⚪🟤🔺🔻🔸🔹🔶🔷⚠️🚫♻️🔞📵🚭🚱🚳🚷🛑💤♠️♥️♦️♣️🃏🀄🎴🔔🔕📣📢💬💭🗯️♨️💈🛐⚛️✝️☪️☮️🕎🔯♈♉♊♋♌♍♎♏♐♑♒♓⛎',
+  },
+  {
+    icon: '🏳️',
+    label: 'Banderas',
+    list: '🏳️🏴🏁🚩🏳️‍🌈🇨🇴🇺🇸🇲🇽🇪🇸🇦🇷🇧🇷🇨🇱🇵🇪🇪🇨🇻🇪🇵🇦🇨🇷🇬🇹🇭🇳🇸🇻🇳🇮🇩🇴🇨🇺🇵🇷🇧🇴🇵🇾🇺🇾🇨🇦🇬🇧🇫🇷🇩🇪🇮🇹🇵🇹🇳🇱🇨🇭🇸🇪🇳🇴🇩🇰🇯🇵🇰🇷🇨🇳🇮🇳🇷🇺🇦🇺🇹🇷🇬🇷🇮🇱🇸🇦🇦🇪🇪🇬🇿🇦🇳🇬',
   },
 ];
 
-/** Trocea una tira de emojis en emojis completos (con ZWJ/VS16/tonos). */
+/** Busqueda basica en español (palabra -> emojis). */
+const EMOJI_KEYWORDS: Record<string, string> = {
+  corazon: '❤️🧡💛💚💙💜🖤🤍💔💕💖💘', amor: '❤️😍🥰😘💕💋', risa: '😂🤣😆😅😄', jaja: '😂🤣',
+  feliz: '😀😃😄😊🙂', triste: '😢😭😞🙁', llorar: '😢😭', enojo: '😠😡🤬', rabia: '😠😡🤬',
+  fuego: '🔥', ok: '👌👍✅', bien: '👍✅💯', mal: '👎❌', gracias: '🙏', porfavor: '🙏',
+  mano: '👋🤝👏🙌✋', saludo: '👋🤗', fiesta: '🥳🎉🎊🎈', musica: '🎵🎶🎧🎸🎹', baile: '💃🕺',
+  dinero: '💰💵💸💳', plata: '💰💵💸', comida: '🍔🍕🌭🍟🍗', cafe: '☕', cerveza: '🍺🍻',
+  perro: '🐶🐕', gato: '🐱🐈', casa: '🏠🏡', carro: '🚗🏎️🚙', moto: '🏍️🛵', avion: '✈️🛫',
+  telefono: '📱☎️📞', celular: '📱', foto: '📷📸', video: '🎥📹', regalo: '🎁🎀',
+  estrella: '⭐🌟✨', sol: '☀️🌞', luna: '🌙🌛', lluvia: '🌧️☔⛈️', frio: '🥶❄️⛄', calor: '🥵☀️',
+  check: '✅✔️', chulo: '✅', equis: '❌', pregunta: '❓', alerta: '⚠️🚨', prohibido: '🚫⛔',
+  cohete: '🚀', cien: '💯', bandera: '🏁🚩🏳️', colombia: '🇨🇴', dormir: '😴🥱💤',
+  beso: '😘😗💋', guiño: '😉', pensar: '🤔🧐', ojos: '👀', paquete: '📦', caja: '📦',
+  envio: '📦🚚✈️', camion: '🚚🚛', reloj: '⏰⌚⏳', tiempo: '⏰⌛', fantasma: '👻',
+  calavera: '💀', diablo: '😈', payaso: '🤡', robot: '🤖', unicornio: '🦄', flor: '🌹🌷🌸💐',
+  arbol: '🌳🎄🌴', libro: '📚📖', lapiz: '✏️🖊️', tijeras: '✂️', llave: '🔑🗝️', candado: '🔒🔐',
+  medalla: '🏅🥇🏆', trofeo: '🏆', balon: '⚽🏀', futbol: '⚽', gol: '⚽🥅🎉',
+};
+
+/** Recientes (localStorage), como la pestaña Recientes de WhatsApp. */
+const RECENT_EMOJI_KEY = 'wa-recent-emojis';
+const getRecentEmojis = (): string[] => {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(RECENT_EMOJI_KEY) ?? '[]');
+    return Array.isArray(raw) ? raw.map(String).slice(0, 24) : [];
+  } catch {
+    return [];
+  }
+};
+const pushRecentEmoji = (e: string): void => {
+  try {
+    const cur = getRecentEmojis().filter((x) => x !== e);
+    window.localStorage.setItem(RECENT_EMOJI_KEY, JSON.stringify([e, ...cur].slice(0, 24)));
+  } catch {
+    /* sin storage */
+  }
+};
+
+/** Trocea una tira de emojis en emojis completos (ZWJ/VS16/tonos/banderas). */
 const splitEmojis = (list: string): string[] =>
-  list.match(/\p{Extended_Pictographic}(‍\p{Extended_Pictographic}|️|[\u{1F3FB}-\u{1F3FF}])*/gu) ?? [];
+  list.match(
+    /[\u{1F1E6}-\u{1F1FF}]{2}|\p{Extended_Pictographic}(‍\p{Extended_Pictographic}|️|[\u{1F3FB}-\u{1F3FF}])*/gu,
+  ) ?? [];
 
 /** Panel de emojis y stickers, estilo WhatsApp Web (pestañas abajo). */
 function EmojiStickerPicker({
@@ -1788,6 +2025,28 @@ function EmojiStickerPicker({
   onCreateSticker: () => void;
 }) {
   const [tab, setTab] = useState<'emoji' | 'sticker'>('emoji');
+  const [q, setQ] = useState('');
+  const [recents, setRecents] = useState<string[]>([]);
+  const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  useEffect(() => setRecents(getRecentEmojis()), []);
+
+  const pickEmoji = (e: string) => {
+    onEmoji(e);
+    pushRecentEmoji(e);
+    setRecents(getRecentEmojis());
+  };
+  const jumpTo = (key: string) => sectionRefs.current[key]?.scrollIntoView({ block: 'start' });
+
+  // Busqueda basica en español (diccionario de palabras clave).
+  const query = q.trim().toLowerCase();
+  const results = useMemo(() => {
+    if (!query) return [];
+    const out = new Set<string>();
+    for (const [word, emojis] of Object.entries(EMOJI_KEYWORDS)) {
+      if (word.includes(query)) splitEmojis(emojis).forEach((e) => out.add(e));
+    }
+    return [...out];
+  }, [query]);
 
   const { data: favs = [] } = useQuery({
     queryKey: ['wa-stickers'],
@@ -1797,7 +2056,7 @@ function EmojiStickerPicker({
   });
 
   // Stickers RECIENTES del hilo (los que ya pasaron por el chat).
-  const recents = useMemo(() => {
+  const recentStickers = useMemo(() => {
     const seen = new Set<string>();
     const out: WaMessage[] = [];
     for (let i = thread.messages.length - 1; i >= 0 && out.length < 18; i--) {
@@ -1812,27 +2071,119 @@ function EmojiStickerPicker({
 
   return (
     <div className="border-t border-border bg-[#f0f2f5] dark:bg-[#202c33]">
-      <div className="h-[264px] overflow-y-auto px-3 py-2">
+      {tab === 'emoji' ? (
+        <>
+          {/* Pestañas ARRIBA por categoria (con Recientes), como WhatsApp. */}
+          <div className="flex items-center justify-around border-b border-border/60 px-1">
+            <button
+              type="button"
+              onClick={() => jumpTo('recientes')}
+              className="px-1.5 py-1.5 text-[#54656f] dark:text-[#8696a0]"
+              title="Recientes"
+              aria-label="Recientes"
+            >
+              <Clock3 className="h-5 w-5" />
+            </button>
+            {EMOJI_GROUPS.map((g) => (
+              <button
+                key={g.label}
+                type="button"
+                onClick={() => jumpTo(g.label)}
+                className="px-1 py-1 text-[19px] leading-[24px] opacity-60 grayscale transition-all hover:opacity-100 hover:grayscale-0"
+                title={g.label}
+                aria-label={g.label}
+              >
+                {g.icon}
+              </button>
+            ))}
+          </div>
+          {/* Buscador */}
+          <div className="px-3 pb-1 pt-2">
+            <div className="flex h-9 items-center gap-2 rounded-full border border-[#00a884]/60 bg-white px-3 dark:bg-[#2a3942]">
+              <span className="text-[#667781] dark:text-[#8696a0]">🔍</span>
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Buscar emoji"
+                className="h-full min-w-0 flex-1 bg-transparent text-[13.5px] outline-none placeholder:text-[#667781] dark:text-[#e9edef] dark:placeholder:text-[#8696a0]"
+              />
+              {q ? (
+                <button type="button" onClick={() => setQ('')} aria-label="Limpiar">
+                  <X className="h-3.5 w-3.5 text-[#667781]" />
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </>
+      ) : null}
+      <div className={cn('overflow-y-auto px-3 py-2', tab === 'emoji' ? 'h-[220px]' : 'h-[264px]')}>
         {tab === 'emoji' ? (
-          EMOJI_GROUPS.map((g) => (
-            <div key={g.label}>
-              <p className="px-1 pb-1 pt-2 text-[11.5px] font-semibold uppercase tracking-wide text-[#667781] dark:text-[#8696a0]">
-                {g.label}
-              </p>
-              <div className="flex flex-wrap">
-                {splitEmojis(g.list).map((e, i) => (
+          query ? (
+            <div className="flex flex-wrap">
+              {results.length === 0 ? (
+                <p className="w-full py-6 text-center text-[12.5px] text-[#667781] dark:text-[#8696a0]">
+                  Sin resultados para «{q}».
+                </p>
+              ) : (
+                results.map((e, i) => (
                   <button
-                    key={`${g.label}-${i}`}
+                    key={i}
                     type="button"
-                    onClick={() => onEmoji(e)}
+                    onClick={() => pickEmoji(e)}
                     className="rounded-lg p-1 text-[24px] leading-[30px] transition-transform hover:scale-110"
                   >
                     {e}
                   </button>
-                ))}
-              </div>
+                ))
+              )}
             </div>
-          ))
+          ) : (
+            <>
+              {recents.length > 0 ? (
+                <div
+                  ref={(el) => {
+                    sectionRefs.current['recientes'] = el;
+                  }}
+                >
+                  <p className="px-1 pb-1 pt-1 text-[13px] text-[#667781] dark:text-[#8696a0]">Recientes</p>
+                  <div className="flex flex-wrap">
+                    {recents.map((e, i) => (
+                      <button
+                        key={`rec-${i}`}
+                        type="button"
+                        onClick={() => pickEmoji(e)}
+                        className="rounded-lg p-1 text-[24px] leading-[30px] transition-transform hover:scale-110"
+                      >
+                        {e}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {EMOJI_GROUPS.map((g) => (
+                <div
+                  key={g.label}
+                  ref={(el) => {
+                    sectionRefs.current[g.label] = el;
+                  }}
+                >
+                  <p className="px-1 pb-1 pt-3 text-[13px] text-[#667781] dark:text-[#8696a0]">{g.label}</p>
+                  <div className="flex flex-wrap">
+                    {splitEmojis(g.list).map((e, i) => (
+                      <button
+                        key={`${g.label}-${i}`}
+                        type="button"
+                        onClick={() => pickEmoji(e)}
+                        className="rounded-lg p-1 text-[24px] leading-[30px] transition-transform hover:scale-110"
+                      >
+                        {e}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </>
+          )
         ) : (
           <div>
             <p className="px-1 pb-1 pt-2 text-[11.5px] font-semibold uppercase tracking-wide text-[#667781] dark:text-[#8696a0]">
@@ -1859,13 +2210,13 @@ function EmojiStickerPicker({
                 </button>
               ))}
             </div>
-            {recents.length > 0 ? (
+            {recentStickers.length > 0 ? (
               <>
                 <p className="px-1 pb-1 pt-3 text-[11.5px] font-semibold uppercase tracking-wide text-[#667781] dark:text-[#8696a0]">
                   Recientes del chat
                 </p>
                 <div className="grid grid-cols-4 gap-2 sm:grid-cols-5">
-                  {recents.map((m) => (
+                  {recentStickers.map((m) => (
                     <button
                       key={m.id}
                       type="button"
@@ -1879,7 +2230,7 @@ function EmojiStickerPicker({
                 </div>
               </>
             ) : null}
-            {favs.length === 0 && recents.length === 0 ? (
+            {favs.length === 0 && recentStickers.length === 0 ? (
               <p className="px-2 py-6 text-center text-[12.5px] text-[#667781] dark:text-[#8696a0]">
                 Aún no hay stickers: crea uno con «Crear» o agrega a Favoritos los que lleguen al
                 chat (clic en el sticker → Añadir a Favoritos).

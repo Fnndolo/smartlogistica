@@ -714,10 +714,24 @@ export class WhatsappService {
     if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
     const d360 = await this.dialog360OrNull(tenantId, prisma);
     this.requireD360(d360, 'external');
-    const url = await this.storage.getSignedUrl(key);
     let wamid: string | null = null;
     try {
-      wamid = await this.dialog360.sendMediaLink(d360!.http, d360!.mode, `57${phone}`, 'sticker', url);
+      // SUBIR a Meta y enviar por id (el envio por link firmado fallaba con
+      // 131053 Media upload error); si la subida falla, se intenta por link.
+      const obj = await this.storage.get(key);
+      if (!obj) throw new NotFoundException('Sticker no disponible en el storage');
+      const mediaId = await this.dialog360
+        .uploadMedia(d360!.http, d360!.mode, obj.buffer, 'image/webp', 'sticker.webp')
+        .catch(() => null);
+      wamid = mediaId
+        ? await this.dialog360.sendMediaId(d360!.http, d360!.mode, `57${phone}`, 'sticker', mediaId)
+        : await this.dialog360.sendMediaLink(
+            d360!.http,
+            d360!.mode,
+            `57${phone}`,
+            'sticker',
+            await this.storage.getSignedUrl(key),
+          );
     } catch (err) {
       throw this.translateError(err, 'No se pudo enviar el sticker');
     }

@@ -114,6 +114,48 @@ export class Dialog360Client {
     return res.data?.messages?.[0]?.id ?? null;
   }
 
+  /**
+   * SUBE un medio a Meta (multipart) y devuelve su media id. Mas confiable que
+   * el envio por link para STICKERS (Meta valida el webp al descargarlo y con
+   * URLs firmadas a veces falla con 131053 Media upload error).
+   */
+  async uploadMedia(
+    http: AxiosInstance,
+    mode: Dialog360Mode,
+    buffer: Buffer,
+    mime: string,
+    filename: string,
+  ): Promise<string | null> {
+    const fd = new FormData();
+    fd.append('messaging_product', 'whatsapp');
+    fd.append('file', new Blob([new Uint8Array(buffer)], { type: mime }), filename);
+    const res = await http.post(mode === 'sandbox' ? '/v1/media' : '/media', fd, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return res.data?.media?.[0]?.id ?? res.data?.id ?? null;
+  }
+
+  /** Envia un MEDIO por media id (previamente subido con uploadMedia). */
+  async sendMediaId(
+    http: AxiosInstance,
+    mode: Dialog360Mode,
+    to: string,
+    kind: 'image' | 'video' | 'audio' | 'document' | 'sticker',
+    mediaId: string,
+    filename?: string,
+  ): Promise<string | null> {
+    const media: Record<string, unknown> = { id: mediaId };
+    if (kind === 'document' && filename) media.filename = filename;
+    const res = await http.post(this.messagesPath(mode), {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type: kind,
+      [kind]: media,
+    });
+    return res.data?.messages?.[0]?.id ?? null;
+  }
+
   /** Envia un MEDIO por URL (imagen/video/audio/documento/sticker). */
   async sendMediaLink(
     http: AxiosInstance,
