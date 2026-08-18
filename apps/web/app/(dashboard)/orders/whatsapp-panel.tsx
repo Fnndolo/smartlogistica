@@ -2417,21 +2417,20 @@ function WaAudio({
   const barIdle = mine ? 'bg-[#a9cbb7] dark:bg-[#1d5c4d]' : 'bg-[#cdd4d8] dark:bg-[#3b4a54]';
 
   const avatar = (
-    // Avatar con microfono RELLENO: a la DERECHA en enviados, a la IZQUIERDA
-    // en recibidos (la Cloud API no expone la foto del contacto).
-    <span className="relative h-[50px] w-[50px] shrink-0">
+    // Avatar de 1cm EXACTO (38px) para AMBOS. Mic RELLENO: en enviados medio
+    // cm mas ADENTRO (right 13px); en recibidos al filo izquierdo.
+    <span className="relative h-[38px] w-[38px] shrink-0">
       <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#dfe5e7] text-[#9aa8b0] dark:bg-[#2a3942] dark:text-[#667781]">
-        <User className="h-9 w-9 translate-y-1" strokeWidth={1.6} fill="currentColor" />
+        <User className="h-7 w-7 translate-y-1" strokeWidth={1.6} fill="currentColor" />
       </span>
       <MicFilled
-        className={cn('absolute bottom-0 h-[17px] w-[17px]', mine ? '-right-1.5' : '-left-0.5')}
+        className={cn('absolute bottom-0 h-[15px] w-[15px]', mine ? 'right-[13px]' : '-left-0.5')}
         style={{ color: micColor }}
       />
     </span>
   );
 
   const playBtn = (
-    // Play negro, con SU aire a los lados (medio cm), separado de la bolita.
     <span className="shrink-0 px-2.5">
       <button
         type="button"
@@ -2448,31 +2447,42 @@ function WaAudio({
     </span>
   );
 
-  const waveRow = (
-    <div className="relative flex h-[22px] min-w-0 flex-1 cursor-pointer items-center gap-[2px] pl-1.5" onClick={seek}>
-      {bars.map((v, i) => (
+  // Columna de la onda: MISMA altura que el avatar (38px). La onda arriba y
+  // la fila de duracion/hora abajo -> su borde inferior queda EXACTO al filo
+  // inferior del circulo del avatar.
+  const waveCol = (
+    <div className="flex h-[38px] min-w-0 flex-1 flex-col justify-between">
+      <div className="relative flex h-[20px] min-w-0 cursor-pointer items-center gap-[2px] pl-1.5" onClick={seek}>
+        {bars.map((v, i) => (
+          <span
+            key={i}
+            className={cn(
+              'w-[2.5px] shrink-0 rounded-full',
+              i / BAR_COUNT <= progress && (playing || t > 0) ? barPlayed : barIdle,
+            )}
+            style={{ height: `${Math.round(3 + v * 13)}px` }}
+          />
+        ))}
+        {/* Bolita SIEMPRE visible (al inicio si no se ha reproducido). */}
         <span
-          key={i}
-          className={cn(
-            'w-[2.5px] shrink-0 rounded-full',
-            i / BAR_COUNT <= progress && (playing || t > 0) ? barPlayed : barIdle,
-          )}
-          style={{ height: `${Math.round(3 + v * 15)}px` }}
+          className="absolute top-1/2 h-[12px] w-[12px] -translate-y-1/2 rounded-full shadow"
+          style={{ left: `calc(${(progress * 100).toFixed(2)}% - 4px)`, backgroundColor: dotColor }}
         />
-      ))}
-      {/* Bolita SIEMPRE visible (al inicio si no se ha reproducido). */}
-      <span
-        className="absolute top-1/2 h-[12px] w-[12px] -translate-y-1/2 rounded-full shadow"
-        style={{ left: `calc(${(progress * 100).toFixed(2)}% - 4px)`, backgroundColor: dotColor }}
-      />
+      </div>
+      <div className="flex items-center justify-between pl-1.5 text-[11px] leading-[12px] text-[#667781] dark:text-[#8696a0]">
+        <span>{fmtSecs(playing || t > 0 ? t : (dur ?? 0))}</span>
+        <span className="flex items-center gap-1">
+          {timeOf(m.createdAt)}
+          {mine ? <Ticks status={m.status} pending={pending} failText={failText(m)} /> : null}
+        </span>
+      </div>
     </div>
   );
 
   return (
-    // AVATAR, play y ONDA en LA MISMA linea (la mitad de la onda = la mitad
-    // del avatar); duracion y hora SUBEN para quedar al filo inferior del
-    // circulo del avatar. Mismo alto SIEMPRE (enviado y recibido).
-    <div className="w-[310px] max-w-full px-1.5 pb-1 pt-2.5">
+    // BURBUJA de 1.3cm EXACTOS (49px) para AMBOS, contenido CENTRADO
+    // verticalmente (mismo aire arriba y abajo del avatar: (49-38)/2).
+    <div className="flex h-[49px] w-[310px] max-w-full items-center px-1.5">
       <audio
         ref={audioRef}
         src={src}
@@ -2493,34 +2503,19 @@ function WaAudio({
           if (Number.isFinite(d)) setDur(d);
         }}
       />
-      <div className="flex items-center">
-        {mine ? (
-          <>
-            {avatar}
-            {playBtn}
-            {waveRow}
-          </>
-        ) : (
-          <>
-            {playBtn}
-            {waveRow}
-            <span className="shrink-0 pl-2">{avatar}</span>
-          </>
-        )}
-      </div>
-      {/* Duracion y hora SUBIDAS: su borde inferior al filo del avatar. */}
-      <div
-        className={cn(
-          '-mt-[15px] flex items-center justify-between text-[11px] leading-[14px] text-[#667781] dark:text-[#8696a0]',
-          mine ? 'pl-[104px] pr-1' : 'pl-[50px] pr-[62px]',
-        )}
-      >
-        <span>{fmtSecs(playing || t > 0 ? t : (dur ?? 0))}</span>
-        <span className="flex items-center gap-1">
-          {timeOf(m.createdAt)}
-          {mine ? <Ticks status={m.status} pending={pending} failText={failText(m)} /> : null}
-        </span>
-      </div>
+      {mine ? (
+        <>
+          {avatar}
+          {playBtn}
+          {waveCol}
+        </>
+      ) : (
+        <>
+          {playBtn}
+          {waveCol}
+          <span className="shrink-0 pl-2">{avatar}</span>
+        </>
+      )}
     </div>
   );
 }
