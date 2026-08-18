@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { format, isToday, isYesterday } from 'date-fns';
 import { es } from 'date-fns/locale/es';
@@ -144,6 +145,87 @@ const failText = (m: WaMessage): string => {
     ? `No entregado — ${raw.replace(/^Meta:\s*/i, '')}`
     : 'WhatsApp no entregó este mensaje.';
 };
+
+/* ============ Numeros de telefono como ENLACE de chat ============ */
+
+// Celulares colombianos (3xx...), con o sin +57, con espacios/guiones/puntos.
+const PHONE_RE = /(\+?57[\s.-]?)?(3\d{2}[\s.-]?\d{3}[\s.-]?\d{4})(?!\d)/g;
+
+/** Numero clicable: menu "Chatear con +57 X" / "Copiar numero". */
+function PhoneToken({ raw }: { raw: string }) {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  useSinglePopover(open, () => setOpen(false));
+  const digits = raw.replace(/\D/g, '');
+  const ten = digits.length > 10 ? digits.slice(-10) : digits;
+  const goChat = () => {
+    setOpen(false);
+    // En la bandeja: abrir directo (evento); desde un pedido: navegar.
+    if (window.location.pathname.startsWith('/whatsapp')) {
+      window.dispatchEvent(new CustomEvent('wa-open-chat', { detail: ten }));
+    } else {
+      router.push(`/whatsapp?chat=${ten}`);
+    }
+  };
+  const item = (Icon: typeof Copy, label: string, onClick: () => void): React.ReactNode => (
+    <button
+      key={label}
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick();
+      }}
+      className="flex w-full items-center gap-3 whitespace-nowrap px-4 py-2 text-left text-[14px] text-[#111b21] transition-colors hover:bg-[#f5f6f6] dark:text-[#e9edef] dark:hover:bg-white/5"
+    >
+      <Icon className="h-[16px] w-[16px] shrink-0" />
+      {label}
+    </button>
+  );
+  return (
+    <span className="relative inline-block">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        className="font-semibold underline-offset-2 hover:underline"
+      >
+        {raw}
+      </button>
+      {open ? (
+        <>
+          <button type="button" className="fixed inset-0 z-30 cursor-default" onClick={() => setOpen(false)} aria-label="Cerrar" />
+          <span className="wa-pop absolute bottom-full left-0 z-40 mb-1 flex w-max flex-col rounded-xl border border-border bg-white py-1 shadow-float dark:bg-[#233138]">
+            {item(MessageCircle, `Chatear con +57 ${ten}`, goChat)}
+            {item(Copy, 'Copiar número de teléfono', () => {
+              void navigator.clipboard.writeText(`+57${ten}`);
+              setOpen(false);
+              toast.success('Número copiado');
+            })}
+          </span>
+        </>
+      ) : null}
+    </span>
+  );
+}
+
+/** Texto del mensaje con los TELEFONOS convertidos en enlace. */
+function renderBodyWithPhones(body: string): React.ReactNode {
+  PHONE_RE.lastIndex = 0;
+  const out: React.ReactNode[] = [];
+  let last = 0;
+  let match: RegExpExecArray | null;
+  let k = 0;
+  while ((match = PHONE_RE.exec(body)) !== null) {
+    if (match.index > last) out.push(body.slice(last, match.index));
+    out.push(<PhoneToken key={`ph-${k++}`} raw={match[0]} />);
+    last = match.index + match[0].length;
+  }
+  if (out.length === 0) return body;
+  if (last < body.length) out.push(body.slice(last));
+  return out;
+}
 
 /** Aviso flotante del fallo (aparece al pasar el mouse por el mensaje). */
 function FailBanner({ m, mine }: { m: WaMessage; mine: boolean }) {
@@ -661,11 +743,17 @@ export function WhatsappPanel({
 
   // ===== Grabacion de NOTA DE VOZ (microfono -> archivo -> WhatsApp). =====
   const [recording, setRecording] = useState(false);
+  const [recPaused, setRecPaused] = useState(false);
   const [recSecs, setRecSecs] = useState(0);
+  const [recStream, setRecStream] = useState<MediaStream | null>(null);
   const mediaRecRef = useRef<MediaRecorder | null>(null);
   const recChunksRef = useRef<Blob[]>([]);
   const recCancelRef = useRef(false);
   const recTimerRef = useRef<number | undefined>(undefined);
+
+  const startRecTimer = () => {
+    recTimerRef.current = window.setInterval(() => setRecSecs((s) => s + 1), 1000);
+  };
 
   const startRec = async () => {
     try {
@@ -682,6 +770,7 @@ export function WhatsappPanel({
       };
       rec.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
+        setRecStream(null);
         if (recCancelRef.current) return;
         const type = rec.mimeType || 'audio/webm';
         const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
@@ -689,12 +778,46 @@ export function WhatsappPanel({
         sendFile.mutate(file);
       };
       mediaRecRef.current = rec;
-      rec.start();
+      rec.start(250);
+      setRecStream(stream);
       setRecording(true);
+      setRecPaused(false);
       setRecSecs(0);
-      recTimerRef.current = window.setInterval(() => setRecSecs((s) => s + 1), 1000);
-    } catch {
-      toast.error('No se pudo acceder al micrófono');
+      startRecTimer();
+    } catch (err) {
+      // Mensajes CLAROS segun el permiso (el navegador pide permiso solo la
+      // primera vez; si se nego, hay que rehabilitarlo desde el candado).
+      const name = err instanceof DOMException ? err.name : '';
+      if (name === 'NotAllowedError' || name === 'SecurityError') {
+        toast.error(
+          'Micrófono bloqueado: haz clic en el candado de la barra de direcciones → Micrófono → Permitir, y vuelve a intentar.',
+        );
+      } else if (name === 'NotFoundError') {
+        toast.error('No se encontró ningún micrófono en este equipo.');
+      } else {
+        toast.error('No se pudo acceder al micrófono.');
+      }
+    }
+  };
+  const togglePauseRec = () => {
+    const rec = mediaRecRef.current;
+    if (!rec) return;
+    if (recPaused) {
+      try {
+        rec.resume();
+      } catch {
+        /* no-op */
+      }
+      startRecTimer();
+      setRecPaused(false);
+    } else {
+      try {
+        rec.pause();
+      } catch {
+        /* no-op */
+      }
+      window.clearInterval(recTimerRef.current);
+      setRecPaused(true);
     }
   };
   const stopRec = (cancel: boolean) => {
@@ -706,6 +829,7 @@ export function WhatsappPanel({
       /* ya detenido */
     }
     setRecording(false);
+    setRecPaused(false);
   };
 
   /** Imagen cualquiera -> sticker webp 512x512 con transparencia (canvas). */
@@ -1141,27 +1265,39 @@ export function WhatsappPanel({
         ) : null}
 
         {recording ? (
-          /* Barra de GRABACION: cancelar | contador con punto rojo | enviar */
-          <div className="flex items-center gap-3 px-1">
+          /* Barra de GRABACION calcada a WhatsApp Web: pastilla blanca con
+             papelera | punto rojo + contador | ONDA EN VIVO | pausa | enviar. */
+          <div className="flex h-11 items-center gap-2 rounded-full bg-white px-2.5 dark:bg-[#2a3942]">
             <button
               type="button"
               onClick={() => stopRec(true)}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[#54656f] hover:bg-black/5 dark:text-[#8696a0] dark:hover:bg-white/5"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[#54656f] hover:bg-black/5 dark:text-[#8696a0] dark:hover:bg-white/5"
               aria-label="Cancelar grabación"
+              title="Descartar"
             >
-              <Trash2 className="h-5 w-5" />
+              <Trash2 className="h-[18px] w-[18px]" />
             </button>
-            <span className="flex flex-1 items-center gap-2 text-[14px] text-[#54656f] dark:text-[#8696a0]">
-              <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-[#f15c6d]" />
+            <span className="flex shrink-0 items-center gap-1.5 text-[14px] tabular-nums text-[#3b4a54] dark:text-[#e9edef]">
+              <span className={cn('h-2.5 w-2.5 rounded-full bg-[#f15c6d]', !recPaused && 'animate-pulse')} />
               {fmtSecs(recSecs)}
             </span>
+            <LiveWave stream={recStream} paused={recPaused} />
+            <button
+              type="button"
+              onClick={togglePauseRec}
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[#f15c6d] hover:bg-black/5 dark:hover:bg-white/5"
+              aria-label={recPaused ? 'Reanudar' : 'Pausar'}
+              title={recPaused ? 'Reanudar' : 'Pausar'}
+            >
+              {recPaused ? <Mic className="h-5 w-5" /> : <Pause className="h-5 w-5 fill-current" />}
+            </button>
             <button
               type="button"
               onClick={() => stopRec(false)}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#00a884] text-white hover:bg-[#029377]"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#00a884] text-white hover:bg-[#029377]"
               aria-label="Enviar nota de voz"
             >
-              <Send className="h-5 w-5" />
+              <Send className="h-[18px] w-[18px]" />
             </button>
           </div>
         ) : (
@@ -1905,7 +2041,7 @@ function BubbleContent({
         </div>
         {caption ? (
           <div className="px-1.5 pb-1 pt-1">
-            <p className="whitespace-pre-wrap break-words">{caption}</p>
+            <p className="whitespace-pre-wrap break-words">{renderBodyWithPhones(caption)}</p>
             <div className="flex justify-end">{timeRow()}</div>
           </div>
         ) : null}
@@ -1954,7 +2090,7 @@ function BubbleContent({
       {m.replyTo ? <ReplyQuote replyTo={m.replyTo} mine={mine} /> : null}
       <div className="relative px-2 pb-[7px] pt-[6px]">
         <p className={cn('whitespace-pre-wrap break-words', emojiBig && 'text-[28px] leading-[38px]')}>
-          {m.body}
+          {m.body ? renderBodyWithPhones(m.body) : null}
           <span
             className={cn('inline-block h-0', mine ? 'w-[88px]' : 'w-[62px]')}
             aria-hidden
@@ -1979,6 +2115,81 @@ function BubbleContent({
 }
 
 /* ===================== Nota de voz (estilo WhatsApp) ===================== */
+
+/**
+ * Onda EN VIVO de la grabacion: AnalyserNode sobre el microfono + canvas a
+ * 60fps (requestAnimationFrame). Las barras son la amplitud REAL y se
+ * desplazan fluidas como en WhatsApp Web.
+ */
+function LiveWave({ stream, paused }: { stream: MediaStream | null; paused: boolean }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const barsRef = useRef<number[]>([]);
+  const pausedRef = useRef(paused);
+  pausedRef.current = paused;
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!stream || !canvas) return;
+    type AC = typeof AudioContext;
+    const Ctx: AC | undefined =
+      window.AudioContext ?? (window as unknown as { webkitAudioContext?: AC }).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+
+    // Canvas nitido (dpr) al tamaño real del hueco.
+    const dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth * dpr;
+    const h = canvas.clientHeight * dpr;
+    canvas.width = w;
+    canvas.height = h;
+    const g = canvas.getContext('2d');
+    barsRef.current = [];
+
+    const BAR_W = 2 * dpr;
+    const GAP = 2 * dpr;
+    const maxBars = Math.max(8, Math.floor(w / (BAR_W + GAP)));
+    let raf = 0;
+    let frame = 0;
+    const draw = () => {
+      raf = requestAnimationFrame(draw);
+      if (!g) return;
+      analyser.getByteTimeDomainData(data);
+      let peak = 0;
+      for (let i = 0; i < data.length; i++) {
+        const v = Math.abs((data[i] ?? 128) - 128) / 128;
+        if (v > peak) peak = v;
+      }
+      // Nueva barra cada ~50ms (el DIBUJO va a 60fps igual).
+      if (!pausedRef.current && frame++ % 3 === 0) {
+        barsRef.current.push(Math.min(1, peak * 1.6));
+        if (barsRef.current.length > maxBars) barsRef.current.shift();
+      }
+      g.clearRect(0, 0, w, h);
+      g.fillStyle = '#8696a0';
+      const bars = barsRef.current;
+      // Ancladas a la DERECHA, desplazandose a la izquierda (como WhatsApp).
+      for (let i = 0; i < bars.length; i++) {
+        const v = bars[bars.length - 1 - i] ?? 0;
+        const bh = Math.max(2 * dpr, v * h * 0.86);
+        const x = w - (i + 1) * (BAR_W + GAP);
+        if (x < 0) break;
+        g.fillRect(x, (h - bh) / 2, BAR_W, bh);
+      }
+    };
+    draw();
+    return () => {
+      cancelAnimationFrame(raf);
+      void ctx.close();
+    };
+  }, [stream]);
+
+  return <canvas ref={canvasRef} className="h-8 min-w-0 flex-1" />;
+}
 
 const BAR_COUNT = 40;
 

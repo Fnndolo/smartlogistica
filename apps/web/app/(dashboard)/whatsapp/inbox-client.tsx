@@ -185,6 +185,24 @@ export function WhatsappInbox() {
     setSelected(phone);
     clearUnread(phone);
   };
+  const openChatRef = useRef(openChat);
+  openChatRef.current = openChat;
+
+  // Abrir chat por ?chat=NUMERO (enlace desde un pedido) o por el evento
+  // wa-open-chat (numero clicado dentro de un mensaje de la bandeja).
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search).get('chat');
+    if (p) {
+      const ten = p.replace(/\D/g, '').slice(-10);
+      if (ten.length === 10) openChatRef.current(ten);
+    }
+    const onOpen = (e: Event) => {
+      const ten = String((e as CustomEvent).detail ?? '');
+      if (ten.length >= 7) openChatRef.current(ten);
+    };
+    window.addEventListener('wa-open-chat', onOpen);
+    return () => window.removeEventListener('wa-open-chat', onOpen);
+  }, []);
 
   // ESC cierra el chat abierto (como WhatsApp Web).
   useEffect(() => {
