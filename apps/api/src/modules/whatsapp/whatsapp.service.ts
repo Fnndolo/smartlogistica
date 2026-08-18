@@ -1216,6 +1216,22 @@ export class WhatsappService {
           const phone = await this.storeCloudMessage(tenantId, prisma, m, 'out', names);
           if (phone) touched.add(phone);
         }
+        // Ediciones que lleguen en campo propio (formas nuevas de Meta).
+        for (const m of v.message_edits ?? []) {
+          const phone = await this.storeCloudMessage(tenantId, prisma, m, 'in', names);
+          if (phone) touched.add(phone);
+        }
+        // Diagnostico: campos del webhook que AUN no procesamos — al log.
+        const known = [
+          'messaging_product', 'metadata', 'contacts', 'messages', 'message_echoes',
+          'smb_message_echoes', 'message_edits', 'statuses', 'history', 'state_sync', 'errors',
+        ];
+        const extra = Object.keys(v).filter((k) => !known.includes(k));
+        if (extra.length > 0) {
+          this.logger.warn(
+            `Webhook Cloud con campos NO procesados [${extra.join(', ')}]: ${JSON.stringify(v).slice(0, 900)}`,
+          );
+        }
         // HISTORIAL de coexistencia (hasta 6 meses del celular, en fases y
         // chunks): se importa TODO con su fecha/estado originales (dedup por
         // wamid). Sin SSE por mensaje (pueden ser miles) — refetch al final.
@@ -1550,10 +1566,25 @@ export class WhatsappService {
         return phone;
       }
 
-      // Dedup: la Cloud API reintenta entregas del webhook.
+      // Dedup: la Cloud API reintenta entregas del webhook. PERO una EDICION
+      // puede llegar como texto normal con el MISMO wamid y el cuerpo nuevo:
+      // si el cuerpo CAMBIO, es la edicion -> actualizar y marcar "Editado".
       if (externalId) {
-        const dup = await prisma.waMessage.findUnique({ where: { externalId }, select: { id: true } });
-        if (dup) return null;
+        const dup = await prisma.waMessage.findUnique({
+          where: { externalId },
+          select: { id: true, body: true },
+        });
+        if (dup) {
+          const newBody = typeof m.text?.body === 'string' ? m.text.body : null;
+          if (type === 'text' && newBody != null && newBody !== dup.body) {
+            await prisma.waMessage.update({
+              where: { id: dup.id },
+              data: { body: newBody, edited: true },
+            });
+            return phone; // repintar el hilo
+          }
+          return null;
+        }
       }
 
       // REACCION: no es una burbuja — se pega al mensaje reaccionado (como en
