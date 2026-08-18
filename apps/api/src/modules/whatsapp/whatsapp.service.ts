@@ -1549,7 +1549,10 @@ export class WhatsappService {
       // reutilizando el wamid ORIGINAL (y el dedup la descartaba en silencio).
       // Se actualiza el original y se marca "Editado"; JAMAS burbuja nueva.
       if (type === 'edit' || m.edit) {
+        // Forma REAL capturada en produccion (wa-debug):
+        // { type:'edit', edit:{ original_message_id, message:{ text:{ body } } } }
         const candidates = [
+          m.edit?.original_message_id,
           m.edit?.message_id,
           m.edit?.context?.id,
           m.edit?.id,
