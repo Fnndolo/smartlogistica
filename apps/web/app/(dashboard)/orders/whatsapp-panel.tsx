@@ -1204,6 +1204,22 @@ export interface BubbleActions {
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
+// Un SOLO popover de reacciones/menu abierto a la vez (como WhatsApp: abrir
+// otro cierra el anterior; el click por fuera lo cierra el backdrop).
+let waPopoverSeq = 0;
+function useSinglePopover(open: boolean, onClose: () => void): void {
+  useEffect(() => {
+    if (!open) return;
+    const mine = ++waPopoverSeq;
+    window.dispatchEvent(new CustomEvent('wa-popover', { detail: mine }));
+    const onOther = (ev: Event) => {
+      if ((ev as CustomEvent).detail !== mine) onClose();
+    };
+    window.addEventListener('wa-popover', onOther);
+    return () => window.removeEventListener('wa-popover', onOther);
+  }, [open, onClose]);
+}
+
 /**
  * Menu contextual del mensaje (flechita al pasar el mouse), calcado a
  * WhatsApp: la barra de REACCIONES siempre visible encima del menu; se abre
@@ -1225,11 +1241,15 @@ function MsgMenu({ m, mine, actions }: { m: WaMessage; mine: boolean; actions: B
     const above = rect.top;
     setOpen({ up: below < POPUP_H && above > below });
   };
+  const myEmoji = m.reactions.find((r) => r.mine)?.emoji ?? null;
   const pickReaction = (emoji: string) => {
-    actions.react(m, emoji);
-    pushRecentEmoji(emoji);
+    // Volver a tocar la MISMA reaccion la QUITA (como WhatsApp).
+    const next = emoji && myEmoji === emoji ? '' : emoji;
+    actions.react(m, next);
+    if (next) pushRecentEmoji(next);
     close();
   };
+  useSinglePopover(Boolean(open), close);
   const item = (
     icon: typeof Reply,
     label: string,
@@ -1280,37 +1300,29 @@ function MsgMenu({ m, mine, actions }: { m: WaMessage; mine: boolean; actions: B
             )}
             style={{ transformOrigin: `${open.up ? 'bottom' : 'top'} ${mine ? 'right' : 'left'}` }}
           >
-            {/* Barra de REACCIONES siempre encima del menu (como WhatsApp). */}
-            <div className="shadow-float flex items-center gap-0.5 rounded-full border border-border bg-white px-1.5 py-1 dark:bg-[#233138]">
+            {/* Barra de REACCIONES siempre encima del menu (tamaño WhatsApp). */}
+            <div className="shadow-float flex items-center rounded-full border border-border bg-white px-1 py-[3px] dark:bg-[#233138]">
               {QUICK_REACTIONS.map((e) => (
                 <button
                   key={e}
                   type="button"
-                  className="rounded-full p-1 text-[22px] leading-[28px] transition-transform hover:scale-125"
+                  className={cn(
+                    'rounded-full p-[4px] text-[19px] leading-[24px] transition-transform hover:scale-125',
+                    myEmoji === e && 'bg-black/10 dark:bg-white/15',
+                  )}
                   onClick={() => pickReaction(e)}
                 >
                   {e}
                 </button>
               ))}
-              {m.reactions.some((r) => r.mine) ? (
-                <button
-                  type="button"
-                  className="ml-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-black/5 text-[#54656f] hover:bg-black/10 dark:bg-white/10 dark:text-[#8696a0]"
-                  onClick={() => pickReaction('')}
-                  aria-label="Quitar reacción"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="ml-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-black/5 text-[#54656f] hover:bg-black/10 dark:bg-white/10 dark:text-[#8696a0]"
-                  onClick={() => setReacts((v) => !v)}
-                  aria-label="Más emojis"
-                >
-                  <Plus className="h-4 w-4" />
-                </button>
-              )}
+              <button
+                type="button"
+                className="ml-0.5 flex h-7 w-7 items-center justify-center rounded-full bg-black/5 text-[#54656f] hover:bg-black/10 dark:bg-white/10 dark:text-[#8696a0]"
+                onClick={() => setReacts((v) => !v)}
+                aria-label="Más emojis"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
             </div>
             <div className="shadow-float w-60 rounded-xl border border-border bg-white py-1.5 dark:bg-[#233138]">
               {reacts ? (
@@ -1374,70 +1386,84 @@ function MsgMenu({ m, mine, actions }: { m: WaMessage; mine: boolean; actions: B
   );
 }
 
-/** Barra de reacciones flotante (6 rapidos + "+" con todos), como WhatsApp. */
-function ReactionBar({
+/**
+ * Barra de reacciones ANCLADA a la burbuja, calcada a WhatsApp: se monta
+ * sobre el borde superior con ~3 emojis ENCIMA de la burbuja y el resto por
+ * fuera — en recibidos el tercero queda al filo del final de la burbuja; en
+ * enviados, el quinto al filo del inicio. Sin importar el tamaño del mensaje.
+ */
+function AnchoredReactionBar({
   m,
+  mine,
   actions,
   onClose,
-  alignRight,
 }: {
   m: WaMessage;
+  mine: boolean;
   actions: BubbleActions;
   onClose: () => void;
-  alignRight: boolean;
 }) {
   const [more, setMore] = useState(false);
+  const myEmoji = m.reactions.find((r) => r.mine)?.emoji ?? null;
   const pick = (e: string) => {
-    actions.react(m, e);
-    pushRecentEmoji(e);
+    // Tocar la MISMA reaccion la quita (toggle, como WhatsApp).
+    const next = e && myEmoji === e ? '' : e;
+    actions.react(m, next);
+    if (next) pushRecentEmoji(next);
     onClose();
   };
+  useSinglePopover(true, onClose);
   return (
     <>
       <button type="button" className="fixed inset-0 z-30 cursor-default" onClick={onClose} aria-label="Cerrar" />
       <div
-        className={cn(
-          'shadow-float absolute bottom-full z-40 mb-2 rounded-3xl border border-border bg-white dark:bg-[#233138]',
-          alignRight ? 'right-0' : 'left-0',
-        )}
+        className={cn('wa-pop absolute z-40 flex flex-col gap-1', mine ? 'items-end' : 'items-start')}
+        style={{
+          top: '-19px',
+          // 3 casillas (~36px c/u) quedan SOBRE la burbuja; el resto sale.
+          ...(mine ? { right: 'calc(100% - 112px)' } : { left: 'calc(100% - 112px)' }),
+          transformOrigin: mine ? 'top right' : 'top left',
+        }}
       >
+        <div className="shadow-float flex items-center rounded-full border border-border bg-white px-1 py-[3px] dark:bg-[#233138]">
+          {QUICK_REACTIONS.map((e) => (
+            <button
+              key={e}
+              type="button"
+              onClick={() => pick(e)}
+              className={cn(
+                'rounded-full p-[4px] text-[19px] leading-[24px] transition-transform hover:scale-125',
+                myEmoji === e && 'bg-black/10 dark:bg-white/15',
+              )}
+            >
+              {e}
+            </button>
+          ))}
+          <button
+            type="button"
+            onClick={() => setMore((v) => !v)}
+            className="ml-0.5 flex h-7 w-7 items-center justify-center rounded-full bg-black/5 text-[#54656f] hover:bg-black/10 dark:bg-white/10 dark:text-[#8696a0]"
+            aria-label="Más emojis"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+        </div>
         {more ? (
-          <div className="h-52 w-72 overflow-y-auto p-2">
+          <div className="shadow-float h-48 w-64 overflow-y-auto rounded-2xl border border-border bg-white p-2 dark:bg-[#233138]">
             <div className="flex flex-wrap">
               {EMOJI_GROUPS.flatMap((g) => splitEmojis(g.list)).map((e, i) => (
                 <button
                   key={i}
                   type="button"
                   onClick={() => pick(e)}
-                  className="rounded-lg p-1 text-[22px] leading-[28px] transition-transform hover:scale-110"
+                  className="rounded-lg p-1 text-[20px] leading-[26px] transition-transform hover:scale-110"
                 >
                   {e}
                 </button>
               ))}
             </div>
           </div>
-        ) : (
-          <div className="flex items-center gap-0.5 px-1.5 py-1">
-            {QUICK_REACTIONS.map((e) => (
-              <button
-                key={e}
-                type="button"
-                onClick={() => pick(e)}
-                className="rounded-full p-1 text-[24px] leading-[30px] transition-transform hover:scale-125"
-              >
-                {e}
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => setMore(true)}
-              className="ml-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-black/5 text-[#54656f] hover:bg-black/10 dark:bg-white/10 dark:text-[#8696a0]"
-              aria-label="Más emojis"
-            >
-              <Plus className="h-4 w-4" />
-            </button>
-          </div>
-        )}
+        ) : null}
       </div>
     </>
   );
@@ -1447,14 +1473,22 @@ function ReactionBar({
  * Botones FLOTANTES al lado de la burbuja (hover): reaccionar siempre, y
  * reenviar directo cuando es multimedia/archivo — como WhatsApp Web.
  */
-function HoverActions({ m, mine, actions }: { m: WaMessage; mine: boolean; actions: BubbleActions }) {
-  const [open, setOpen] = useState(false);
+function HoverActions({
+  m,
+  mine,
+  actions,
+  onReact,
+}: {
+  m: WaMessage;
+  mine: boolean;
+  actions: BubbleActions;
+  onReact: () => void;
+}) {
   const media = m.kind !== 'text';
   return (
     <div
       className={cn(
         'absolute top-1/2 z-10 flex -translate-y-1/2 items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100',
-        open && 'opacity-100',
         mine ? 'right-full mr-2' : 'left-full ml-2',
       )}
     >
@@ -1469,18 +1503,15 @@ function HoverActions({ m, mine, actions }: { m: WaMessage; mine: boolean; actio
           <Forward className="h-4 w-4" />
         </button>
       ) : null}
-      <div className="relative">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-[#8696a0] shadow-md transition-colors hover:text-[#54656f] dark:bg-[#233138]"
-          aria-label="Reaccionar"
-          title="Reaccionar"
-        >
-          <Smile className="h-4 w-4" />
-        </button>
-        {open ? <ReactionBar m={m} actions={actions} onClose={() => setOpen(false)} alignRight={mine} /> : null}
-      </div>
+      <button
+        type="button"
+        onClick={onReact}
+        className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-[#8696a0] shadow-md transition-colors hover:text-[#54656f] dark:bg-[#233138]"
+        aria-label="Reaccionar"
+        title="Reaccionar"
+      >
+        <Smile className="h-4 w-4" />
+      </button>
     </div>
   );
 }
@@ -1498,6 +1529,7 @@ function WaBubble({
 }) {
   const mine = m.direction === 'out';
   const pending = m.id.startsWith('temp-');
+  const [reactOpen, setReactOpen] = useState(false);
   const day = (iso: string) => new Date(iso).toDateString();
   const newDay = !prev || day(prev.createdAt) !== day(m.createdAt);
   const grouped = !newDay && prev && prev.direction === m.direction;
@@ -1536,7 +1568,10 @@ function WaBubble({
           <div className={cn('group relative max-w-[85%] md:max-w-[65%]', pending && 'opacity-90')}>
             {!grouped ? <Tail mine={mine} /> : null}
             <MsgMenu m={m} mine={mine} actions={actions} />
-            <HoverActions m={m} mine={mine} actions={actions} />
+            <HoverActions m={m} mine={mine} actions={actions} onReact={() => setReactOpen(true)} />
+            {reactOpen ? (
+              <AnchoredReactionBar m={m} mine={mine} actions={actions} onClose={() => setReactOpen(false)} />
+            ) : null}
             <div
               className={cn(
                 'relative overflow-hidden text-[14.2px] leading-[19px] shadow-[0_1px_0.5px_rgba(11,20,26,0.13)]',
@@ -1552,7 +1587,7 @@ function WaBubble({
             >
               <BubbleContent message={m} mine={mine} pending={pending} base={base} />
             </div>
-            <ReactionChips message={m} mine={mine} />
+            <ReactionChips message={m} mine={mine} actions={actions} />
           </div>
         )}
       </div>
@@ -1574,10 +1609,14 @@ function BareMessage({
   sticker: boolean;
   actions: BubbleActions;
 }) {
+  const [reactOpen, setReactOpen] = useState(false);
   return (
     <div className={cn('group relative flex max-w-[85%] flex-col md:max-w-[65%]', mine ? 'items-end' : 'items-start')}>
       <MsgMenu m={m} mine={mine} actions={actions} />
-      <HoverActions m={m} mine={mine} actions={actions} />
+      <HoverActions m={m} mine={mine} actions={actions} onReact={() => setReactOpen(true)} />
+      {reactOpen ? (
+        <AnchoredReactionBar m={m} mine={mine} actions={actions} onClose={() => setReactOpen(false)} />
+      ) : null}
       {sticker ? (
         m.mediaUrl ? (
           // Clic en el sticker -> visor con "Añadir a Favoritos" (como WhatsApp).
@@ -1603,19 +1642,37 @@ function BareMessage({
         {timeOf(m.createdAt)}
         {mine ? <Ticks status={m.status} pending={pending} /> : null}
       </span>
-      <ReactionChips message={m} mine={mine} bare />
+      <ReactionChips message={m} mine={mine} bare actions={actions} />
     </div>
   );
 }
 
-/** Chips de reaccion pegados al borde inferior de la burbuja. */
-function ReactionChips({ message: m, mine, bare = false }: { message: WaMessage; mine: boolean; bare?: boolean }) {
+/** Chips de reaccion pegados al borde inferior de la burbuja. Tocar el chip
+ *  QUITA tu reaccion (como WhatsApp). */
+function ReactionChips({
+  message: m,
+  mine,
+  bare = false,
+  actions,
+}: {
+  message: WaMessage;
+  mine: boolean;
+  bare?: boolean;
+  actions?: BubbleActions;
+}) {
   if (m.reactions.length === 0) return null;
   const emojis = [...new Set(m.reactions.map((r) => r.emoji))];
+  const hasMine = m.reactions.some((r) => r.mine);
   return (
-    <span
+    <button
+      type="button"
+      onClick={() => {
+        if (hasMine && actions) actions.react(m, '');
+      }}
+      title={hasMine ? 'Quitar mi reacción' : undefined}
       className={cn(
         'absolute z-10 flex items-center rounded-full border border-black/5 bg-white px-1.5 py-[1px] text-[13px] shadow-sm dark:border-white/10 dark:bg-[#202c33]',
+        hasMine && actions ? 'cursor-pointer' : 'cursor-default',
         bare ? 'bottom-3' : '-bottom-3.5',
         mine ? 'right-1' : 'left-1',
       )}
@@ -1624,7 +1681,7 @@ function ReactionChips({ message: m, mine, bare = false }: { message: WaMessage;
       {m.reactions.length > 1 ? (
         <span className="ml-0.5 text-[11px] text-[#667781] dark:text-[#8696a0]">{m.reactions.length}</span>
       ) : null}
-    </span>
+    </button>
   );
 }
 
