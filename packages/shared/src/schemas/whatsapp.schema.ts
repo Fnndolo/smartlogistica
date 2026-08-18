@@ -79,6 +79,9 @@ export const waThreadSchema = z.object({
   connected: z.boolean(),
   /** Nombre del contacto segun WhatsApp (si ya se resolvio alguna vez). */
   contactName: z.string().nullable(),
+  /** Primer mensaje NO LEIDO por este usuario (divisor) y cuantos son. */
+  firstUnreadId: z.string().nullable().default(null),
+  unreadCount: z.number().int().default(0),
   messages: z.array(waMessageSchema),
 });
 export type WaThread = z.infer<typeof waThreadSchema>;

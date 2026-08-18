@@ -265,12 +265,12 @@ export class WhatsappService {
   private async dialog360OrNull(
     tenantId: string,
     prisma: PrismaClient,
-  ): Promise<{ http: AxiosInstance; mode: Dialog360Mode } | null> {
+  ): Promise<{ http: AxiosInstance; mode: Dialog360Mode; apiKey: string } | null> {
     const conn = await prisma.dialog360Connection.findFirst({ orderBy: { createdAt: 'desc' } });
     if (!conn) return null;
     const apiKey = await this.envelope.decryptField(tenantId, conn.encryptedApiKey);
     const mode: Dialog360Mode = conn.mode === 'sandbox' ? 'sandbox' : 'production';
-    return { http: this.dialog360.buildHttp(apiKey, mode), mode };
+    return { http: this.dialog360.buildHttp(apiKey, mode), mode, apiKey };
   }
 
   // === Hilo por pedido ===
@@ -283,36 +283,58 @@ export class WhatsappService {
       select: { customerPhone: true },
     });
     if (!order) throw new NotFoundException('Pedido no encontrado');
-    return this.threadOf(order.customerPhone ? tenDigits(order.customerPhone) : '');
+    return this.threadOf(order.customerPhone ? tenDigits(order.customerPhone) : '', auth.userId);
   }
 
   /** Hilo por TELEFONO (un chat de la bandeja). */
   async threadByPhone(rawPhone: string, auth: AuthContext): Promise<WaThread> {
     this.assertAdmin(auth);
-    return this.threadOf(tenDigits(rawPhone));
+    return this.threadOf(tenDigits(rawPhone), auth.userId);
   }
 
-  private async threadOf(phone: string): Promise<WaThread> {
+  private async threadOf(phone: string, userId: string): Promise<WaThread> {
     const { prisma } = getTenantContext();
     const conn = await prisma.dialog360Connection.findFirst({ select: { id: true } });
     if (!phone) {
-      return { phone: null, connected: Boolean(conn), contactName: null, messages: [] };
+      return {
+        phone: null,
+        connected: Boolean(conn),
+        contactName: null,
+        firstUnreadId: null,
+        unreadCount: 0,
+        messages: [],
+      };
     }
 
-    const [rows, contact] = await Promise.all([
+    const [rows, contact, readMark] = await Promise.all([
       prisma.waMessage.findMany({
         where: { phone },
         orderBy: { createdAt: 'asc' },
         take: THREAD_TAKE,
       }),
       prisma.waContact.findUnique({ where: { phone } }),
+      prisma.waChatRead.findUnique({ where: { userId_phone: { userId, phone } } }),
     ]);
+
+    // Divisor "N mensajes no leidos": VERDAD del servidor (marca de lectura de
+    // ESTE usuario). Sin marca previa no se pinta divisor (chat nunca abierto).
+    let firstUnreadId: string | null = null;
+    let unreadCount = 0;
+    if (readMark) {
+      for (const r of rows) {
+        if (r.direction !== 'in' || r.createdAt <= readMark.lastReadAt) continue;
+        if (!firstUnreadId) firstUnreadId = r.id;
+        unreadCount++;
+      }
+    }
 
     const byId = new Map(rows.map((r) => [r.id, r] as const));
     return {
       phone,
       connected: Boolean(conn),
       contactName: contact?.name ?? null,
+      firstUnreadId,
+      unreadCount,
       messages: await Promise.all(rows.map((r) => this.toDto(r, byId))),
     };
   }
@@ -721,8 +743,11 @@ export class WhatsappService {
       const obj = await this.storage.get(key);
       if (!obj) throw new NotFoundException('Sticker no disponible en el storage');
       const mediaId = await this.dialog360
-        .uploadMedia(d360!.http, d360!.mode, obj.buffer, 'image/webp', 'sticker.webp')
-        .catch(() => null);
+        .uploadMedia(d360!.apiKey, d360!.mode, obj.buffer, 'image/webp', 'sticker.webp')
+        .catch((err) => {
+          this.logger.warn(`Upload de sticker fallo: ${err instanceof Error ? err.message : err}`);
+          return null;
+        });
       wamid = mediaId
         ? await this.dialog360.sendMediaId(d360!.http, d360!.mode, `57${phone}`, 'sticker', mediaId)
         : await this.dialog360.sendMediaLink(

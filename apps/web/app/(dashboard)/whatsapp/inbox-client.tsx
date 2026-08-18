@@ -133,10 +133,7 @@ export function WhatsappInbox() {
     [qc],
   );
 
-  // No leidos que tenia el chat AL ABRIRLO (divisor "N mensajes no leídos").
-  const [openedUnread, setOpenedUnread] = useState(0);
   const openChat = (phone: string) => {
-    setOpenedUnread(chats.find((c) => c.phone === phone)?.unread ?? 0);
     setSelected(phone);
     clearUnread(phone);
   };
@@ -343,7 +340,7 @@ export function WhatsappInbox() {
               onClose={() => setSelected(null)}
             />
             <div className="min-h-0 flex-1">
-              <WhatsappPanel key={selected} phone={selected} showHeader={false} active initialUnread={openedUnread} />
+              <WhatsappPanel key={selected} phone={selected} showHeader={false} active />
             </div>
           </>
         ) : (

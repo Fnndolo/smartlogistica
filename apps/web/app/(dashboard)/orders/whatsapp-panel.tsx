@@ -176,7 +176,6 @@ export function WhatsappPanel({
   phone: chatPhone,
   active = true,
   showHeader = true,
-  initialUnread = 0,
 }: {
   /** Modo PEDIDO (pestaña del drawer). */
   orderId?: string;
@@ -185,8 +184,6 @@ export function WhatsappPanel({
   active?: boolean;
   /** false = la bandeja pinta su propia cabecera (con etiquetas y cerrar). */
   showHeader?: boolean;
-  /** No leidos al ABRIR (divisor "N mensajes no leídos", como WhatsApp). */
-  initialUnread?: number;
 }) {
   // Mismos sub-paths en ambos modos (el API los expone identicos).
   const base = orderId ? `/v1/orders/${orderId}/whatsapp` : `/v1/whatsapp/chats/${chatPhone}`;
@@ -199,7 +196,7 @@ export function WhatsappPanel({
   const [tplParams, setTplParams] = useState<string[]>([]);
   const slashMode = !tpl && text.startsWith('/');
 
-  const { data: thread, isLoading } = useQuery({
+  const { data: thread, isLoading, isFetchedAfterMount } = useQuery({
     queryKey: ['wa-thread', base],
     queryFn: () => api.get<WaThread>(base),
     // Respaldo por si el SSE se cae; el canal primario es wa.message.
@@ -434,42 +431,52 @@ export function WhatsappPanel({
     return () => clearTimeout(t);
   }, [active, opPhone, count, base, opBase, orderId, qc]);
 
-  // ===== Divisor "N mensajes no leidos" (al entrar desde la bandeja). =====
+  // ===== Divisor "N mensajes no leidos": VERDAD del servidor (primer no
+  // leido segun la marca de lectura de ESTE usuario), fijado UNA sola vez al
+  // abrir (los refetch posteriores ya vienen "leidos" y no lo mueven).
   const [dividerId, setDividerId] = useState<string | null>(null);
-  const [dividerDone, setDividerDone] = useState(initialUnread === 0);
+  const [dividerCount, setDividerCount] = useState(0);
+  const [dividerDone, setDividerDone] = useState(false);
   useEffect(() => {
-    if (dividerDone || !thread) return;
-    let found: string | null = null;
-    let n = 0;
-    for (let i = thread.messages.length - 1; i >= 0; i--) {
-      const m = thread.messages[i]!;
-      if (m.direction !== 'in') continue;
-      n++;
-      if (n === initialUnread) {
-        found = m.id;
-        break;
-      }
-    }
-    setDividerId(found);
+    // Solo con respuesta FRESCA del server (la cache vieja ya venia "leida").
+    if (dividerDone || !thread || !isFetchedAfterMount) return;
+    setDividerId(thread.firstUnreadId);
+    setDividerCount(thread.unreadCount);
     setDividerDone(true);
-  }, [thread, initialUnread, dividerDone]);
+  }, [thread, dividerDone, isFetchedAfterMount]);
 
-  // Primer posicionamiento: espera la decision del divisor y baja UNA sola vez
-  // (al divisor si existe; si no, al fondo).
+  // Primer posicionamiento: al divisor (centrado) o al FONDO. Mientras cargan
+  // fotos/stickers el contenido CRECE, asi que se PINEA en bucle ~1.5s hasta
+  // que el usuario interactue (rueda/tacto) — adios a quedar "a mitad".
+  const userMovedRef = useRef(false);
   useEffect(() => {
     if (!active || count === 0 || !dividerDone || initialScrollDoneRef.current) return;
     initialScrollDoneRef.current = true;
-    requestAnimationFrame(() => {
-      const el = scrollRef.current;
-      if (!el) return;
-      const divider = el.querySelector<HTMLElement>('[data-unread-divider]');
-      if (divider) {
+    const el = scrollRef.current;
+    if (!el) return;
+    const markMoved = () => {
+      userMovedRef.current = true;
+    };
+    el.addEventListener('wheel', markMoved, { passive: true });
+    el.addEventListener('touchstart', markMoved, { passive: true });
+    const until = Date.now() + 1500;
+    const divider = () => el.querySelector<HTMLElement>('[data-unread-divider]');
+    const pin = () => {
+      if (userMovedRef.current) return;
+      const d = divider();
+      if (d) {
         stickBottomRef.current = false;
-        divider.scrollIntoView({ block: 'center' });
+        d.scrollIntoView({ block: 'center' });
       } else {
         el.scrollTop = el.scrollHeight;
       }
-    });
+      if (Date.now() < until) requestAnimationFrame(pin);
+    };
+    requestAnimationFrame(pin);
+    return () => {
+      el.removeEventListener('wheel', markMoved);
+      el.removeEventListener('touchstart', markMoved);
+    };
   }, [active, count, dividerDone, dividerId]);
 
   // Mensajes NUEVOS: bajar solo si ya estabamos pegados abajo.
@@ -811,7 +818,7 @@ export function WhatsappPanel({
                     className="-mx-4 my-2 flex justify-center bg-[#00000010] py-2 dark:bg-[#ffffff0d] md:-mx-[6.82%]"
                   >
                     <span className="rounded-full bg-white px-3.5 py-[5px] text-[12.5px] font-semibold text-[#111b21] shadow-sm dark:bg-[#182229] dark:text-[#e9edef]">
-                      {initialUnread === 1 ? '1 mensaje no leído' : `${initialUnread} mensajes no leídos`}
+                      {dividerCount === 1 ? '1 mensaje no leído' : `${dividerCount} mensajes no leídos`}
                     </span>
                   </div>
                 ) : null}

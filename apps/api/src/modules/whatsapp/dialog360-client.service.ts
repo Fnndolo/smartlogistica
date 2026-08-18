@@ -120,19 +120,29 @@ export class Dialog360Client {
    * URLs firmadas a veces falla con 131053 Media upload error).
    */
   async uploadMedia(
-    http: AxiosInstance,
+    apiKey: string,
     mode: Dialog360Mode,
     buffer: Buffer,
     mime: string,
     filename: string,
   ): Promise<string | null> {
+    // fetch NATIVO (no axios): el multipart con boundary correcto garantizado.
     const fd = new FormData();
     fd.append('messaging_product', 'whatsapp');
     fd.append('file', new Blob([new Uint8Array(buffer)], { type: mime }), filename);
-    const res = await http.post(mode === 'sandbox' ? '/v1/media' : '/media', fd, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
-    return res.data?.media?.[0]?.id ?? res.data?.id ?? null;
+    const res = await fetch(
+      `${this.baseUrl(mode)}${mode === 'sandbox' ? '/v1/media' : '/media'}`,
+      { method: 'POST', headers: { 'D360-API-KEY': apiKey }, body: fd },
+    );
+    const body = (await res.json().catch(() => null)) as
+      | { id?: string; media?: Array<{ id?: string }>; error?: unknown }
+      | null;
+    if (!res.ok) {
+      throw new Error(
+        `Media upload HTTP ${res.status}: ${JSON.stringify(body ?? '').slice(0, 300)}`,
+      );
+    }
+    return body?.media?.[0]?.id ?? body?.id ?? null;
   }
 
   /** Envia un MEDIO por media id (previamente subido con uploadMedia). */
