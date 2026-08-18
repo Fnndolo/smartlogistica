@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -151,21 +152,33 @@ const failText = (m: WaMessage): string => {
 // Celulares colombianos (3xx...), con o sin +57, con espacios/guiones/puntos.
 const PHONE_RE = /(\+?57[\s.-]?)?(3\d{2}[\s.-]?\d{3}[\s.-]?\d{4})(?!\d)/g;
 
-/** Numero clicable: menu "Chatear con +57 X" / "Copiar numero". */
+/** Numero clicable: menu "Chatear con +57 X" / "Copiar numero". El menu va
+ *  en un PORTAL (position fixed) — dentro de la burbuja lo recortaba el
+ *  overflow y solo se veia un bordecito. */
 function PhoneToken({ raw }: { raw: string }) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
-  useSinglePopover(open, () => setOpen(false));
+  const [open, setOpen] = useState<null | { left: number; top?: number; bottom?: number }>(null);
+  const close = useCallback(() => setOpen(null), []);
+  useSinglePopover(Boolean(open), close);
   const digits = raw.replace(/\D/g, '');
   const ten = digits.length > 10 ? digits.slice(-10) : digits;
   const goChat = () => {
-    setOpen(false);
+    close();
     // En la bandeja: abrir directo (evento); desde un pedido: navegar.
     if (window.location.pathname.startsWith('/whatsapp')) {
       window.dispatchEvent(new CustomEvent('wa-open-chat', { detail: ten }));
     } else {
       router.push(`/whatsapp?chat=${ten}`);
     }
+  };
+  const toggle = (e: React.MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    if (open) return close();
+    const r = e.currentTarget.getBoundingClientRect();
+    const MENU_W = 270;
+    const left = Math.min(Math.max(8, r.left), Math.max(8, window.innerWidth - MENU_W - 8));
+    // Encima del numero si hay espacio; si no, debajo.
+    setOpen(r.top > 120 ? { left, bottom: window.innerHeight - r.top + 4 } : { left, top: r.bottom + 4 });
   };
   const item = (Icon: typeof Copy, label: string, onClick: () => void): React.ReactNode => (
     <button
@@ -182,31 +195,38 @@ function PhoneToken({ raw }: { raw: string }) {
     </button>
   );
   return (
-    <span className="relative inline-block">
+    <>
       <button
         type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen((v) => !v);
-        }}
-        className="font-semibold underline-offset-2 hover:underline"
+        onClick={toggle}
+        className="font-semibold text-[#00a884] underline-offset-2 hover:underline"
       >
         {raw}
       </button>
-      {open ? (
-        <>
-          <button type="button" className="fixed inset-0 z-30 cursor-default" onClick={() => setOpen(false)} aria-label="Cerrar" />
-          <span className="wa-pop absolute bottom-full left-0 z-40 mb-1 flex w-max flex-col rounded-xl border border-border bg-white py-1 shadow-float dark:bg-[#233138]">
-            {item(MessageCircle, `Chatear con +57 ${ten}`, goChat)}
-            {item(Copy, 'Copiar número de teléfono', () => {
-              void navigator.clipboard.writeText(`+57${ten}`);
-              setOpen(false);
-              toast.success('Número copiado');
-            })}
-          </span>
-        </>
-      ) : null}
-    </span>
+      {open
+        ? createPortal(
+            <>
+              <button type="button" className="fixed inset-0 z-[70] cursor-default" onClick={close} aria-label="Cerrar" />
+              <span
+                className="wa-pop fixed z-[80] flex w-max flex-col rounded-xl border border-border bg-white py-1 shadow-float dark:bg-[#233138]"
+                style={{
+                  left: open.left,
+                  ...(open.top != null ? { top: open.top } : { bottom: open.bottom }),
+                  transformOrigin: open.top != null ? 'top left' : 'bottom left',
+                }}
+              >
+                {item(MessageCircle, `Chatear con +57 ${ten}`, goChat)}
+                {item(Copy, 'Copiar número de teléfono', () => {
+                  void navigator.clipboard.writeText(`+57${ten}`);
+                  close();
+                  toast.success('Número copiado');
+                })}
+              </span>
+            </>,
+            document.body,
+          )
+        : null}
+    </>
   );
 }
 
@@ -785,17 +805,30 @@ export function WhatsappPanel({
       setRecSecs(0);
       startRecTimer();
     } catch (err) {
-      // Mensajes CLAROS segun el permiso (el navegador pide permiso solo la
-      // primera vez; si se nego, hay que rehabilitarlo desde el candado).
+      // El navegador PIDE el permiso solo cuando esta en "preguntar"; si el
+      // estado quedo en "denegado" no vuelve a preguntar jamas — ahi el unico
+      // camino es el candado. Distinguimos con la Permissions API.
       const name = err instanceof DOMException ? err.name : '';
-      if (name === 'NotAllowedError' || name === 'SecurityError') {
+      const msg = err instanceof Error ? err.message : '';
+      let state: string | null = null;
+      try {
+        const p = await navigator.permissions?.query?.({ name: 'microphone' as PermissionName });
+        state = p?.state ?? null;
+      } catch {
+        /* sin Permissions API */
+      }
+      if (state === 'prompt') {
+        toast.error('El navegador no mostró la solicitud de micrófono. Intenta de nuevo.');
+      } else if (name === 'NotAllowedError' || name === 'SecurityError' || state === 'denied') {
         toast.error(
-          'Micrófono bloqueado: haz clic en el candado de la barra de direcciones → Micrófono → Permitir, y vuelve a intentar.',
+          'El navegador tiene DENEGADO el micrófono para este sitio (una vez negado, no vuelve a preguntar). Actívalo en el candado de la barra de direcciones y recarga la página.',
         );
       } else if (name === 'NotFoundError') {
         toast.error('No se encontró ningún micrófono en este equipo.');
+      } else if (name === 'NotReadableError') {
+        toast.error('Otro programa está usando el micrófono (ciérralo y reintenta).');
       } else {
-        toast.error('No se pudo acceder al micrófono.');
+        toast.error(`No se pudo acceder al micrófono${name ? ` (${name}${msg ? `: ${msg}` : ''})` : ''}.`);
       }
     }
   };
