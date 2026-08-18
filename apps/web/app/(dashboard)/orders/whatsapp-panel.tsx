@@ -150,7 +150,22 @@ function Tail({ mine }: { mine: boolean }) {
 
 /* ============================== Panel ============================== */
 
-export function WhatsappPanel({ orderId, active = true }: { orderId: string; active?: boolean }) {
+export function WhatsappPanel({
+  orderId,
+  phone: chatPhone,
+  active = true,
+  showHeader = true,
+}: {
+  /** Modo PEDIDO (pestaña del drawer). */
+  orderId?: string;
+  /** Modo BANDEJA (chat por telefono). */
+  phone?: string;
+  active?: boolean;
+  /** false = la bandeja pinta su propia cabecera (con etiquetas y cerrar). */
+  showHeader?: boolean;
+}) {
+  // Mismos sub-paths en ambos modos (el API los expone identicos).
+  const base = orderId ? `/v1/orders/${orderId}/whatsapp` : `/v1/whatsapp/chats/${chatPhone}`;
   const qc = useQueryClient();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [text, setText] = useState('');
@@ -161,8 +176,8 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
   const slashMode = !tpl && text.startsWith('/');
 
   const { data: thread, isLoading } = useQuery({
-    queryKey: ['wa-thread', orderId],
-    queryFn: () => api.get<WaThread>(`/v1/orders/${orderId}/whatsapp`),
+    queryKey: ['wa-thread', base],
+    queryFn: () => api.get<WaThread>(base),
     // Respaldo por si el SSE se cae; el canal primario es wa.message.
     refetchInterval: active ? 30_000 : false,
     retry: false,
@@ -180,7 +195,7 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
         // (cero refetch). El evento generico {phone} queda como respaldo.
         const msg = (event as { message?: WaMessage }).message;
         if (msg?.id) {
-          qc.setQueryData<WaThread>(['wa-thread', orderId], (old) => {
+          qc.setQueryData<WaThread>(['wa-thread', base], (old) => {
             if (!old) return old;
             return old.messages.some((x) => x.id === msg.id)
               ? { ...old, messages: old.messages.map((x) => (x.id === msg.id ? msg : x)) }
@@ -188,21 +203,21 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
           });
           return;
         }
-        qc.invalidateQueries({ queryKey: ['wa-thread', orderId] });
+        qc.invalidateQueries({ queryKey: ['wa-thread', base] });
       },
-      [qc, orderId],
+      [qc, base],
     ),
   );
 
   const appendMessage = useCallback(
     (msg: WaMessage) => {
-      qc.setQueryData<WaThread>(['wa-thread', orderId], (old) =>
+      qc.setQueryData<WaThread>(['wa-thread', base], (old) =>
         old && !old.messages.some((m) => m.id === msg.id)
           ? { ...old, messages: [...old.messages, msg] }
           : old,
       );
     },
-    [qc, orderId],
+    [qc, base],
   );
 
   // Al fondo al abrir y con cada mensaje nuevo.
@@ -231,14 +246,14 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
 
   const sendText = useMutation({
     mutationFn: (vars: { body: string; tempId: string }) =>
-      api.post<WaMessage>(`/v1/orders/${orderId}/whatsapp/text`, { text: vars.body }),
+      api.post<WaMessage>(`${base}/text`, { text: vars.body }),
     // OPTIMISTA: la burbuja aparece AL INSTANTE con relojito; el POST corre por detras.
     onMutate: (vars) => {
       appendMessage({ ...optimistic(vars.body), id: vars.tempId });
     },
     onSuccess: (msg, vars) => {
       // Si el SSE ya trajo el mensaje real, solo se quita la burbuja temporal.
-      qc.setQueryData<WaThread>(['wa-thread', orderId], (old) => {
+      qc.setQueryData<WaThread>(['wa-thread', base], (old) => {
         if (!old) return old;
         const already = old.messages.some((x) => x.id === msg.id);
         return {
@@ -250,7 +265,7 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
       });
     },
     onError: (err, vars) => {
-      qc.setQueryData<WaThread>(['wa-thread', orderId], (old) =>
+      qc.setQueryData<WaThread>(['wa-thread', base], (old) =>
         old ? { ...old, messages: old.messages.filter((x) => x.id !== vars.tempId) } : old,
       );
       setText(vars.body); // devolver el texto al campo para reintentar
@@ -260,8 +275,8 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
 
   // Plantillas de la WABA: se cargan la primera vez que se escribe "/".
   const { data: tplList, isLoading: tplLoading } = useQuery({
-    queryKey: ['wa-templates', orderId],
-    queryFn: () => api.get<WaTemplateList>(`/v1/orders/${orderId}/whatsapp/templates`),
+    queryKey: ['wa-templates', base],
+    queryFn: () => api.get<WaTemplateList>(`${base}/templates`),
     enabled: active && (slashMode || Boolean(tpl)),
     staleTime: 5 * 60_000,
     retry: false,
@@ -269,7 +284,7 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
 
   const sendTemplate = useMutation({
     mutationFn: (vars: { tpl: WaTemplate; params: string[]; tempId: string }) =>
-      api.post<WaMessage>(`/v1/orders/${orderId}/whatsapp/template`, {
+      api.post<WaMessage>(`${base}/template`, {
         name: vars.tpl.name,
         language: vars.tpl.language,
         params: vars.params,
@@ -282,7 +297,7 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
     },
     onSuccess: (msg, vars) => {
       // Si el SSE ya trajo el mensaje real, solo se quita la burbuja temporal.
-      qc.setQueryData<WaThread>(['wa-thread', orderId], (old) => {
+      qc.setQueryData<WaThread>(['wa-thread', base], (old) => {
         if (!old) return old;
         const already = old.messages.some((x) => x.id === msg.id);
         return {
@@ -294,7 +309,7 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
       });
     },
     onError: (err, vars) => {
-      qc.setQueryData<WaThread>(['wa-thread', orderId], (old) =>
+      qc.setQueryData<WaThread>(['wa-thread', base], (old) =>
         old ? { ...old, messages: old.messages.filter((x) => x.id !== vars.tempId) } : old,
       );
       toast.error(err instanceof ApiError ? err.message : 'No se pudo enviar la plantilla');
@@ -334,7 +349,7 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
     mutationFn: (file: File) => {
       const fd = new FormData();
       fd.append('file', file, file.name);
-      return api.upload<WaMessage>(`/v1/orders/${orderId}/whatsapp/file`, fd);
+      return api.upload<WaMessage>(`${base}/file`, fd);
     },
     onSuccess: (msg) => appendMessage(msg),
     onError: (err) =>
@@ -401,21 +416,23 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
 
   return (
     <div className="flex h-full flex-col">
-      {/* Cabecera del hilo, estilo WhatsApp */}
-      <div className="flex items-center gap-3 border-b border-border bg-[#f0f2f5] px-4 py-2 dark:bg-[#202c33]">
-        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#dfe5e7] text-[#54656f] dark:bg-[#2a3942] dark:text-[#8696a0]">
-          <MessageCircle className="h-[18px] w-[18px]" />
-        </span>
-        <div className="min-w-0 flex-1 leading-tight">
-          <p className="truncate text-[14px] font-medium text-[#111b21] dark:text-[#e9edef]">
-            {thread.contactName ? titleCaseName(thread.contactName) : 'WhatsApp del cliente'}
-          </p>
-          <p className="flex items-center gap-1 text-[12px] text-[#667781] dark:text-[#8696a0]">
-            <Phone className="h-3 w-3" />
-            +57 {thread.phone}
-          </p>
+      {/* Cabecera del hilo, estilo WhatsApp (la bandeja pinta la suya). */}
+      {showHeader ? (
+        <div className="flex items-center gap-3 border-b border-border bg-[#f0f2f5] px-4 py-2 dark:bg-[#202c33]">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#dfe5e7] text-[#54656f] dark:bg-[#2a3942] dark:text-[#8696a0]">
+            <MessageCircle className="h-[18px] w-[18px]" />
+          </span>
+          <div className="min-w-0 flex-1 leading-tight">
+            <p className="truncate text-[14px] font-medium text-[#111b21] dark:text-[#e9edef]">
+              {thread.contactName ? titleCaseName(thread.contactName) : 'WhatsApp del cliente'}
+            </p>
+            <p className="flex items-center gap-1 text-[12px] text-[#667781] dark:text-[#8696a0]">
+              <Phone className="h-3 w-3" />
+              +57 {thread.phone}
+            </p>
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {/* Hilo sobre el FONDO DOODLE (fijo; los mensajes scrollean encima). */}
       <div className="relative min-h-0 flex-1 bg-[#efe7dd] dark:bg-[#0b141a]">
@@ -440,7 +457,7 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
             </div>
           ) : (
             thread.messages.map((m, i) => (
-              <WaBubble key={m.id} message={m} prev={thread.messages[i - 1]} orderId={orderId} />
+              <WaBubble key={m.id} message={m} prev={thread.messages[i - 1]} base={base} />
             ))
           )}
         </div>
@@ -624,11 +641,11 @@ export function WhatsappPanel({ orderId, active = true }: { orderId: string; act
 function WaBubble({
   message: m,
   prev,
-  orderId,
+  base,
 }: {
   message: WaMessage;
   prev?: WaMessage;
-  orderId: string;
+  base: string;
 }) {
   const mine = m.direction === 'out';
   const pending = m.id.startsWith('temp-');
@@ -682,7 +699,7 @@ function WaBubble({
                     : 'rounded-[7.5px] rounded-tl-none',
               )}
             >
-              <BubbleContent message={m} mine={mine} pending={pending} orderId={orderId} />
+              <BubbleContent message={m} mine={mine} pending={pending} base={base} />
             </div>
             <ReactionChips message={m} mine={mine} />
           </div>
@@ -793,12 +810,12 @@ function BubbleContent({
   message: m,
   mine,
   pending,
-  orderId,
+  base,
 }: {
   message: WaMessage;
   mine: boolean;
   pending: boolean;
-  orderId: string;
+  base: string;
 }) {
   const timeRow = (onMedia = false) => (
     <span
@@ -845,7 +862,7 @@ function BubbleContent({
 
   // ===== Audio (nota de voz calcada a WhatsApp) =====
   if (m.kind === 'audio' && m.mediaUrl) {
-    return <WaAudio message={m} mine={mine} pending={pending} orderId={orderId} />;
+    return <WaAudio message={m} mine={mine} pending={pending} base={base} />;
   }
 
   // ===== Documento =====
@@ -937,12 +954,12 @@ function WaAudio({
   message: m,
   mine,
   pending,
-  orderId,
+  base,
 }: {
   message: WaMessage;
   mine: boolean;
   pending: boolean;
-  orderId: string;
+  base: string;
 }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
@@ -951,7 +968,7 @@ function WaAudio({
   const [peaks, setPeaks] = useState<number[] | null>(null);
   // Primero por NUESTRA API (misma origen: la onda se puede decodificar sin
   // CORS); si el audio viejo solo tiene URL externa, se cae a esa.
-  const apiSrc = `/v1/orders/${orderId}/whatsapp/audio/${m.id}`;
+  const apiSrc = `${base}/audio/${m.id}`;
   const [src, setSrc] = useState(apiSrc);
 
   // Ondas REALES: decodificar el audio y muestrear los picos por bloque.

@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   Link2,
   ListChecks,
+  MessageCircle,
   PackageCheck,
   Plus,
   Settings,
@@ -30,6 +31,7 @@ import { useMentions } from './use-mentions';
 const NAV_ITEMS = [
   { href: '/dashboard', label: 'Resumen', icon: LayoutDashboard, adminOnly: true },
   { href: '/orders', label: 'Pedidos', icon: Boxes, adminOnly: true },
+  { href: '/whatsapp', label: 'WhatsApp', icon: MessageCircle, adminOnly: true },
   { href: '/mentions', label: 'Menciones', icon: AtSign, adminOnly: false },
   { href: '/connections', label: 'Conexiones', icon: Link2, adminOnly: true },
   { href: '/settings/team', label: 'Equipo', icon: Users, adminOnly: true },

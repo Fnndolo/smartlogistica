@@ -19,11 +19,14 @@ import {
   dialog360CredentialsSchema,
   sendWaTemplateSchema,
   sendWaTextSchema,
+  setWaLabelsSchema,
   type Dialog360ConnectionSummary,
   type Dialog360CredentialsInput,
   type Dialog360TestResult,
   type SendWaTemplateInput,
   type SendWaTextInput,
+  type SetWaLabelsInput,
+  type WaInbox,
   type WaMessage,
   type WaTemplateList,
   type WaThread,
@@ -79,6 +82,98 @@ export class Dialog360ConnectionController {
   @HttpCode(204)
   async disconnect(@CurrentUser() user: AuthContext): Promise<void> {
     await this.whatsapp.disconnectDialog360(user);
+  }
+}
+
+/**
+ * BANDEJA de WhatsApp (inbox estilo WhatsApp Web): todos los chats por
+ * telefono. Mismos sub-paths que el WhatsApp del pedido para que el panel del
+ * chat sea reutilizable. Solo administradores.
+ */
+@Controller('whatsapp')
+export class WhatsappInboxController {
+  constructor(private readonly whatsapp: WhatsappService) {}
+
+  /** Todos los chats (ultimo mensaje + no leidos + etiquetas). */
+  @Get('inbox')
+  async inbox(@CurrentUser() user: AuthContext): Promise<WaInbox> {
+    return this.whatsapp.inbox(user);
+  }
+
+  /** Hilo completo de un chat. */
+  @Get('chats/:phone')
+  async thread(@Param('phone') phone: string, @CurrentUser() user: AuthContext): Promise<WaThread> {
+    return this.whatsapp.threadByPhone(phone, user);
+  }
+
+  /** Marcar como leido (apaga el contador verde de ESTE usuario). */
+  @Post('chats/:phone/read')
+  @HttpCode(200)
+  async read(@Param('phone') phone: string, @CurrentUser() user: AuthContext): Promise<{ ok: true }> {
+    return this.whatsapp.markChatRead(phone, user);
+  }
+
+  /** Etiquetas del chat. */
+  @Put('chats/:phone/labels')
+  async labels(
+    @Param('phone') phone: string,
+    @Body(new ZodValidationPipe(setWaLabelsSchema)) body: SetWaLabelsInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ ok: true }> {
+    return this.whatsapp.setChatLabels(phone, body, user);
+  }
+
+  @Post('chats/:phone/text')
+  @HttpCode(201)
+  async sendText(
+    @Param('phone') phone: string,
+    @Body(new ZodValidationPipe(sendWaTextSchema)) body: SendWaTextInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<WaMessage> {
+    return this.whatsapp.sendTextToPhone(phone, body, user);
+  }
+
+  @Post('chats/:phone/file')
+  @HttpCode(201)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: WA_FILE_MAX_BYTES } }))
+  async sendFile(
+    @Param('phone') phone: string,
+    @UploadedFile() file: UploadedWaFile | undefined,
+    @CurrentUser() user: AuthContext,
+  ): Promise<WaMessage> {
+    if (!file) throw new BadRequestException('No se recibio ningun archivo');
+    return this.whatsapp.sendFileToPhone(phone, file, user);
+  }
+
+  @Get('chats/:phone/templates')
+  async templates(
+    @Param('phone') phone: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<WaTemplateList> {
+    return this.whatsapp.listTemplatesForPhone(phone, user);
+  }
+
+  @Post('chats/:phone/template')
+  @HttpCode(201)
+  async sendTemplate(
+    @Param('phone') phone: string,
+    @Body(new ZodValidationPipe(sendWaTemplateSchema)) body: SendWaTemplateInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<WaMessage> {
+    return this.whatsapp.sendTemplateToPhone(phone, body, user);
+  }
+
+  @Get('chats/:phone/audio/:messageId')
+  async audio(
+    @Param('phone') phone: string,
+    @Param('messageId') messageId: string,
+    @CurrentUser() user: AuthContext,
+    @Res() res: Response,
+  ): Promise<void> {
+    const { buffer, contentType } = await this.whatsapp.audioFileByPhone(phone, messageId, user);
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(buffer);
   }
 }
 

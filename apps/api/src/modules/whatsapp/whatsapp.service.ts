@@ -14,6 +14,8 @@ import type {
   Dialog360TestResult,
   SendWaTemplateInput,
   SendWaTextInput,
+  SetWaLabelsInput,
+  WaInbox,
   WaMessage as WaMessageDto,
   WaTemplateList,
   WaThread,
@@ -274,8 +276,17 @@ export class WhatsappService {
       select: { customerPhone: true },
     });
     if (!order) throw new NotFoundException('Pedido no encontrado');
+    return this.threadOf(order.customerPhone ? tenDigits(order.customerPhone) : '');
+  }
 
-    const phone = order.customerPhone ? tenDigits(order.customerPhone) : '';
+  /** Hilo por TELEFONO (un chat de la bandeja). */
+  async threadByPhone(rawPhone: string, auth: AuthContext): Promise<WaThread> {
+    this.assertAdmin(auth);
+    return this.threadOf(tenDigits(rawPhone));
+  }
+
+  private async threadOf(phone: string): Promise<WaThread> {
+    const { prisma } = getTenantContext();
     const conn = await prisma.dialog360Connection.findFirst({ select: { id: true } });
     if (!phone) {
       return { phone: null, connected: Boolean(conn), contactName: null, messages: [] };
@@ -301,11 +312,27 @@ export class WhatsappService {
 
   /** Envia TEXTO al cliente del pedido y lo guarda en el historial. */
   async sendText(orderId: string, input: SendWaTextInput, auth: AuthContext): Promise<WaMessageDto> {
+    const { phone, provider } = await this.orderPhone(orderId);
+    return this.sendTextCore(phone, provider, input, auth);
+  }
+
+  /** Envia TEXTO a un chat de la BANDEJA (por telefono). */
+  async sendTextToPhone(rawPhone: string, input: SendWaTextInput, auth: AuthContext): Promise<WaMessageDto> {
+    const phone = tenDigits(rawPhone);
+    if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
+    return this.sendTextCore(phone, 'external', input, auth);
+  }
+
+  private async sendTextCore(
+    phone: string,
+    provider: string,
+    input: SendWaTextInput,
+    auth: AuthContext,
+  ): Promise<WaMessageDto> {
     this.assertAdmin(auth);
     const { tenantId, prisma } = getTenantContext();
 
     const d360 = await this.dialog360OrNull(tenantId, prisma);
-    const { phone, provider } = await this.orderPhone(orderId);
     this.requireD360(d360, provider);
     let wamid: string | null = null;
     try {
@@ -331,13 +358,29 @@ export class WhatsappService {
 
   /** Envia un ARCHIVO (imagen/video/audio/documento) y lo guarda en el historial. */
   async sendFile(orderId: string, file: UploadedWaFile, auth: AuthContext): Promise<WaMessageDto> {
+    const { phone, provider } = await this.orderPhone(orderId);
+    return this.sendFileCore(phone, provider, file, auth);
+  }
+
+  /** Envia un ARCHIVO a un chat de la BANDEJA (por telefono). */
+  async sendFileToPhone(rawPhone: string, file: UploadedWaFile, auth: AuthContext): Promise<WaMessageDto> {
+    const phone = tenDigits(rawPhone);
+    if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
+    return this.sendFileCore(phone, 'external', file, auth);
+  }
+
+  private async sendFileCore(
+    phone: string,
+    provider: string,
+    file: UploadedWaFile,
+    auth: AuthContext,
+  ): Promise<WaMessageDto> {
     this.assertAdmin(auth);
     const { tenantId, prisma } = getTenantContext();
     if (!this.storage.isConfigured()) {
       throw new BadRequestException('El almacenamiento de archivos no esta configurado');
     }
     const d360 = await this.dialog360OrNull(tenantId, prisma);
-    const { phone, provider } = await this.orderPhone(orderId);
     this.requireD360(d360, provider);
 
     const name = file.originalname || 'archivo';
@@ -379,6 +422,86 @@ export class WhatsappService {
     return this.toDto(row);
   }
 
+  // === Bandeja de entrada (inbox estilo WhatsApp Web) ===
+
+  /** Todos los chats: ultimo mensaje, no leidos (por usuario) y etiquetas. */
+  async inbox(auth: AuthContext): Promise<WaInbox> {
+    this.assertAdmin(auth);
+    const { prisma } = getTenantContext();
+
+    const [last, unreadRows, contacts] = await Promise.all([
+      prisma.$queryRaw<
+        Array<{ phone: string; kind: string; body: string | null; direction: string; createdAt: Date }>
+      >`SELECT DISTINCT ON (phone) phone, kind, body, direction, "createdAt"
+        FROM "WaMessage" ORDER BY phone, "createdAt" DESC`,
+      prisma.$queryRaw<Array<{ phone: string; unread: bigint }>>`
+        SELECT m.phone, COUNT(*)::bigint AS unread
+        FROM "WaMessage" m
+        LEFT JOIN "WaChatRead" r ON r.phone = m.phone AND r."userId" = ${auth.userId}
+        WHERE m.direction = 'in' AND (r."lastReadAt" IS NULL OR m."createdAt" > r."lastReadAt")
+        GROUP BY m.phone`,
+      prisma.waContact.findMany({ select: { phone: true, name: true, labels: true } }),
+    ]);
+
+    const nameOf = new Map(contacts.map((c) => [c.phone, c.name] as const));
+    const labelsOf = new Map(
+      contacts.map(
+        (c) => [c.phone, Array.isArray(c.labels) ? (c.labels as unknown[]).map(String) : []] as const,
+      ),
+    );
+    const unread = new Map(unreadRows.map((r) => [r.phone, Number(r.unread)] as const));
+
+    const chats = last
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, 400)
+      .map((m) => ({
+        phone: m.phone,
+        name: nameOf.get(m.phone) ?? null,
+        labels: labelsOf.get(m.phone) ?? [],
+        lastAt: m.createdAt.toISOString(),
+        lastKind: waKindOf(m.kind),
+        lastBody: m.body,
+        lastDirection: m.direction === 'out' ? ('out' as const) : ('in' as const),
+        unread: unread.get(m.phone) ?? 0,
+      }));
+    const labels = [...new Set(chats.flatMap((c) => c.labels))].sort((a, b) => a.localeCompare(b));
+    return { chats, labels };
+  }
+
+  /** Marca un chat como LEIDO para este usuario (apaga el contador verde). */
+  async markChatRead(rawPhone: string, auth: AuthContext): Promise<{ ok: true }> {
+    this.assertAdmin(auth);
+    const { prisma } = getTenantContext();
+    const phone = tenDigits(rawPhone);
+    if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
+    await prisma.waChatRead.upsert({
+      where: { userId_phone: { userId: auth.userId, phone } },
+      create: { userId: auth.userId, phone, lastReadAt: new Date() },
+      update: { lastReadAt: new Date() },
+    });
+    return { ok: true };
+  }
+
+  /** Etiquetas del chat (globales, compartidas por todos los admins). */
+  async setChatLabels(
+    rawPhone: string,
+    input: SetWaLabelsInput,
+    auth: AuthContext,
+  ): Promise<{ ok: true }> {
+    this.assertAdmin(auth);
+    const { tenantId, prisma } = getTenantContext();
+    const phone = tenDigits(rawPhone);
+    if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
+    const labels = [...new Set(input.labels.map((l) => l.trim()).filter(Boolean))];
+    await prisma.waContact.upsert({
+      where: { phone },
+      create: { phone, contactId: '', labels: labels as unknown as Prisma.InputJsonValue },
+      update: { labels: labels as unknown as Prisma.InputJsonValue },
+    });
+    await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    return { ok: true };
+  }
+
   // === Plantillas de Meta (el picker de "/" en el chat) ===
 
   /**
@@ -411,15 +534,32 @@ export class WhatsappService {
         .join(', '),
     };
 
+    return { templates: await this.waTemplates(), suggestions };
+  }
+
+  /** Plantillas para un chat de la BANDEJA (sugerencia: solo el nombre). */
+  async listTemplatesForPhone(rawPhone: string, auth: AuthContext): Promise<WaTemplateList> {
+    this.assertAdmin(auth);
+    const { prisma } = getTenantContext();
+    const phone = tenDigits(rawPhone);
+    const contact = phone
+      ? await prisma.waContact.findUnique({ where: { phone }, select: { name: true } })
+      : null;
+    return {
+      templates: await this.waTemplates(),
+      suggestions: { nombre: contact?.name ?? '', productos: '', direccion: '' },
+    };
+  }
+
+  /** Plantillas de la WABA mapeadas (vacio si no hay conexion de produccion). */
+  private async waTemplates(): Promise<WaTemplateList['templates']> {
+    const { tenantId, prisma } = getTenantContext();
     const d360 = await this.dialog360OrNull(tenantId, prisma);
     // El sandbox no tiene WABA propia con plantillas: lista vacia (la UI lo dice).
-    if (!d360 || d360.mode !== 'production') return { templates: [], suggestions };
+    if (!d360 || d360.mode !== 'production') return [];
     try {
       const list = await this.dialog360.listTemplates(d360.http);
-      return {
-        templates: list.map((t) => ({ ...t, variables: templateVarCount(t.body) })),
-        suggestions,
-      };
+      return list.map((t) => ({ ...t, variables: templateVarCount(t.body) }));
     } catch (err) {
       throw this.translateError(err, 'No se pudieron cargar las plantillas de la WABA');
     }
@@ -431,6 +571,26 @@ export class WhatsappService {
     input: SendWaTemplateInput,
     auth: AuthContext,
   ): Promise<WaMessageDto> {
+    const { phone } = await this.orderPhone(orderId);
+    return this.sendTemplateCore(phone, input, auth);
+  }
+
+  /** Envia una plantilla a un chat de la BANDEJA (por telefono). */
+  async sendTemplateToPhone(
+    rawPhone: string,
+    input: SendWaTemplateInput,
+    auth: AuthContext,
+  ): Promise<WaMessageDto> {
+    const phone = tenDigits(rawPhone);
+    if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
+    return this.sendTemplateCore(phone, input, auth);
+  }
+
+  private async sendTemplateCore(
+    phone: string,
+    input: SendWaTemplateInput,
+    auth: AuthContext,
+  ): Promise<WaMessageDto> {
     this.assertAdmin(auth);
     const { tenantId, prisma } = getTenantContext();
     const d360 = await this.dialog360OrNull(tenantId, prisma);
@@ -439,7 +599,6 @@ export class WhatsappService {
         'Las plantillas requieren la conexión de 360dialog en producción',
       );
     }
-    const { phone } = await this.orderPhone(orderId);
 
     // Se relee de la WABA (no se confia en el cliente): cuerpo, estado y
     // numero de variables REALES de la plantilla.
@@ -1231,9 +1390,26 @@ export class WhatsappService {
     messageId: string,
     auth: AuthContext,
   ): Promise<{ buffer: Buffer; contentType: string }> {
+    const { phone } = await this.orderPhone(orderId);
+    return this.audioOf(phone, messageId, auth);
+  }
+
+  /** Audio de una nota de voz de un chat de la BANDEJA. */
+  async audioFileByPhone(
+    rawPhone: string,
+    messageId: string,
+    auth: AuthContext,
+  ): Promise<{ buffer: Buffer; contentType: string }> {
+    return this.audioOf(tenDigits(rawPhone), messageId, auth);
+  }
+
+  private async audioOf(
+    phone: string,
+    messageId: string,
+    auth: AuthContext,
+  ): Promise<{ buffer: Buffer; contentType: string }> {
     this.assertAdmin(auth);
     const { prisma } = getTenantContext();
-    const { phone } = await this.orderPhone(orderId);
     const msg = await prisma.waMessage.findUnique({
       where: { id: messageId },
       select: { phone: true, kind: true, attachmentKey: true },

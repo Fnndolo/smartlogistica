@@ -117,6 +117,35 @@ export const waTemplateListSchema = z.object({
 });
 export type WaTemplateList = z.infer<typeof waTemplateListSchema>;
 
+// === Bandeja de entrada (inbox estilo WhatsApp Web) ===
+
+/** Un chat de la bandeja: ultimo mensaje + no leidos + etiquetas. */
+export const waInboxItemSchema = z.object({
+  phone: z.string(),
+  /** Nombre del contacto (WhatsApp o agenda del celular) o null. */
+  name: z.string().nullable(),
+  labels: z.array(z.string()).default([]),
+  lastAt: z.string(),
+  lastKind: waMessageKindSchema,
+  lastBody: z.string().nullable(),
+  lastDirection: z.enum(['in', 'out']),
+  /** Mensajes entrantes sin leer POR ESTE usuario (contador verde). */
+  unread: z.number().int().min(0),
+});
+export type WaInboxItem = z.infer<typeof waInboxItemSchema>;
+
+export const waInboxSchema = z.object({
+  chats: z.array(waInboxItemSchema),
+  /** Todas las etiquetas existentes (para el filtro y el picker). */
+  labels: z.array(z.string()),
+});
+export type WaInbox = z.infer<typeof waInboxSchema>;
+
+export const setWaLabelsSchema = z.object({
+  labels: z.array(z.string().trim().min(1).max(30)).max(10),
+});
+export type SetWaLabelsInput = z.infer<typeof setWaLabelsSchema>;
+
 export const sendWaTemplateSchema = z.object({
   name: z.string().trim().min(1).max(120),
   language: z.string().trim().min(2).max(15),

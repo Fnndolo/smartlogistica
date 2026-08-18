@@ -222,11 +222,23 @@ model WaContact {
   phone        String   @id
   contactId    String
   name         String?
+  // Etiquetas del chat (bandeja): ["Cliente", "Garantia", ...] — globales.
+  labels       Json?
   // Estado del flujo de confirmacion NATIVO (Cloud API): esperando direccion,
   // confirmando el borrador, etc. draftAddress = la direccion que escribio.
   flowState    String?
   draftAddress String?
   updatedAt    DateTime @updatedAt
+}
+
+// Marcador de lectura de la BANDEJA de WhatsApp: por usuario y telefono.
+// unread = mensajes entrantes posteriores a lastReadAt (contador verde).
+model WaChatRead {
+  userId     String
+  phone      String
+  lastReadAt DateTime @default(now())
+
+  @@id([userId, phone])
 }
 
 model AiConnection {
