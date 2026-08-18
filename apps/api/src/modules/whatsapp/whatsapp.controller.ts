@@ -16,18 +16,31 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Request, Response } from 'express';
 import {
+  addWaStickerFavSchema,
   dialog360CredentialsSchema,
+  forwardWaMessageSchema,
+  sendWaContactSchema,
+  sendWaReactionSchema,
+  sendWaStickerSchema,
   sendWaTemplateSchema,
   sendWaTextSchema,
   setWaLabelsSchema,
+  starWaMessageSchema,
+  type AddWaStickerFavInput,
   type Dialog360ConnectionSummary,
   type Dialog360CredentialsInput,
   type Dialog360TestResult,
+  type ForwardWaMessageInput,
+  type SendWaContactInput,
+  type SendWaReactionInput,
+  type SendWaStickerInput,
   type SendWaTemplateInput,
   type SendWaTextInput,
   type SetWaLabelsInput,
+  type StarWaMessageInput,
   type WaInbox,
   type WaMessage,
+  type WaStickerFav,
   type WaTemplateList,
   type WaThread,
 } from '@smartlogistica/shared';
@@ -175,6 +188,108 @@ export class WhatsappInboxController {
     res.setHeader('Cache-Control', 'private, max-age=3600');
     res.send(buffer);
   }
+
+  // === Acciones sobre mensajes (menu contextual) ===
+
+  @Post('chats/:phone/reaction')
+  @HttpCode(200)
+  async reaction(
+    @Param('phone') phone: string,
+    @Body(new ZodValidationPipe(sendWaReactionSchema)) body: SendWaReactionInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ ok: true }> {
+    return this.whatsapp.react(phone, body, user);
+  }
+
+  @Post('chats/:phone/star')
+  @HttpCode(200)
+  async star(
+    @Param('phone') phone: string,
+    @Body(new ZodValidationPipe(starWaMessageSchema)) body: StarWaMessageInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ ok: true }> {
+    return this.whatsapp.star(phone, body, user);
+  }
+
+  @Delete('chats/:phone/messages/:messageId')
+  @HttpCode(200)
+  async deleteMessage(
+    @Param('phone') phone: string,
+    @Param('messageId') messageId: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ ok: true }> {
+    return this.whatsapp.deleteMessage(phone, messageId, user);
+  }
+
+  /** Reenviar un mensaje existente A este chat. */
+  @Post('chats/:phone/forward')
+  @HttpCode(201)
+  async forward(
+    @Param('phone') phone: string,
+    @Body(new ZodValidationPipe(forwardWaMessageSchema)) body: ForwardWaMessageInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<WaMessage> {
+    return this.whatsapp.forward(phone, body, user);
+  }
+
+  @Post('chats/:phone/contact')
+  @HttpCode(201)
+  async contact(
+    @Param('phone') phone: string,
+    @Body(new ZodValidationPipe(sendWaContactSchema)) body: SendWaContactInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<WaMessage> {
+    return this.whatsapp.sendContact(phone, body, user);
+  }
+
+  // === Stickers ===
+
+  /** Enviar sticker favorito (stickerId) o el de un mensaje (messageId). */
+  @Post('chats/:phone/sticker')
+  @HttpCode(201)
+  async sticker(
+    @Param('phone') phone: string,
+    @Body(new ZodValidationPipe(sendWaStickerSchema)) body: SendWaStickerInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<WaMessage> {
+    return this.whatsapp.sendSticker(phone, body, user);
+  }
+
+  /** "Nuevo sticker": webp convertido por el navegador; se envia y queda en favoritos. */
+  @Post('chats/:phone/sticker-upload')
+  @HttpCode(201)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 2 * 1024 * 1024 } }))
+  async stickerUpload(
+    @Param('phone') phone: string,
+    @UploadedFile() file: UploadedWaFile | undefined,
+    @CurrentUser() user: AuthContext,
+  ): Promise<WaMessage> {
+    if (!file) throw new BadRequestException('No se recibio el sticker');
+    return this.whatsapp.sendStickerUpload(phone, file, user);
+  }
+
+  @Get('stickers')
+  async stickers(@CurrentUser() user: AuthContext): Promise<WaStickerFav[]> {
+    return this.whatsapp.listStickerFavs(user);
+  }
+
+  @Post('stickers')
+  @HttpCode(200)
+  async addSticker(
+    @Body(new ZodValidationPipe(addWaStickerFavSchema)) body: AddWaStickerFavInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ ok: true }> {
+    return this.whatsapp.addStickerFav(body, user);
+  }
+
+  @Delete('stickers/:id')
+  @HttpCode(200)
+  async removeSticker(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ ok: true }> {
+    return this.whatsapp.removeStickerFav(id, user);
+  }
 }
 
 /** WhatsApp del PEDIDO (pestaña del drawer). Solo administradores. */
@@ -199,6 +314,13 @@ export class OrderWhatsappController {
     @CurrentUser() user: AuthContext,
   ): Promise<{ ok: true }> {
     return this.whatsapp.sendConfirmationManual(id, user);
+  }
+
+  /** Lectura SINCRONIZADA: abrir la pestaña WhatsApp del pedido marca leido el chat. */
+  @Post(':id/whatsapp/read')
+  @HttpCode(200)
+  async read(@Param('id') id: string, @CurrentUser() user: AuthContext): Promise<{ ok: true }> {
+    return this.whatsapp.markChatReadByOrder(id, user);
   }
 
   /** Audio de una nota de voz del hilo, servido same-origin (onda real sin CORS). */

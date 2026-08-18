@@ -65,6 +65,8 @@ export const waMessageSchema = z.object({
   reactions: z.array(z.object({ emoji: z.string(), mine: z.boolean() })).default([]),
   /** Chulitos de salientes: sent | delivered | read | failed (null = sin dato). */
   status: z.enum(['sent', 'delivered', 'read', 'failed']).nullable().default(null),
+  /** Destacado (estrella), como en WhatsApp. */
+  starred: z.boolean().default(false),
   createdAt: z.string(),
 });
 export type WaMessage = z.infer<typeof waMessageSchema>;
@@ -83,8 +85,47 @@ export type WaThread = z.infer<typeof waThreadSchema>;
 
 export const sendWaTextSchema = z.object({
   text: z.string().trim().min(1, 'Escribe el mensaje').max(4000),
+  /** Responder citando: id del WaMessage citado. */
+  replyToId: z.string().optional(),
 });
 export type SendWaTextInput = z.infer<typeof sendWaTextSchema>;
+
+/** Reaccion a un mensaje (emoji vacio = quitar la reaccion). */
+export const sendWaReactionSchema = z.object({
+  messageId: z.string(),
+  emoji: z.string().max(16),
+});
+export type SendWaReactionInput = z.infer<typeof sendWaReactionSchema>;
+
+/** Reenviar un mensaje existente a OTRO chat (por telefono destino). */
+export const forwardWaMessageSchema = z.object({ messageId: z.string() });
+export type ForwardWaMessageInput = z.infer<typeof forwardWaMessageSchema>;
+
+/** Destacar / quitar destacado. */
+export const starWaMessageSchema = z.object({ messageId: z.string(), starred: z.boolean() });
+export type StarWaMessageInput = z.infer<typeof starWaMessageSchema>;
+
+/** Enviar un CONTACTO (tarjeta de contacto de WhatsApp). */
+export const sendWaContactSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  phone: z.string().trim().min(7).max(20),
+});
+export type SendWaContactInput = z.infer<typeof sendWaContactSchema>;
+
+/** Sticker favorito del negocio (compartido entre admins). */
+export const waStickerFavSchema = z.object({ id: z.string(), url: z.string() });
+export type WaStickerFav = z.infer<typeof waStickerFavSchema>;
+
+/** Enviar sticker: uno FAVORITO (stickerId) o el de un mensaje existente (messageId). */
+export const sendWaStickerSchema = z.object({
+  stickerId: z.string().optional(),
+  messageId: z.string().optional(),
+});
+export type SendWaStickerInput = z.infer<typeof sendWaStickerSchema>;
+
+/** Agregar sticker a favoritos desde un mensaje del hilo. */
+export const addWaStickerFavSchema = z.object({ messageId: z.string() });
+export type AddWaStickerFavInput = z.infer<typeof addWaStickerFavSchema>;
 
 // === Plantillas de Meta (WABA via 360dialog) ===
 // El picker de "/" en el chat: lista las plantillas REALES de la WABA y las

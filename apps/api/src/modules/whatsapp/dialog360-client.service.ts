@@ -51,24 +51,75 @@ export class Dialog360Client {
     return { url: res.data?.url ?? null };
   }
 
-  /** Envia TEXTO (Cloud API). `to` = numero con indicativo, ej. 573001234567. */
-  async sendText(http: AxiosInstance, mode: Dialog360Mode, to: string, body: string): Promise<string | null> {
+  /**
+   * Envia TEXTO (Cloud API). `to` = numero con indicativo, ej. 573001234567.
+   * `contextWamid` = responder CITANDO ese mensaje (context.message_id).
+   */
+  async sendText(
+    http: AxiosInstance,
+    mode: Dialog360Mode,
+    to: string,
+    body: string,
+    contextWamid?: string | null,
+  ): Promise<string | null> {
     const res = await http.post(this.messagesPath(mode), {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
       to,
       type: 'text',
       text: { body },
+      ...(contextWamid ? { context: { message_id: contextWamid } } : {}),
     });
     return res.data?.messages?.[0]?.id ?? null;
   }
 
-  /** Envia un MEDIO por URL (imagen/video/audio/documento). */
+  /** REACCION a un mensaje (emoji vacio = quitarla). */
+  async sendReaction(
+    http: AxiosInstance,
+    mode: Dialog360Mode,
+    to: string,
+    targetWamid: string,
+    emoji: string,
+  ): Promise<string | null> {
+    const res = await http.post(this.messagesPath(mode), {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type: 'reaction',
+      reaction: { message_id: targetWamid, emoji },
+    });
+    return res.data?.messages?.[0]?.id ?? null;
+  }
+
+  /** Tarjeta de CONTACTO. */
+  async sendContact(
+    http: AxiosInstance,
+    mode: Dialog360Mode,
+    to: string,
+    name: string,
+    phone: string,
+  ): Promise<string | null> {
+    const res = await http.post(this.messagesPath(mode), {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to,
+      type: 'contacts',
+      contacts: [
+        {
+          name: { formatted_name: name, first_name: name },
+          phones: [{ phone, type: 'CELL', wa_id: phone.replace(/\D/g, '') }],
+        },
+      ],
+    });
+    return res.data?.messages?.[0]?.id ?? null;
+  }
+
+  /** Envia un MEDIO por URL (imagen/video/audio/documento/sticker). */
   async sendMediaLink(
     http: AxiosInstance,
     mode: Dialog360Mode,
     to: string,
-    kind: 'image' | 'video' | 'audio' | 'document',
+    kind: 'image' | 'video' | 'audio' | 'document' | 'sticker',
     link: string,
     filename?: string,
   ): Promise<string | null> {

@@ -8,13 +8,19 @@ import {
 import { randomUUID } from 'node:crypto';
 import { isAxiosError, type AxiosInstance } from 'axios';
 import type {
+  AddWaStickerFavInput,
   Dialog360ConnectionSummary,
   Dialog360CredentialsInput,
   Dialog360Mode,
   Dialog360TestResult,
+  ForwardWaMessageInput,
+  SendWaContactInput,
+  SendWaReactionInput,
+  SendWaStickerInput,
   SendWaTemplateInput,
   SendWaTextInput,
   SetWaLabelsInput,
+  StarWaMessageInput,
   WaInbox,
   WaMessage as WaMessageDto,
   WaTemplateList,
@@ -141,6 +147,7 @@ interface WaMessageRow {
   replyToId?: string | null;
   reactions?: unknown;
   status?: string | null;
+  starred?: boolean;
   createdAt: Date;
 }
 
@@ -334,9 +341,23 @@ export class WhatsappService {
 
     const d360 = await this.dialog360OrNull(tenantId, prisma);
     this.requireD360(d360, provider);
+    // Responder CITANDO: el mensaje citado debe ser de este mismo hilo.
+    let quoted: { id: string; externalId: string | null } | null = null;
+    if (input.replyToId) {
+      quoted = await prisma.waMessage.findFirst({
+        where: { id: input.replyToId, phone },
+        select: { id: true, externalId: true },
+      });
+    }
     let wamid: string | null = null;
     try {
-      wamid = await this.dialog360.sendText(d360!.http, d360!.mode, `57${phone}`, input.text);
+      wamid = await this.dialog360.sendText(
+        d360!.http,
+        d360!.mode,
+        `57${phone}`,
+        input.text,
+        quoted?.externalId ?? null,
+      );
     } catch (err) {
       throw this.translateError(err, 'No se pudo enviar el mensaje');
     }
@@ -346,6 +367,7 @@ export class WhatsappService {
         direction: 'out',
         kind: 'text',
         body: input.text,
+        replyToId: quoted?.id ?? null,
         authorId: auth.userId,
         authorName: auth.name?.trim() || auth.email,
         externalId: wamid,
@@ -511,6 +533,251 @@ export class WhatsappService {
     });
     await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
     return { ok: true };
+  }
+
+  // === Acciones sobre mensajes (menu contextual, como WhatsApp) ===
+
+  /** REACCIONA a un mensaje del hilo (emoji vacio = quitar la reaccion). */
+  async react(rawPhone: string, input: SendWaReactionInput, auth: AuthContext): Promise<{ ok: true }> {
+    this.assertAdmin(auth);
+    const { tenantId, prisma } = getTenantContext();
+    const phone = tenDigits(rawPhone);
+    const d360 = await this.dialog360OrNull(tenantId, prisma);
+    this.requireD360(d360, 'external');
+    const msg = await prisma.waMessage.findFirst({
+      where: { id: input.messageId, phone },
+      select: { id: true, externalId: true, reactions: true },
+    });
+    if (!msg?.externalId) throw new NotFoundException('Mensaje no encontrado (o sin id de WhatsApp)');
+    try {
+      await this.dialog360.sendReaction(d360!.http, d360!.mode, `57${phone}`, msg.externalId, input.emoji);
+    } catch (err) {
+      throw this.translateError(err, 'No se pudo enviar la reacción');
+    }
+    // Reflejo local: UNA reaccion del negocio por mensaje (se reemplaza/quita).
+    const prev = (Array.isArray(msg.reactions) ? msg.reactions : []) as Array<{ emoji: string; mine: boolean }>;
+    const rest = prev.filter((r) => !r.mine);
+    const next = input.emoji ? [...rest, { emoji: input.emoji, mine: true }] : rest;
+    await prisma.waMessage.update({
+      where: { id: msg.id },
+      data: { reactions: next as unknown as Prisma.InputJsonValue },
+    });
+    await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    return { ok: true };
+  }
+
+  /** DESTACAR / quitar destacado. */
+  async star(rawPhone: string, input: StarWaMessageInput, auth: AuthContext): Promise<{ ok: true }> {
+    this.assertAdmin(auth);
+    const { tenantId, prisma } = getTenantContext();
+    const phone = tenDigits(rawPhone);
+    const res = await prisma.waMessage.updateMany({
+      where: { id: input.messageId, phone },
+      data: { starred: input.starred },
+    });
+    if (res.count === 0) throw new NotFoundException('Mensaje no encontrado');
+    await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    return { ok: true };
+  }
+
+  /** ELIMINA un mensaje DE LA PLATAFORMA (WhatsApp no permite borrarlo alla). */
+  async deleteMessage(rawPhone: string, messageId: string, auth: AuthContext): Promise<{ ok: true }> {
+    this.assertAdmin(auth);
+    const { tenantId, prisma } = getTenantContext();
+    const phone = tenDigits(rawPhone);
+    const res = await prisma.waMessage.deleteMany({ where: { id: messageId, phone } });
+    if (res.count === 0) throw new NotFoundException('Mensaje no encontrado');
+    await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    return { ok: true };
+  }
+
+  /** REENVIA un mensaje existente a OTRO chat (texto o medio). */
+  async forward(rawPhone: string, input: ForwardWaMessageInput, auth: AuthContext): Promise<WaMessageDto> {
+    this.assertAdmin(auth);
+    const { tenantId, prisma } = getTenantContext();
+    const to = tenDigits(rawPhone);
+    if (to.length < 7) throw new BadRequestException('Teléfono inválido');
+    const d360 = await this.dialog360OrNull(tenantId, prisma);
+    this.requireD360(d360, 'external');
+    const src = await prisma.waMessage.findUnique({ where: { id: input.messageId } });
+    if (!src) throw new NotFoundException('Mensaje no encontrado');
+
+    let wamid: string | null = null;
+    try {
+      if (src.kind === 'text' || (!src.attachmentKey && !src.mediaUrl)) {
+        wamid = await this.dialog360.sendText(d360!.http, d360!.mode, `57${to}`, src.body ?? '');
+      } else {
+        const url = src.attachmentKey
+          ? await this.storage.getSignedUrl(src.attachmentKey)
+          : src.mediaUrl!;
+        const kind =
+          src.kind === 'file'
+            ? ('document' as const)
+            : (src.kind as 'image' | 'video' | 'audio' | 'sticker');
+        wamid = await this.dialog360.sendMediaLink(
+          d360!.http,
+          d360!.mode,
+          `57${to}`,
+          kind,
+          url,
+          kind === 'document' ? (src.body ?? undefined) : undefined,
+        );
+      }
+    } catch (err) {
+      throw this.translateError(err, 'No se pudo reenviar el mensaje');
+    }
+
+    const row = await prisma.waMessage.create({
+      data: {
+        phone: to,
+        direction: 'out',
+        kind: src.kind,
+        body: src.body,
+        attachmentKey: src.attachmentKey,
+        mediaUrl: src.mediaUrl,
+        authorId: auth.userId,
+        authorName: auth.name?.trim() || auth.email,
+        externalId: wamid,
+        status: wamid ? 'sent' : null,
+      },
+    });
+    await this.publishWaMessage(tenantId, prisma, row);
+    return this.toDto(row);
+  }
+
+  /** Envia una TARJETA DE CONTACTO. */
+  async sendContact(rawPhone: string, input: SendWaContactInput, auth: AuthContext): Promise<WaMessageDto> {
+    this.assertAdmin(auth);
+    const { tenantId, prisma } = getTenantContext();
+    const phone = tenDigits(rawPhone);
+    if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
+    const d360 = await this.dialog360OrNull(tenantId, prisma);
+    this.requireD360(d360, 'external');
+    let wamid: string | null = null;
+    try {
+      wamid = await this.dialog360.sendContact(d360!.http, d360!.mode, `57${phone}`, input.name, input.phone);
+    } catch (err) {
+      throw this.translateError(err, 'No se pudo enviar el contacto');
+    }
+    const row = await prisma.waMessage.create({
+      data: {
+        phone,
+        direction: 'out',
+        kind: 'text',
+        body: `👤 ${input.name}\n${input.phone}`,
+        authorId: auth.userId,
+        authorName: auth.name?.trim() || auth.email,
+        externalId: wamid,
+        status: wamid ? 'sent' : null,
+      },
+    });
+    await this.publishWaMessage(tenantId, prisma, row);
+    return this.toDto(row);
+  }
+
+  // === Stickers: enviar + FAVORITOS del negocio ===
+
+  /** Envia un sticker: favorito (stickerId) o el de un mensaje del historial. */
+  async sendSticker(rawPhone: string, input: SendWaStickerInput, auth: AuthContext): Promise<WaMessageDto> {
+    this.assertAdmin(auth);
+    const { prisma } = getTenantContext();
+    let key: string | null = null;
+    if (input.stickerId) {
+      key = (await prisma.waStickerFav.findUnique({ where: { id: input.stickerId } }))?.attachmentKey ?? null;
+    } else if (input.messageId) {
+      const msg = await prisma.waMessage.findUnique({
+        where: { id: input.messageId },
+        select: { kind: true, attachmentKey: true },
+      });
+      if (msg?.kind === 'sticker') key = msg.attachmentKey;
+    }
+    if (!key) throw new NotFoundException('Sticker no encontrado');
+    return this.sendStickerByKey(rawPhone, key, auth);
+  }
+
+  /** "Nuevo sticker": sube el webp (el navegador lo convierte), lo envia y lo guarda en favoritos. */
+  async sendStickerUpload(rawPhone: string, file: UploadedWaFile, auth: AuthContext): Promise<WaMessageDto> {
+    this.assertAdmin(auth);
+    const { tenantId, prisma } = getTenantContext();
+    if (!this.storage.isConfigured()) {
+      throw new BadRequestException('El almacenamiento de archivos no esta configurado');
+    }
+    const key = `tenants/${tenantId}/whatsapp/stickers/${randomUUID()}.webp`;
+    await this.storage.put(key, file.buffer, 'image/webp');
+    await prisma.waStickerFav.create({ data: { attachmentKey: key } }).catch(() => null);
+    return this.sendStickerByKey(rawPhone, key, auth);
+  }
+
+  private async sendStickerByKey(rawPhone: string, key: string, auth: AuthContext): Promise<WaMessageDto> {
+    const { tenantId, prisma } = getTenantContext();
+    const phone = tenDigits(rawPhone);
+    if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
+    const d360 = await this.dialog360OrNull(tenantId, prisma);
+    this.requireD360(d360, 'external');
+    const url = await this.storage.getSignedUrl(key);
+    let wamid: string | null = null;
+    try {
+      wamid = await this.dialog360.sendMediaLink(d360!.http, d360!.mode, `57${phone}`, 'sticker', url);
+    } catch (err) {
+      throw this.translateError(err, 'No se pudo enviar el sticker');
+    }
+    const row = await prisma.waMessage.create({
+      data: {
+        phone,
+        direction: 'out',
+        kind: 'sticker',
+        attachmentKey: key,
+        authorId: auth.userId,
+        authorName: auth.name?.trim() || auth.email,
+        externalId: wamid,
+        status: wamid ? 'sent' : null,
+      },
+    });
+    await this.publishWaMessage(tenantId, prisma, row);
+    return this.toDto(row);
+  }
+
+  /** Favoritos del negocio (compartidos), con URL firmada lista para pintar. */
+  async listStickerFavs(auth: AuthContext): Promise<Array<{ id: string; url: string }>> {
+    this.assertAdmin(auth);
+    const { prisma } = getTenantContext();
+    const rows = await prisma.waStickerFav.findMany({ orderBy: { createdAt: 'desc' }, take: 100 });
+    const out: Array<{ id: string; url: string }> = [];
+    for (const r of rows) {
+      const url = await this.storage.getSignedUrl(r.attachmentKey).catch(() => null);
+      if (url) out.push({ id: r.id, url });
+    }
+    return out;
+  }
+
+  /** Agrega a favoritos el sticker de un mensaje del hilo. */
+  async addStickerFav(input: AddWaStickerFavInput, auth: AuthContext): Promise<{ ok: true }> {
+    this.assertAdmin(auth);
+    const { prisma } = getTenantContext();
+    const msg = await prisma.waMessage.findUnique({
+      where: { id: input.messageId },
+      select: { kind: true, attachmentKey: true },
+    });
+    if (msg?.kind !== 'sticker' || !msg.attachmentKey) {
+      throw new BadRequestException('Ese mensaje no es un sticker descargado');
+    }
+    await prisma.waStickerFav
+      .create({ data: { attachmentKey: msg.attachmentKey } })
+      .catch(() => null); // ya era favorito
+    return { ok: true };
+  }
+
+  async removeStickerFav(id: string, auth: AuthContext): Promise<{ ok: true }> {
+    this.assertAdmin(auth);
+    const { prisma } = getTenantContext();
+    await prisma.waStickerFav.deleteMany({ where: { id } });
+    return { ok: true };
+  }
+
+  /** Lectura sincronizada: abrir la pestaña WhatsApp del PEDIDO tambien marca leido. */
+  async markChatReadByOrder(orderId: string, auth: AuthContext): Promise<{ ok: true }> {
+    const { phone } = await this.orderPhone(orderId);
+    return this.markChatRead(phone, auth);
   }
 
   // === Plantillas de Meta (el picker de "/" en el chat) ===
@@ -1499,6 +1766,7 @@ export class WhatsappService {
         : null,
       reactions,
       status,
+      starred: Boolean(r.starred),
       createdAt: r.createdAt.toISOString(),
     };
   }

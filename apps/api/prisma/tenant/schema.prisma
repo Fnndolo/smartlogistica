@@ -196,6 +196,8 @@ model WaMessage {
   reactions     Json?
   // Chulitos de salientes: sent | delivered | read | failed.
   status        String?
+  // Destacado (estrella), como en WhatsApp.
+  starred       Boolean  @default(false)
   // Id del mensaje en WhatsApp (wamid de la Cloud API): dedup de reentregas.
   externalId    String?  @unique
   createdAt     DateTime @default(now())
@@ -229,6 +231,13 @@ model WaContact {
   flowState    String?
   draftAddress String?
   updatedAt    DateTime @updatedAt
+}
+
+// Stickers FAVORITOS del negocio (compartidos): apuntan a nuestro storage.
+model WaStickerFav {
+  id            String   @id @default(cuid())
+  attachmentKey String   @unique
+  createdAt     DateTime @default(now())
 }
 
 // Marcador de lectura de la BANDEJA de WhatsApp: por usuario y telefono.
