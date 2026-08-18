@@ -179,20 +179,39 @@ export const waInboxItemSchema = z.object({
   lastStatus: z.enum(['sent', 'delivered', 'read', 'failed']).nullable().default(null),
   /** Mensajes entrantes sin leer POR ESTE usuario (contador verde). */
   unread: z.number().int().min(0),
+  /** Operaciones de bandeja (menu contextual), globales del negocio. */
+  archived: z.boolean().default(false),
+  muted: z.boolean().default(false),
+  pinned: z.boolean().default(false),
 });
 export type WaInboxItem = z.infer<typeof waInboxItemSchema>;
 
+/** Etiqueta registrada con su color. */
+export const waLabelSchema = z.object({ name: z.string(), color: z.string() });
+export type WaLabel = z.infer<typeof waLabelSchema>;
+
 export const waInboxSchema = z.object({
   chats: z.array(waInboxItemSchema),
-  /** Todas las etiquetas existentes (para el filtro y el picker). */
-  labels: z.array(z.string()),
+  /** Todas las etiquetas existentes (con color) para filtro y picker. */
+  labels: z.array(waLabelSchema),
 });
 export type WaInbox = z.infer<typeof waInboxSchema>;
 
 export const setWaLabelsSchema = z.object({
-  labels: z.array(z.string().trim().min(1).max(30)).max(10),
+  /** Etiquetas del chat, cada una con su color (se registra/actualiza). */
+  labels: z
+    .array(z.object({ name: z.string().trim().min(1).max(30), color: z.string().max(20) }))
+    .max(10),
 });
 export type SetWaLabelsInput = z.infer<typeof setWaLabelsSchema>;
+
+/** Operaciones del menu contextual del chat. */
+export const waChatOpSchema = z.object({
+  archived: z.boolean().optional(),
+  muted: z.boolean().optional(),
+  pinned: z.boolean().optional(),
+});
+export type WaChatOpInput = z.infer<typeof waChatOpSchema>;
 
 export const sendWaTemplateSchema = z.object({
   name: z.string().trim().min(1).max(120),

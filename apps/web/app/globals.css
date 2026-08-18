@@ -145,6 +145,18 @@
       transform: scale(1);
     }
   }
+  /* Doble clic para responder: destello VERDE de medio segundo (WhatsApp). */
+  .wa-reply-flash {
+    animation: wa-reply-flash 0.5s ease-out;
+  }
+  @keyframes wa-reply-flash {
+    from {
+      background-color: rgba(0, 168, 132, 0.28);
+    }
+    to {
+      background-color: transparent;
+    }
+  }
   /* Badge de no leidos: aro azul clarito que se desvanece y vuelve (mockup). */
   .animate-unread {
     animation: unread-breathe 3s ease-in-out infinite;

@@ -4,7 +4,25 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { format, isToday, isYesterday } from 'date-fns';
 import { es } from 'date-fns/locale/es';
-import { ArrowLeft, Loader2, MessageCircle, Plus, Search, Tag, X } from 'lucide-react';
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowLeft,
+  Bell,
+  BellOff,
+  ChevronDown,
+  Eraser,
+  Loader2,
+  Mail,
+  MessageCircle,
+  Pin,
+  PinOff,
+  Plus,
+  Search,
+  Tag,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import type { WaInbox, WaInboxItem, WaMessage, WaThread } from '@smartlogistica/shared';
 
@@ -16,13 +34,12 @@ import { Ticks, WhatsappPanel } from '../orders/whatsapp-panel';
 import { useOrdersStream } from '../orders/use-orders-stream';
 
 /* =====================================================================
- * BANDEJA de WhatsApp (estilo WhatsApp Web): lista de chats a la izquierda
- * (avatar generado, ultimo mensaje, hora y contador VERDES cuando hay no
- * leidos) + el chat calcado a la derecha. Ordenada en vivo por ultimo
- * mensaje; filtros Todos / No leidos / etiquetas; etiquetado por chat.
+ * BANDEJA de WhatsApp (estilo WhatsApp Web): lista de chats con avatar
+ * generado, no leidos VERDES, fijados/silenciados/archivados, etiquetas con
+ * COLOR, menu contextual (click derecho EN EL PUNTO o flechita al hover) y
+ * el chat calcado al lado.
  * ===================================================================== */
 
-/** Colores para el avatar generado (par degradado estable por telefono). */
 const AVATAR_HUES = [
   ['#00a884', '#02735c'],
   ['#53bdeb', '#2d7fb8'],
@@ -33,6 +50,8 @@ const AVATAR_HUES = [
   ['#02a698', '#016158'],
   ['#7d8fe8', '#4a5cc4'],
 ] as const;
+
+const LABEL_COLORS = ['#00a884', '#53bdeb', '#e17bb5', '#ffbc38', '#a791f5', '#fa6533', '#7d8fe8', '#8696a0'];
 
 function avatarColors(seed: string): readonly [string, string] {
   let h = 0;
@@ -98,12 +117,22 @@ function preview(item: WaInboxItem): string {
 const displayName = (c: { name: string | null; phone: string }): string =>
   c.name?.trim() ? titleCaseName(c.name) : `+57 ${c.phone}`;
 
+/** Ancla del menu contextual de chat (en el PUNTO del click / la flechita). */
+interface ChatMenuAnchor {
+  phone: string;
+  x: number;
+  y: number;
+  up: boolean;
+}
+
 export function WhatsappInbox() {
   const me = useCurrentUser();
   const qc = useQueryClient();
   const [selected, setSelected] = useState<string | null>(null);
   const [q, setQ] = useState('');
-  const [filter, setFilter] = useState<'all' | 'unread' | string>('all');
+  const [filter, setFilter] = useState<'all' | 'unread' | 'archived' | string>('all');
+  const [menu, setMenu] = useState<ChatMenuAnchor | null>(null);
+  const [labelFor, setLabelFor] = useState<string | null>(null);
   const selectedRef = useRef<string | null>(null);
   selectedRef.current = selected;
 
@@ -133,8 +162,7 @@ export function WhatsappInbox() {
     [qc],
   );
 
-  // PRE-CARGA de hilos (cero pantalla de carga al abrir): los primeros de la
-  // lista apenas llega la bandeja + el que este bajo el mouse.
+  // PRE-CARGA de hilos (cero pantalla de carga al abrir).
   const prefetchedRef = useRef(new Set<string>());
   const prefetchThread = useCallback(
     (phone: string) => {
@@ -168,9 +196,7 @@ export function WhatsappInbox() {
     return () => window.removeEventListener('keydown', onKey);
   }, [selected]);
 
-  // Tiempo real: el evento trae el MENSAJE -> actualizar la lista al instante
-  // (subir el chat, vista previa, contador). Si el chat esta ABIERTO, se marca
-  // leido de una. Sin mensaje (reacciones/estados/etiquetas) -> refetch.
+  // Tiempo real: el evento trae el MENSAJE -> lista al instante.
   useOrdersStream(
     useCallback(
       (event) => {
@@ -195,12 +221,15 @@ export function WhatsappInbox() {
             lastBody: msg.body,
             lastDirection: msg.direction,
             lastStatus: msg.direction === 'out' ? msg.status : null,
-            // Regla: si el ultimo mensaje es NUESTRO (bot/admin), el chat quedo
-            // respondido -> 0. Entrante con el chat cerrado -> suma.
+            // Regla: ultimo mensaje NUESTRO -> respondido -> 0.
             unread: msg.direction === 'out' ? 0 : isOpen ? 0 : (existing?.unread ?? 0) + 1,
+            archived: existing?.archived ?? false,
+            muted: existing?.muted ?? false,
+            pinned: existing?.pinned ?? false,
           };
           const rest = old.chats.filter((c) => c.phone !== phone);
-          return { ...old, chats: [updated, ...rest] };
+          const next = [updated, ...rest].sort((a, b) => Number(b.pinned) - Number(a.pinned));
+          return { ...old, chats: next };
         });
         if (isOpen && msg.direction === 'in') markRead.mutate(phone);
         if (!existingName(qc, phone)) void qc.invalidateQueries({ queryKey: ['wa-inbox'] });
@@ -210,15 +239,80 @@ export function WhatsappInbox() {
     ),
   );
 
+  // ===== Operaciones del menu contextual =====
+  const patchChat = useCallback(
+    (phone: string, patch: Partial<WaInboxItem>) => {
+      qc.setQueryData<WaInbox>(['wa-inbox'], (old) =>
+        old
+          ? {
+              ...old,
+              chats: old.chats
+                .map((c) => (c.phone === phone ? { ...c, ...patch } : c))
+                .sort((a, b) => Number(b.pinned) - Number(a.pinned)),
+            }
+          : old,
+      );
+    },
+    [qc],
+  );
+  const chatOp = useMutation({
+    mutationFn: (vars: { phone: string; patch: { archived?: boolean; muted?: boolean; pinned?: boolean } }) =>
+      api.post<{ ok: true }>(`/v1/whatsapp/chats/${vars.phone}/op`, vars.patch),
+    onMutate: (vars) => patchChat(vars.phone, vars.patch),
+    onError: (err) => {
+      void qc.invalidateQueries({ queryKey: ['wa-inbox'] });
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo aplicar el cambio');
+    },
+  });
+  const markUnread = useMutation({
+    mutationFn: (phone: string) => api.post<{ ok: true }>(`/v1/whatsapp/chats/${phone}/unread`, {}),
+    onMutate: (phone) => patchChat(phone, { unread: 1 }),
+    onError: (err) => {
+      void qc.invalidateQueries({ queryKey: ['wa-inbox'] });
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo marcar como no leído');
+    },
+  });
+  const clearChat = useMutation({
+    mutationFn: (phone: string) => api.delete<{ ok: true }>(`/v1/whatsapp/chats/${phone}/messages`),
+    onSuccess: (_r, phone) => {
+      void qc.invalidateQueries({ queryKey: ['wa-inbox'] });
+      void qc.invalidateQueries({ queryKey: ['wa-thread', `/v1/whatsapp/chats/${phone}`] });
+      toast.success('Chat vaciado');
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo vaciar'),
+  });
+  const deleteChat = useMutation({
+    mutationFn: (phone: string) => api.delete<{ ok: true }>(`/v1/whatsapp/chats/${phone}`),
+    onSuccess: (_r, phone) => {
+      if (selectedRef.current === phone) setSelected(null);
+      void qc.invalidateQueries({ queryKey: ['wa-inbox'] });
+      toast.success('Chat eliminado');
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo eliminar'),
+  });
+
+  const openMenuAt = (phone: string, x: number, y: number) => {
+    const MENU_H = 330;
+    const below = window.innerHeight - y;
+    setMenu({ phone, x, y, up: below < MENU_H && y > below });
+  };
+
   const chats = inbox?.chats ?? [];
   const labels = inbox?.labels ?? [];
-  // CHATS con no leidos (no mensajes) — el numerito del chip, como WhatsApp.
-  const unreadChats = chats.filter((c) => c.unread > 0).length;
+  const labelColor = useMemo(() => new Map(labels.map((l) => [l.name, l.color] as const)), [labels]);
+  // CHATS con no leidos (sin silenciados ni archivados) — el numerito del chip.
+  const unreadChats = chats.filter((c) => c.unread > 0 && !c.muted && !c.archived).length;
+
   const query = q.trim().toLowerCase();
   const digits = query.replace(/\D/g, '');
   const filtered = chats.filter((c) => {
-    if (filter === 'unread' && c.unread === 0) return false;
-    if (filter !== 'all' && filter !== 'unread' && !c.labels.includes(filter)) return false;
+    if (filter === 'archived') {
+      if (!c.archived) return false;
+    } else {
+      if (c.archived) return false;
+      if (filter === 'unread' && c.unread === 0) return false;
+      if (filter !== 'all' && filter !== 'unread' && !c.labels.includes(filter)) return false;
+    }
     if (!query) return true;
     return (
       (c.name ?? '').toLowerCase().includes(query) ||
@@ -228,6 +322,7 @@ export function WhatsappInbox() {
   });
 
   const selectedChat = chats.find((c) => c.phone === selected) ?? null;
+  const menuChat = menu ? (chats.find((c) => c.phone === menu.phone) ?? null) : null;
 
   if (!isAdminUser) {
     return (
@@ -239,7 +334,7 @@ export function WhatsappInbox() {
 
   return (
     // Tarjeta a ALTURA COMPLETA de la vista (la pagina no scrollea: scrollean
-    // la lista y el chat). El calc descuenta paddings del layout y barras del cel.
+    // la lista y el chat).
     <div className="shadow-card flex h-[calc(100dvh-176px)] min-h-[420px] overflow-hidden rounded-xl border border-border bg-card md:h-[calc(100vh-64px)]">
       {/* ===== Lista de chats ===== */}
       <div
@@ -251,7 +346,6 @@ export function WhatsappInbox() {
         <div className="px-4 pb-2 pt-4">
           <h1 className="text-[19px] font-bold text-[#111b21] dark:text-[#e9edef]">Chats</h1>
         </div>
-        {/* Buscador */}
         <div className="px-3 pb-2">
           <div className="flex h-9 items-center gap-2 rounded-lg bg-[#f0f2f5] px-3 dark:bg-[#202c33]">
             <Search className="h-4 w-4 shrink-0 text-[#54656f] dark:text-[#8696a0]" />
@@ -268,24 +362,26 @@ export function WhatsappInbox() {
             ) : null}
           </div>
         </div>
-        {/* Filtros: Todos / No leidos / etiquetas */}
+        {/* Filtros: Todos / No leidos / etiquetas / Archivados */}
         <div className="scrollbar-none flex gap-1.5 overflow-x-auto px-3 pb-2">
           {[
-            { id: 'all', label: 'Todos' },
-            { id: 'unread', label: unreadChats > 0 ? `No leídos ${unreadChats}` : 'No leídos' },
-            ...labels.map((l) => ({ id: l, label: l })),
+            { id: 'all', label: 'Todos', color: null as string | null },
+            { id: 'unread', label: unreadChats > 0 ? `No leídos ${unreadChats}` : 'No leídos', color: null },
+            ...labels.map((l) => ({ id: l.name, label: l.name, color: l.color })),
+            { id: 'archived', label: 'Archivados', color: null },
           ].map((f) => (
             <button
               key={f.id}
               type="button"
               onClick={() => setFilter(f.id)}
               className={cn(
-                'shrink-0 rounded-full border px-3 py-1 text-[12.5px] transition-colors',
+                'flex shrink-0 items-center gap-1 rounded-full border px-3 py-1 text-[12.5px] transition-colors',
                 filter === f.id
                   ? 'border-transparent bg-[#e7fce3] font-medium text-[#008069] dark:bg-[#0a332c] dark:text-[#00a884]'
                   : 'border-border text-[#54656f] hover:bg-muted dark:text-[#8696a0]',
               )}
             >
+              {f.color ? <span className="h-2 w-2 rounded-full" style={{ backgroundColor: f.color }} /> : null}
               {f.label}
             </button>
           ))}
@@ -304,13 +400,22 @@ export function WhatsappInbox() {
             </p>
           ) : (
             filtered.map((c) => (
-              <button
+              <div
                 key={c.phone}
-                type="button"
+                role="button"
+                tabIndex={0}
                 onClick={() => openChat(c.phone)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') openChat(c.phone);
+                }}
                 onMouseEnter={() => prefetchThread(c.phone)}
+                onContextMenu={(e) => {
+                  // Click DERECHO: el menu arranca JUSTO donde diste click.
+                  e.preventDefault();
+                  openMenuAt(c.phone, e.clientX, e.clientY);
+                }}
                 className={cn(
-                  'flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-[#f5f6f6] dark:hover:bg-[#202c33]',
+                  'group flex w-full cursor-pointer items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-[#f5f6f6] dark:hover:bg-[#202c33]',
                   selected === c.phone && 'bg-[#f0f2f5] dark:bg-[#2a3942]',
                 )}
               >
@@ -323,7 +428,7 @@ export function WhatsappInbox() {
                     <span
                       className={cn(
                         'shrink-0 text-[11.5px]',
-                        c.unread > 0
+                        c.unread > 0 && !c.muted
                           ? 'font-medium text-[#00a884]'
                           : 'text-[#667781] dark:text-[#8696a0]',
                       )}
@@ -333,7 +438,6 @@ export function WhatsappInbox() {
                   </span>
                   <span className="mt-0.5 flex items-center justify-between gap-2">
                     <span className="flex min-w-0 items-center gap-1 text-[13px] text-[#667781] dark:text-[#8696a0]">
-                      {/* Chulitos del ultimo mensaje NUESTRO (como WhatsApp). */}
                       {c.lastDirection === 'out' && c.lastStatus ? (
                         <Ticks status={c.lastStatus} pending={false} />
                       ) : null}
@@ -343,20 +447,41 @@ export function WhatsappInbox() {
                       {c.labels.slice(0, 2).map((l) => (
                         <span
                           key={l}
-                          className="rounded-full bg-[#e7f7ef] px-1.5 py-px text-[10px] font-medium text-[#008069] dark:bg-[#0a332c] dark:text-[#00a884]"
+                          className="rounded-full px-1.5 py-px text-[10px] font-medium text-white"
+                          style={{ backgroundColor: labelColor.get(l) ?? '#00a884' }}
                         >
                           {l}
                         </span>
                       ))}
+                      {c.muted ? <BellOff className="h-3.5 w-3.5 text-[#8696a0]" /> : null}
+                      {c.pinned ? <Pin className="h-3.5 w-3.5 fill-current text-[#8696a0]" /> : null}
                       {c.unread > 0 ? (
-                        <span className="inline-flex h-[20px] min-w-[20px] items-center justify-center rounded-full bg-[#25d366] px-1.5 text-[11px] font-semibold leading-none text-white">
+                        <span
+                          className={cn(
+                            'inline-flex h-[20px] min-w-[20px] items-center justify-center rounded-full px-1.5 text-[11px] font-semibold leading-none text-white',
+                            c.muted ? 'bg-[#8696a0]' : 'bg-[#25d366]',
+                          )}
+                        >
                           {c.unread > 99 ? '99+' : c.unread}
                         </span>
                       ) : null}
+                      {/* Flechita del menu (hover), como WhatsApp */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                          openMenuAt(c.phone, r.right - 8, r.bottom + 2);
+                        }}
+                        className="hidden h-5 w-5 items-center justify-center rounded-full text-[#8696a0] hover:text-[#54656f] group-hover:flex"
+                        aria-label="Opciones del chat"
+                      >
+                        <ChevronDown className="h-4 w-4" />
+                      </button>
                     </span>
                   </span>
                 </span>
-              </button>
+              </div>
             ))
           )}
         </div>
@@ -368,7 +493,8 @@ export function WhatsappInbox() {
           <>
             <ChatHeader
               chat={selectedChat ?? { phone: selected, name: null, labels: [] }}
-              allLabels={labels}
+              labelColor={labelColor}
+              onLabels={() => setLabelFor(selected)}
               onClose={() => setSelected(null)}
             />
             <div className="min-h-0 flex-1">
@@ -376,7 +502,6 @@ export function WhatsappInbox() {
             </div>
           </>
         ) : (
-          // Estado VACIO (como WhatsApp Web sin chat abierto).
           <div className="flex h-full flex-col items-center justify-center gap-3 bg-[#f8f9fa] text-center dark:bg-[#222e35]">
             <span className="flex h-24 w-24 items-center justify-center rounded-full bg-[#eceff1] dark:bg-[#2a3942]">
               <MessageCircle className="h-11 w-11 text-[#8696a0]" strokeWidth={1.2} />
@@ -393,6 +518,38 @@ export function WhatsappInbox() {
           </div>
         )}
       </div>
+
+      {/* ===== Menu contextual del chat (en el punto del click) ===== */}
+      {menu && menuChat ? (
+        <ChatContextMenu
+          anchor={menu}
+          chat={menuChat}
+          onClose={() => setMenu(null)}
+          onOp={(patch) => chatOp.mutate({ phone: menu.phone, patch })}
+          onUnread={() => markUnread.mutate(menu.phone)}
+          onLabels={() => setLabelFor(menu.phone)}
+          onClear={() => {
+            if (confirm('¿Vaciar este chat? Se borra el historial de la plataforma (el WhatsApp del cliente no se toca).')) {
+              clearChat.mutate(menu.phone);
+            }
+          }}
+          onDelete={() => {
+            if (confirm('¿Eliminar este chat de la plataforma? Historial y etiquetas se borran (el WhatsApp del cliente no se toca).')) {
+              deleteChat.mutate(menu.phone);
+            }
+          }}
+        />
+      ) : null}
+
+      {/* ===== Modal de etiquetas (con color) ===== */}
+      {labelFor ? (
+        <LabelModal
+          phone={labelFor}
+          current={chats.find((c) => c.phone === labelFor)?.labels ?? []}
+          registry={labels}
+          onClose={() => setLabelFor(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -403,71 +560,247 @@ function existingName(qc: ReturnType<typeof useQueryClient>, phone: string): boo
   return Boolean(inbox?.chats.find((c) => c.phone === phone)?.name);
 }
 
-/** Cabecera del chat abierto: avatar + nombre + etiquetas + cerrar. */
-function ChatHeader({
+/** Menu contextual del chat: arranca en el punto exacto; arriba si no hay espacio. */
+function ChatContextMenu({
+  anchor,
   chat,
-  allLabels,
+  onClose,
+  onOp,
+  onUnread,
+  onLabels,
+  onClear,
+  onDelete,
+}: {
+  anchor: ChatMenuAnchor;
+  chat: WaInboxItem;
+  onClose: () => void;
+  onOp: (patch: { archived?: boolean; muted?: boolean; pinned?: boolean }) => void;
+  onUnread: () => void;
+  onLabels: () => void;
+  onClear: () => void;
+  onDelete: () => void;
+}) {
+  const MENU_W = 232;
+  const left = Math.min(anchor.x, Math.max(8, window.innerWidth - MENU_W - 8));
+  const item = (
+    Icon: typeof Archive,
+    label: string,
+    onClick: () => void,
+    danger = false,
+  ): React.ReactNode => (
+    <button
+      key={label}
+      type="button"
+      onClick={() => {
+        onClick();
+        onClose();
+      }}
+      className={cn(
+        'flex w-full items-center gap-3 px-4 py-2 text-left text-[14px] transition-colors hover:bg-[#f5f6f6] dark:hover:bg-white/5',
+        danger ? 'text-[#f15c6d]' : 'text-[#111b21] dark:text-[#e9edef]',
+      )}
+    >
+      <Icon className="h-[17px] w-[17px]" />
+      {label}
+    </button>
+  );
+  return (
+    <>
+      <button type="button" className="fixed inset-0 z-40 cursor-default" onClick={onClose} aria-label="Cerrar" />
+      <div
+        className="wa-pop fixed z-50 w-[232px] rounded-xl border border-border bg-white py-1.5 shadow-float dark:bg-[#233138]"
+        style={{
+          left,
+          ...(anchor.up ? { bottom: window.innerHeight - anchor.y } : { top: anchor.y }),
+          transformOrigin: `${anchor.up ? 'bottom' : 'top'} left`,
+        }}
+      >
+        {item(chat.archived ? ArchiveRestore : Archive, chat.archived ? 'Desarchivar chat' : 'Archivar chat', () =>
+          onOp({ archived: !chat.archived }),
+        )}
+        {item(chat.muted ? Bell : BellOff, chat.muted ? 'Activar notificaciones' : 'Silenciar notificaciones', () =>
+          onOp({ muted: !chat.muted }),
+        )}
+        {item(chat.pinned ? PinOff : Pin, chat.pinned ? 'Desfijar chat' : 'Fijar chat', () =>
+          onOp({ pinned: !chat.pinned }),
+        )}
+        {item(Mail, 'Marcar como no leído', onUnread)}
+        {item(Tag, 'Etiquetas', onLabels)}
+        <div className="my-1 border-t border-border" />
+        {item(Eraser, 'Vaciar chat', onClear, true)}
+        {item(Trash2, 'Eliminar chat', onDelete, true)}
+      </div>
+    </>
+  );
+}
+
+/** Modal "Etiquetar" (como WhatsApp Business): checkboxes + color + nueva. */
+function LabelModal({
+  phone,
+  current,
+  registry,
   onClose,
 }: {
-  chat: { phone: string; name: string | null; labels: string[] };
-  allLabels: string[];
+  phone: string;
+  current: string[];
+  registry: Array<{ name: string; color: string }>;
   onClose: () => void;
 }) {
   const qc = useQueryClient();
-  const [open, setOpen] = useState(false);
-  const [newLabel, setNewLabel] = useState('');
-  const boxRef = useRef<HTMLDivElement>(null);
+  const [checked, setChecked] = useState<Set<string>>(new Set(current));
+  const [extra, setExtra] = useState<Array<{ name: string; color: string }>>([]);
+  const [newName, setNewName] = useState('');
+  const [newColor, setNewColor] = useState(LABEL_COLORS[0] ?? '#00a884');
 
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (boxRef.current && !boxRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [open]);
+  const all = useMemo(() => {
+    const seen = new Set(registry.map((l) => l.name));
+    return [...registry, ...extra.filter((l) => !seen.has(l.name))];
+  }, [registry, extra]);
 
-  const save = useMutation({
-    mutationFn: (labels: string[]) =>
-      api.put<{ ok: true }>(`/v1/whatsapp/chats/${chat.phone}/labels`, { labels }),
-    onMutate: (labels) => {
-      qc.setQueryData<WaInbox>(['wa-inbox'], (old) =>
-        old
-          ? {
-              ...old,
-              chats: old.chats.map((c) => (c.phone === chat.phone ? { ...c, labels } : c)),
-              labels: [...new Set([...old.labels, ...labels])].sort((a, b) => a.localeCompare(b)),
-            }
-          : old,
-      );
-    },
-    onError: (err) => {
-      void qc.invalidateQueries({ queryKey: ['wa-inbox'] });
-      toast.error(err instanceof ApiError ? err.message : 'No se pudieron guardar las etiquetas');
-    },
-  });
-
-  const toggle = (label: string) => {
-    const next = chat.labels.includes(label)
-      ? chat.labels.filter((l) => l !== label)
-      : [...chat.labels, label];
-    save.mutate(next);
+  const toggle = (name: string) => {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
   };
   const addNew = () => {
-    const l = newLabel.trim();
-    if (!l) return;
-    setNewLabel('');
-    if (!chat.labels.includes(l)) save.mutate([...chat.labels, l]);
+    const name = newName.trim();
+    if (!name) return;
+    setExtra((prev) => (prev.some((l) => l.name === name) ? prev : [...prev, { name, color: newColor }]));
+    setChecked((prev) => new Set(prev).add(name));
+    setNewName('');
   };
 
-  const options = useMemo(
-    () => [...new Set([...allLabels, ...chat.labels])].sort((a, b) => a.localeCompare(b)),
-    [allLabels, chat.labels],
-  );
+  const save = useMutation({
+    mutationFn: () => {
+      const colorOf = new Map(all.map((l) => [l.name, l.color] as const));
+      const labels = [...checked].map((name) => ({ name, color: colorOf.get(name) ?? '#00a884' }));
+      return api.put<{ ok: true }>(`/v1/whatsapp/chats/${phone}/labels`, { labels });
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['wa-inbox'] });
+      onClose();
+    },
+    onError: (err) =>
+      toast.error(err instanceof ApiError ? err.message : 'No se pudieron guardar las etiquetas'),
+  });
 
   return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div
+        className="flex max-h-[80vh] w-full max-w-sm flex-col overflow-hidden rounded-2xl bg-white dark:bg-[#111b21]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-3 bg-[#00a884] px-4 py-3 text-white">
+          <button type="button" onClick={onClose} aria-label="Cerrar">
+            <X className="h-5 w-5" />
+          </button>
+          <p className="text-[15px] font-semibold">Etiquetar chat</p>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto py-1">
+          {all.length === 0 ? (
+            <p className="px-4 py-6 text-center text-[12.5px] text-[#667781]">
+              Crea la primera etiqueta abajo.
+            </p>
+          ) : (
+            all.map((l) => (
+              <button
+                key={l.name}
+                type="button"
+                onClick={() => toggle(l.name)}
+                className="flex w-full items-center gap-3 px-4 py-2.5 text-left hover:bg-[#f5f6f6] dark:hover:bg-white/5"
+              >
+                <Tag className="h-[18px] w-[18px]" style={{ color: l.color }} />
+                <span className="min-w-0 flex-1 truncate text-[14px] text-[#111b21] dark:text-[#e9edef]">
+                  {l.name}
+                </span>
+                <span
+                  className={cn(
+                    'flex h-[18px] w-[18px] items-center justify-center rounded border text-[11px] text-white',
+                    checked.has(l.name) ? 'border-[#00a884] bg-[#00a884]' : 'border-[#8696a0]',
+                  )}
+                >
+                  {checked.has(l.name) ? '✓' : ''}
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+        {/* Nueva etiqueta + COLOR */}
+        <div className="border-t border-border px-4 py-3">
+          <div className="flex items-center gap-2">
+            <Plus className="h-4 w-4 text-[#00a884]" />
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  addNew();
+                }
+              }}
+              placeholder="Nueva etiqueta"
+              className="h-8 min-w-0 flex-1 rounded-lg bg-[#f0f2f5] px-2.5 text-[13px] outline-none placeholder:text-[#667781] dark:bg-[#202c33] dark:text-[#e9edef]"
+            />
+            <button
+              type="button"
+              onClick={addNew}
+              disabled={!newName.trim()}
+              className="rounded-full bg-[#00a884] px-3 py-1 text-[12px] font-medium text-white disabled:opacity-40"
+            >
+              Crear
+            </button>
+          </div>
+          <div className="mt-2 flex items-center gap-1.5">
+            {LABEL_COLORS.map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => setNewColor(c)}
+                className={cn(
+                  'h-5 w-5 rounded-full transition-transform',
+                  newColor === c && 'scale-125 ring-2 ring-offset-1 ring-[#00a884]',
+                )}
+                style={{ backgroundColor: c }}
+                aria-label={`Color ${c}`}
+              />
+            ))}
+          </div>
+        </div>
+        <div className="flex justify-end gap-4 border-t border-border px-4 py-3">
+          <button type="button" onClick={onClose} className="text-[13px] font-medium uppercase text-[#54656f]">
+            Cancelar
+          </button>
+          <button
+            type="button"
+            onClick={() => save.mutate()}
+            disabled={save.isPending}
+            className="rounded-md bg-[#00a884] px-4 py-1.5 text-[13px] font-medium uppercase text-white disabled:opacity-60"
+          >
+            Guardar
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Cabecera del chat abierto: avatar + nombre + etiquetas (color) + cerrar. */
+function ChatHeader({
+  chat,
+  labelColor,
+  onLabels,
+  onClose,
+}: {
+  chat: { phone: string; name: string | null; labels: string[] };
+  labelColor: Map<string, string>;
+  onLabels: () => void;
+  onClose: () => void;
+}) {
+  return (
     <div className="flex items-center gap-3 border-b border-border bg-[#f0f2f5] px-3 py-2 dark:bg-[#202c33]">
-      {/* Volver (cel) */}
       <button
         type="button"
         onClick={onClose}
@@ -483,85 +816,26 @@ function ChatHeader({
         </p>
         <p className="truncate text-[12px] text-[#667781] dark:text-[#8696a0]">+57 {chat.phone}</p>
       </div>
-      {/* Etiquetas del chat */}
       <div className="hidden items-center gap-1 sm:flex">
         {chat.labels.map((l) => (
           <span
             key={l}
-            className="rounded-full bg-[#e7f7ef] px-2 py-0.5 text-[11px] font-medium text-[#008069] dark:bg-[#0a332c] dark:text-[#00a884]"
+            className="rounded-full px-2 py-0.5 text-[11px] font-medium text-white"
+            style={{ backgroundColor: labelColor.get(l) ?? '#00a884' }}
           >
             {l}
           </span>
         ))}
       </div>
-      <div className="relative" ref={boxRef}>
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="flex h-9 w-9 items-center justify-center rounded-full text-[#54656f] transition-colors hover:bg-black/5 dark:text-[#8696a0] dark:hover:bg-white/5"
-          aria-label="Etiquetas"
-          title="Etiquetar chat"
-        >
-          <Tag className="h-[18px] w-[18px]" />
-        </button>
-        {open ? (
-          <div className="shadow-float absolute right-0 top-11 z-30 w-56 rounded-xl border border-border bg-card p-2">
-            <p className="px-2 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              Etiquetas
-            </p>
-            {options.length === 0 ? (
-              <p className="px-2 pb-1 text-[12px] text-muted-foreground">Crea la primera abajo.</p>
-            ) : (
-              <div className="max-h-44 overflow-y-auto">
-                {options.map((l) => (
-                  <button
-                    key={l}
-                    type="button"
-                    onClick={() => toggle(l)}
-                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] hover:bg-muted"
-                  >
-                    <span
-                      className={cn(
-                        'flex h-4 w-4 items-center justify-center rounded border',
-                        chat.labels.includes(l)
-                          ? 'border-[#00a884] bg-[#00a884] text-white'
-                          : 'border-border',
-                      )}
-                    >
-                      {chat.labels.includes(l) ? '✓' : ''}
-                    </span>
-                    <span className="truncate">{l}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="mt-1 flex items-center gap-1 border-t border-border pt-1.5">
-              <input
-                value={newLabel}
-                onChange={(e) => setNewLabel(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    addNew();
-                  }
-                }}
-                placeholder="Nueva etiqueta"
-                className="h-8 min-w-0 flex-1 rounded-lg bg-muted px-2 text-[12.5px] outline-none placeholder:text-muted-foreground"
-              />
-              <button
-                type="button"
-                onClick={addNew}
-                disabled={!newLabel.trim()}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#00a884] text-white disabled:opacity-40"
-                aria-label="Agregar etiqueta"
-              >
-                <Plus className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        ) : null}
-      </div>
-      {/* Cerrar chat */}
+      <button
+        type="button"
+        onClick={onLabels}
+        className="flex h-9 w-9 items-center justify-center rounded-full text-[#54656f] transition-colors hover:bg-black/5 dark:text-[#8696a0] dark:hover:bg-white/5"
+        aria-label="Etiquetas"
+        title="Etiquetar chat"
+      >
+        <Tag className="h-[18px] w-[18px]" />
+      </button>
       <button
         type="button"
         onClick={onClose}

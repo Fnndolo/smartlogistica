@@ -228,11 +228,21 @@ model WaContact {
   name         String?
   // Etiquetas del chat (bandeja): ["Cliente", "Garantia", ...] — globales.
   labels       Json?
+  // Operaciones de la bandeja (menu contextual), globales del negocio.
+  archived     Boolean  @default(false)
+  muted        Boolean  @default(false)
+  pinned       Boolean  @default(false)
   // Estado del flujo de confirmacion NATIVO (Cloud API): esperando direccion,
   // confirmando el borrador, etc. draftAddress = la direccion que escribio.
   flowState    String?
   draftAddress String?
   updatedAt    DateTime @updatedAt
+}
+
+// Etiquetas de la bandeja de WhatsApp, con su COLOR (registro global).
+model WaLabel {
+  name  String @id
+  color String @default("#00a884")
 }
 
 // Stickers FAVORITOS del negocio (compartidos): apuntan a nuestro storage.

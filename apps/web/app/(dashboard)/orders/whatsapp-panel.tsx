@@ -123,12 +123,42 @@ const emojiCount = (s: string): number => {
 
 const timeOf = (iso: string): string => format(new Date(iso), 'h:mm aaaa', { locale: es });
 
-/** Toast NEGRO con el motivo del fallo (al tocar la bolita roja). */
-const showFailToast = (m: WaMessage): void => {
-  toast(m.error ?? 'Meta no entregó este mensaje.', {
-    style: { background: '#111b21', color: '#ffffff', border: 'none' },
-  });
+/** Errores de Meta traducidos al ESPAÑOL (por codigo). */
+const META_ERRORS: Array<[RegExp, string]> = [
+  [/131053/, 'No se pudo procesar el archivo: WhatsApp no aceptó el formato o el tamaño del multimedia (131053).'],
+  [/131047|re-?engagement/i, 'Han pasado más de 24 horas desde la última respuesta del cliente. Usa una plantilla aprobada para reabrir la conversación (131047).'],
+  [/131026/, 'No se pudo entregar: el número puede no tener WhatsApp o bloqueó al negocio (131026).'],
+  [/131049/, 'Meta limitó los mensajes de marketing a este usuario (131049). Reintenta en unas horas o usa una plantilla utility.'],
+  [/131056/, 'Demasiados mensajes a este número en poco tiempo. Espera unos minutos y reintenta (131056).'],
+  [/131048/, 'Meta limitó temporalmente los envíos del número (posible marca de spam) (131048).'],
+  [/132000|132001|132005|132007|132012/, 'Problema con la plantilla: no existe, no está aprobada o las variables no coinciden.'],
+  [/\b470\b/, 'Solo se puede responder dentro de las 24 horas siguientes al último mensaje del cliente; usa una plantilla aprobada (470).'],
+  [/131051/, 'Tipo de mensaje no soportado por WhatsApp (131051).'],
+];
+
+/** Motivo del fallo en español (a partir de lo que reportó Meta). */
+const failText = (m: WaMessage): string => {
+  const raw = (m.error ?? '').trim();
+  for (const [re, es] of META_ERRORS) if (re.test(raw)) return es;
+  return raw
+    ? `No entregado — ${raw.replace(/^Meta:\s*/i, '')}`
+    : 'WhatsApp no entregó este mensaje.';
 };
+
+/** Aviso flotante del fallo (aparece al pasar el mouse por el mensaje). */
+function FailBanner({ m, mine }: { m: WaMessage; mine: boolean }) {
+  if (m.status !== 'failed') return null;
+  return (
+    <div
+      className={cn(
+        'pointer-events-none absolute bottom-full z-30 mb-1 hidden w-max max-w-[290px] rounded-lg bg-[#fde8e8] px-3 py-2 text-[12px] leading-snug text-[#8a1f2d] shadow-md group-hover:block dark:bg-[#3b1d22] dark:text-[#f5a3ad]',
+        mine ? 'right-0' : 'left-0',
+      )}
+    >
+      {failText(m)}
+    </div>
+  );
+}
 
 const dayLabel = (iso: string): string => {
   const d = new Date(iso);
@@ -1247,11 +1277,30 @@ function useSinglePopover(open: boolean, onClose: () => void): void {
  * hacia ABAJO desde la mitad del mensaje (un poco encimado) si hay espacio, y
  * si no, hacia ARRIBA alineado a la esquina superior; con mini animacion.
  */
-function MsgMenu({ m, mine, actions }: { m: WaMessage; mine: boolean; actions: BubbleActions }) {
-  const [open, setOpen] = useState<null | { up: boolean }>(null);
+export interface MsgMenuAnchor {
+  up: boolean;
+  /** Con coordenadas: el menu ARRANCA justo en el punto del click derecho. */
+  left?: number;
+  top?: number;
+  bottom?: number;
+}
+
+function MsgMenu({
+  m,
+  mine,
+  actions,
+  open,
+  onOpenChange,
+}: {
+  m: WaMessage;
+  mine: boolean;
+  actions: BubbleActions;
+  open: MsgMenuAnchor | null;
+  onOpenChange: (anchor: MsgMenuAnchor | null) => void;
+}) {
   const [reacts, setReacts] = useState(false);
   const close = () => {
-    setOpen(null);
+    onOpenChange(null);
     setReacts(false);
   };
   const POPUP_H = 440; // reacciones + menu, aprox
@@ -1260,7 +1309,7 @@ function MsgMenu({ m, mine, actions }: { m: WaMessage; mine: boolean; actions: B
     const rect = anchor.getBoundingClientRect();
     const below = window.innerHeight - rect.bottom;
     const above = rect.top;
-    setOpen({ up: below < POPUP_H && above > below });
+    onOpenChange({ up: below < POPUP_H && above > below });
   };
   const myEmoji = m.reactions.find((r) => r.mine)?.emoji ?? null;
   const pickReaction = (emoji: string) => {
@@ -1314,12 +1363,19 @@ function MsgMenu({ m, mine, actions }: { m: WaMessage; mine: boolean; actions: B
           <div
             className={cn(
               'wa-pop absolute z-40 flex w-64 flex-col gap-1.5',
-              mine ? 'right-0 items-end' : 'left-0 items-start',
+              open.left == null && (mine ? 'right-0 items-end' : 'left-0 items-start'),
               // ABAJO: desde la mitad del mensaje, un poco encimado.
               // ARRIBA: pegado sobre la esquina superior.
-              open.up ? 'bottom-[calc(100%-6px)]' : 'top-[calc(50%-4px)]',
+              open.left == null && (open.up ? 'bottom-[calc(100%-6px)]' : 'top-[calc(50%-4px)]'),
+              open.left != null && 'items-start',
             )}
-            style={{ transformOrigin: `${open.up ? 'bottom' : 'top'} ${mine ? 'right' : 'left'}` }}
+            style={{
+              transformOrigin: `${open.up ? 'bottom' : 'top'} ${open.left != null ? 'left' : mine ? 'right' : 'left'}`,
+              // Click derecho: el menu ARRANCA en el punto exacto del cursor.
+              ...(open.left != null
+                ? { left: open.left, ...(open.up ? { bottom: open.bottom } : { top: open.top }) }
+                : {}),
+            }}
           >
             {/* Barra de REACCIONES siempre encima del menu (tamaño WhatsApp). */}
             <div className="shadow-float flex items-center rounded-full border border-border bg-white px-1 py-[3px] dark:bg-[#233138]">
@@ -1540,6 +1596,18 @@ function HoverActions({
   );
 }
 
+/** Ancla del menu en el PUNTO del click derecho (relativo al contenedor). */
+function anchorAtPoint(e: React.MouseEvent, el: HTMLElement | null): MsgMenuAnchor | null {
+  if (!el) return null;
+  const rect = el.getBoundingClientRect();
+  const below = window.innerHeight - e.clientY;
+  const up = below < 440 && e.clientY > below;
+  const left = Math.min(Math.max(0, e.clientX - rect.left), Math.max(0, rect.width - 264));
+  return up
+    ? { up, left, bottom: rect.height - (e.clientY - rect.top) }
+    : { up, left, top: e.clientY - rect.top };
+}
+
 function WaBubble({
   message: m,
   prev,
@@ -1554,6 +1622,10 @@ function WaBubble({
   const mine = m.direction === 'out';
   const pending = m.id.startsWith('temp-');
   const [reactOpen, setReactOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState<MsgMenuAnchor | null>(null);
+  const [flash, setFlash] = useState(false);
+  const bubbleRef = useRef<HTMLDivElement>(null);
+  const bareRef = useRef<HTMLDivElement>(null);
   const day = (iso: string) => new Date(iso).toDateString();
   const newDay = !prev || day(prev.createdAt) !== day(m.createdAt);
   const grouped = !newDay && prev && prev.direction === m.direction;
@@ -1584,14 +1656,39 @@ function WaBubble({
           mine ? 'justify-end' : 'justify-start',
           grouped ? 'mt-[2px]' : 'mt-3',
           hasReactions && 'mb-4',
+          flash && 'wa-reply-flash rounded-lg',
         )}
+        // DOBLE CLIC en el mensaje o su espacio lateral: responder (con
+        // destello verde de medio segundo, como WhatsApp).
+        onDoubleClick={() => {
+          setFlash(true);
+          actions.reply(m);
+        }}
+        onAnimationEnd={() => setFlash(false)}
       >
         {emojiOnly || sticker ? (
-          <BareMessage message={m} mine={mine} pending={pending} sticker={sticker} actions={actions} />
+          <BareMessage
+            message={m}
+            mine={mine}
+            pending={pending}
+            sticker={sticker}
+            actions={actions}
+            menuOpen={menuOpen}
+            onMenuChange={setMenuOpen}
+            containerRef={bareRef}
+          />
         ) : (
-          <div className={cn('group relative max-w-[85%] md:max-w-[65%]', pending && 'opacity-90')}>
+          <div
+            ref={bubbleRef}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setMenuOpen(anchorAtPoint(e, bubbleRef.current));
+            }}
+            className={cn('group relative max-w-[85%] md:max-w-[65%]', pending && 'opacity-90')}
+          >
             {!grouped ? <Tail mine={mine} /> : null}
-            <MsgMenu m={m} mine={mine} actions={actions} />
+            <FailBanner m={m} mine={mine} />
+            <MsgMenu m={m} mine={mine} actions={actions} open={menuOpen} onOpenChange={setMenuOpen} />
             <HoverActions m={m} mine={mine} actions={actions} onReact={() => setReactOpen(true)} />
             {reactOpen ? (
               <AnchoredReactionBar m={m} mine={mine} actions={actions} onClose={() => setReactOpen(false)} />
@@ -1626,17 +1723,31 @@ function BareMessage({
   pending,
   sticker,
   actions,
+  menuOpen,
+  onMenuChange,
+  containerRef,
 }: {
   message: WaMessage;
   mine: boolean;
   pending: boolean;
   sticker: boolean;
   actions: BubbleActions;
+  menuOpen: MsgMenuAnchor | null;
+  onMenuChange: (a: MsgMenuAnchor | null) => void;
+  containerRef: React.RefObject<HTMLDivElement | null>;
 }) {
   const [reactOpen, setReactOpen] = useState(false);
   return (
-    <div className={cn('group relative flex max-w-[85%] flex-col md:max-w-[65%]', mine ? 'items-end' : 'items-start')}>
-      <MsgMenu m={m} mine={mine} actions={actions} />
+    <div
+      ref={containerRef}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onMenuChange(anchorAtPoint(e, containerRef.current));
+      }}
+      className={cn('group relative flex max-w-[85%] flex-col md:max-w-[65%]', mine ? 'items-end' : 'items-start')}
+    >
+      <FailBanner m={m} mine={mine} />
+      <MsgMenu m={m} mine={mine} actions={actions} open={menuOpen} onOpenChange={onMenuChange} />
       <HoverActions m={m} mine={mine} actions={actions} onReact={() => setReactOpen(true)} />
       {reactOpen ? (
         <AnchoredReactionBar m={m} mine={mine} actions={actions} onClose={() => setReactOpen(false)} />
@@ -1664,7 +1775,7 @@ function BareMessage({
         )}
       >
         {timeOf(m.createdAt)}
-        {mine ? <Ticks status={m.status} pending={pending} onFail={() => showFailToast(m)} /> : null}
+        {mine ? <Ticks status={m.status} pending={pending} /> : null}
       </span>
       <ReactionChips message={m} mine={mine} bare actions={actions} />
     </div>
@@ -1766,7 +1877,7 @@ function BubbleContent({
       {m.starred ? <Star className="h-[11px] w-[11px] fill-current" /> : null}
       {timeOf(m.createdAt)}
       {mine ? (
-        <Ticks status={m.status} pending={pending} onMedia={onMedia} onFail={() => showFailToast(m)} />
+        <Ticks status={m.status} pending={pending} onMedia={onMedia} />
       ) : null}
     </span>
   );
@@ -2031,7 +2142,7 @@ function WaAudio({
           <span>{fmtSecs(playing || t > 0 ? t : (dur ?? 0))}</span>
           <span className="flex items-center gap-1">
             {timeOf(m.createdAt)}
-            {mine ? <Ticks status={m.status} pending={pending} onFail={() => showFailToast(m)} /> : null}
+            {mine ? <Ticks status={m.status} pending={pending} /> : null}
           </span>
         </div>
       </div>

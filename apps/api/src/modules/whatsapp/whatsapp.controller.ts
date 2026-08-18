@@ -26,6 +26,7 @@ import {
   sendWaTextSchema,
   setWaLabelsSchema,
   starWaMessageSchema,
+  waChatOpSchema,
   type AddWaStickerFavInput,
   type Dialog360ConnectionSummary,
   type Dialog360CredentialsInput,
@@ -38,6 +39,7 @@ import {
   type SendWaTextInput,
   type SetWaLabelsInput,
   type StarWaMessageInput,
+  type WaChatOpInput,
   type WaInbox,
   type WaMessage,
   type WaStickerFav,
@@ -124,6 +126,38 @@ export class WhatsappInboxController {
   @HttpCode(200)
   async read(@Param('phone') phone: string, @CurrentUser() user: AuthContext): Promise<{ ok: true }> {
     return this.whatsapp.markChatRead(phone, user);
+  }
+
+  /** Marcar como NO leido (corre la marca antes del ultimo entrante). */
+  @Post('chats/:phone/unread')
+  @HttpCode(200)
+  async unread(@Param('phone') phone: string, @CurrentUser() user: AuthContext): Promise<{ ok: true }> {
+    return this.whatsapp.markChatUnread(phone, user);
+  }
+
+  /** Archivar / silenciar / fijar (menu contextual). */
+  @Post('chats/:phone/op')
+  @HttpCode(200)
+  async op(
+    @Param('phone') phone: string,
+    @Body(new ZodValidationPipe(waChatOpSchema)) body: WaChatOpInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ ok: true }> {
+    return this.whatsapp.chatOp(phone, body, user);
+  }
+
+  /** Vaciar chat (borra el historial LOCAL). */
+  @Delete('chats/:phone/messages')
+  @HttpCode(200)
+  async clearChat(@Param('phone') phone: string, @CurrentUser() user: AuthContext): Promise<{ ok: true }> {
+    return this.whatsapp.clearChat(phone, user);
+  }
+
+  /** Eliminar chat (historial + contacto, LOCAL). */
+  @Delete('chats/:phone')
+  @HttpCode(200)
+  async deleteChat(@Param('phone') phone: string, @CurrentUser() user: AuthContext): Promise<{ ok: true }> {
+    return this.whatsapp.deleteChat(phone, user);
   }
 
   /** Etiquetas del chat. */

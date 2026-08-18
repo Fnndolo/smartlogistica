@@ -21,6 +21,7 @@ import type {
   SendWaTextInput,
   SetWaLabelsInput,
   StarWaMessageInput,
+  WaChatOpInput,
   WaInbox,
   WaMessage as WaMessageDto,
   WaTemplateList,
@@ -495,38 +496,118 @@ export class WhatsappService {
         LEFT JOIN "WaChatRead" r ON r.phone = m.phone AND r."userId" = ${auth.userId}
         WHERE m.direction = 'in' AND (r."lastReadAt" IS NULL OR m."createdAt" > r."lastReadAt")
         GROUP BY m.phone`,
-      prisma.waContact.findMany({ select: { phone: true, name: true, labels: true } }),
+      prisma.waContact.findMany({
+        select: {
+          phone: true,
+          name: true,
+          labels: true,
+          archived: true,
+          muted: true,
+          pinned: true,
+        },
+      }),
     ]);
+    const labelRows = await prisma.waLabel.findMany({ orderBy: { name: 'asc' } });
 
-    const nameOf = new Map(contacts.map((c) => [c.phone, c.name] as const));
-    const labelsOf = new Map(
-      contacts.map(
-        (c) => [c.phone, Array.isArray(c.labels) ? (c.labels as unknown[]).map(String) : []] as const,
-      ),
-    );
+    const byPhone = new Map(contacts.map((c) => [c.phone, c] as const));
     const unread = new Map(unreadRows.map((r) => [r.phone, Number(r.unread)] as const));
+    const colorOf = new Map(labelRows.map((l) => [l.name, l.color] as const));
 
     const chats = last
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .slice(0, 400)
-      .map((m) => ({
-        phone: m.phone,
-        name: nameOf.get(m.phone) ?? null,
-        labels: labelsOf.get(m.phone) ?? [],
-        lastAt: m.createdAt.toISOString(),
-        lastKind: waKindOf(m.kind),
-        lastBody: m.body,
-        lastDirection: m.direction === 'out' ? ('out' as const) : ('in' as const),
-        lastStatus:
-          m.direction === 'out' && ['sent', 'delivered', 'read', 'failed'].includes(m.status ?? '')
-            ? (m.status as 'sent' | 'delivered' | 'read' | 'failed')
-            : null,
-        // Si el ULTIMO mensaje es NUESTRO (bot del flujo o un admin), el chat
-        // ya quedo respondido: NO cuenta como no leido.
-        unread: m.direction === 'out' ? 0 : (unread.get(m.phone) ?? 0),
-      }));
-    const labels = [...new Set(chats.flatMap((c) => c.labels))].sort((a, b) => a.localeCompare(b));
+      .map((m) => {
+        const c = byPhone.get(m.phone);
+        return {
+          phone: m.phone,
+          name: c?.name ?? null,
+          labels: Array.isArray(c?.labels) ? (c?.labels as unknown[]).map(String) : [],
+          lastAt: m.createdAt.toISOString(),
+          lastKind: waKindOf(m.kind),
+          lastBody: m.body,
+          lastDirection: m.direction === 'out' ? ('out' as const) : ('in' as const),
+          lastStatus:
+            m.direction === 'out' && ['sent', 'delivered', 'read', 'failed'].includes(m.status ?? '')
+              ? (m.status as 'sent' | 'delivered' | 'read' | 'failed')
+              : null,
+          // Si el ULTIMO mensaje es NUESTRO (bot del flujo o un admin), el chat
+          // ya quedo respondido: NO cuenta como no leido.
+          unread: m.direction === 'out' ? 0 : (unread.get(m.phone) ?? 0),
+          archived: Boolean(c?.archived),
+          muted: Boolean(c?.muted),
+          pinned: Boolean(c?.pinned),
+        };
+      })
+      // FIJADOS siempre arriba (dentro de cada grupo, por ultimo mensaje).
+      .sort((a, b) => Number(b.pinned) - Number(a.pinned));
+
+    const usedNames = new Set(chats.flatMap((c) => c.labels));
+    const labels = [...new Set([...labelRows.map((l) => l.name), ...usedNames])]
+      .sort((a, b) => a.localeCompare(b))
+      .map((name) => ({ name, color: colorOf.get(name) ?? '#00a884' }));
     return { chats, labels };
+  }
+
+  /** Operaciones del menu contextual: archivar / silenciar / fijar. */
+  async chatOp(rawPhone: string, input: WaChatOpInput, auth: AuthContext): Promise<{ ok: true }> {
+    this.assertAdmin(auth);
+    const { tenantId, prisma } = getTenantContext();
+    const phone = tenDigits(rawPhone);
+    if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
+    const data: Record<string, boolean> = {};
+    if (typeof input.archived === 'boolean') data.archived = input.archived;
+    if (typeof input.muted === 'boolean') data.muted = input.muted;
+    if (typeof input.pinned === 'boolean') data.pinned = input.pinned;
+    if (Object.keys(data).length === 0) throw new BadRequestException('Nada que cambiar');
+    await prisma.waContact.upsert({
+      where: { phone },
+      create: { phone, contactId: '', ...data },
+      update: data,
+    });
+    await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    return { ok: true };
+  }
+
+  /** "Marcar como no leído": corre la marca de lectura ANTES del ultimo entrante. */
+  async markChatUnread(rawPhone: string, auth: AuthContext): Promise<{ ok: true }> {
+    this.assertAdmin(auth);
+    const { prisma } = getTenantContext();
+    const phone = tenDigits(rawPhone);
+    const lastIn = await prisma.waMessage.findFirst({
+      where: { phone, direction: 'in' },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    });
+    if (!lastIn) throw new BadRequestException('Este chat no tiene mensajes del cliente');
+    const before = new Date(lastIn.createdAt.getTime() - 1000);
+    await prisma.waChatRead.upsert({
+      where: { userId_phone: { userId: auth.userId, phone } },
+      create: { userId: auth.userId, phone, lastReadAt: before },
+      update: { lastReadAt: before },
+    });
+    return { ok: true };
+  }
+
+  /** "Vaciar chat": borra el HISTORIAL local (WhatsApp del cliente no se toca). */
+  async clearChat(rawPhone: string, auth: AuthContext): Promise<{ ok: true }> {
+    this.assertAdmin(auth);
+    const { tenantId, prisma } = getTenantContext();
+    const phone = tenDigits(rawPhone);
+    await prisma.waMessage.deleteMany({ where: { phone } });
+    await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    return { ok: true };
+  }
+
+  /** "Eliminar chat": historial + contacto + marcas de lectura (local). */
+  async deleteChat(rawPhone: string, auth: AuthContext): Promise<{ ok: true }> {
+    this.assertAdmin(auth);
+    const { tenantId, prisma } = getTenantContext();
+    const phone = tenDigits(rawPhone);
+    await prisma.waMessage.deleteMany({ where: { phone } });
+    await prisma.waChatRead.deleteMany({ where: { phone } });
+    await prisma.waContact.deleteMany({ where: { phone } });
+    await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    return { ok: true };
   }
 
   /** Marca un chat como LEIDO para este usuario (apaga el contador verde). */
@@ -543,7 +624,7 @@ export class WhatsappService {
     return { ok: true };
   }
 
-  /** Etiquetas del chat (globales, compartidas por todos los admins). */
+  /** Etiquetas del chat (globales) + registro de su COLOR en WaLabel. */
   async setChatLabels(
     rawPhone: string,
     input: SetWaLabelsInput,
@@ -553,11 +634,23 @@ export class WhatsappService {
     const { tenantId, prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
     if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
-    const labels = [...new Set(input.labels.map((l) => l.trim()).filter(Boolean))];
+    const seen = new Set<string>();
+    const labels = input.labels
+      .map((l) => ({ name: l.name.trim(), color: l.color.trim() || '#00a884' }))
+      .filter((l) => l.name && !seen.has(l.name) && seen.add(l.name));
+    // Registrar/actualizar el color de cada etiqueta usada.
+    for (const l of labels) {
+      await prisma.waLabel.upsert({
+        where: { name: l.name },
+        create: { name: l.name, color: l.color },
+        update: { color: l.color },
+      });
+    }
+    const names = labels.map((l) => l.name);
     await prisma.waContact.upsert({
       where: { phone },
-      create: { phone, contactId: '', labels: labels as unknown as Prisma.InputJsonValue },
-      update: { labels: labels as unknown as Prisma.InputJsonValue },
+      create: { phone, contactId: '', labels: names as unknown as Prisma.InputJsonValue },
+      update: { labels: names as unknown as Prisma.InputJsonValue },
     });
     await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
     return { ok: true };
