@@ -67,6 +67,8 @@ export const waMessageSchema = z.object({
   status: z.enum(['sent', 'delivered', 'read', 'failed']).nullable().default(null),
   /** Detalle del FALLO de entrega (se muestra al tocar la bolita roja). */
   error: z.string().nullable().default(null),
+  /** Editado desde el celular ("Editado" junto a la hora). */
+  edited: z.boolean().default(false),
   /** Destacado (estrella), como en WhatsApp. */
   starred: z.boolean().default(false),
   createdAt: z.string(),

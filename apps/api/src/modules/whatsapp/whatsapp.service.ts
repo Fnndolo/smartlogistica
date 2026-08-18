@@ -149,6 +149,7 @@ interface WaMessageRow {
   reactions?: unknown;
   status?: string | null;
   error?: string | null;
+  edited?: boolean;
   starred?: boolean;
   createdAt: Date;
 }
@@ -441,14 +442,28 @@ export class WhatsappService {
     let wamid: string | null = null;
     try {
       const kind = waTypeOf(file.mimetype || '');
-      wamid = await this.dialog360.sendMediaLink(
-        d360!.http,
-        d360!.mode,
-        `57${phone}`,
-        kind === 'file' ? 'document' : kind,
-        url,
-        kind === 'file' ? name : undefined,
-      );
+      if (kind === 'audio') {
+        // NOTAS DE VOZ: subir a Meta y enviar por id (por link firmado Meta
+        // fallaba con 131053 al validar la descarga, igual que los stickers).
+        const mediaId = await this.dialog360.uploadMedia(
+          d360!.apiKey,
+          d360!.mode,
+          file.buffer,
+          file.mimetype || 'audio/mp4',
+          name,
+        );
+        if (!mediaId) throw new BadRequestException('Meta no devolvió el id del audio');
+        wamid = await this.dialog360.sendMediaId(d360!.http, d360!.mode, `57${phone}`, 'audio', mediaId);
+      } else {
+        wamid = await this.dialog360.sendMediaLink(
+          d360!.http,
+          d360!.mode,
+          `57${phone}`,
+          kind === 'file' ? 'document' : kind,
+          url,
+          kind === 'file' ? name : undefined,
+        );
+      }
     } catch (err) {
       await this.storage.delete(key).catch(() => null);
       throw this.translateError(err, 'No se pudo enviar el archivo');
@@ -1492,6 +1507,28 @@ export class WhatsappService {
         return phone;
       }
 
+      // Mensaje EDITADO (desde el celular con coexistencia): actualizar el
+      // ORIGINAL y marcar "Editado" — JAMAS crear una burbuja nueva.
+      if (type === 'edit' || m.edit) {
+        const targetWamid = String(m.edit?.message_id ?? m.context?.id ?? '');
+        const newBody = m.edit?.body ?? m.edit?.text?.body ?? m.text?.body ?? null;
+        if (targetWamid && newBody != null) {
+          const target = await prisma.waMessage.findUnique({
+            where: { externalId: targetWamid },
+            select: { id: true },
+          });
+          if (target) {
+            await prisma.waMessage.update({
+              where: { id: target.id },
+              data: { body: String(newBody), edited: true },
+            });
+            return phone;
+          }
+        }
+        this.logger.warn(`Edicion no aplicada (forma desconocida): ${JSON.stringify(m).slice(0, 400)}`);
+        return phone;
+      }
+
       let kind: WaMessageDto['kind'] = 'text';
       let body: string | null = null;
       let attachmentKey: string | null = null;
@@ -1907,6 +1944,7 @@ export class WhatsappService {
       reactions,
       status,
       error: r.error ?? null,
+      edited: Boolean(r.edited),
       starred: Boolean(r.starred),
       createdAt: r.createdAt.toISOString(),
     };

@@ -247,20 +247,6 @@ function renderBodyWithPhones(body: string): React.ReactNode {
   return out;
 }
 
-/** Aviso flotante del fallo (aparece al pasar el mouse por el mensaje). */
-function FailBanner({ m, mine }: { m: WaMessage; mine: boolean }) {
-  if (m.status !== 'failed') return null;
-  return (
-    <div
-      className={cn(
-        'pointer-events-none absolute bottom-full z-30 mb-1 hidden w-max max-w-[290px] rounded-lg bg-[#fde8e8] px-3 py-2 text-[12px] leading-snug text-[#8a1f2d] shadow-md group-hover:block dark:bg-[#3b1d22] dark:text-[#f5a3ad]',
-        mine ? 'right-0' : 'left-0',
-      )}
-    >
-      {failText(m)}
-    </div>
-  );
-}
 
 const dayLabel = (iso: string): string => {
   const d = new Date(iso);
@@ -269,32 +255,59 @@ const dayLabel = (iso: string): string => {
   return format(d, "d 'de' MMMM 'de' yyyy", { locale: es }).toUpperCase();
 };
 
-/** Chulitos de WhatsApp: reloj (enviando), ✓, ✓✓, ✓✓ azul, ! rojo (clic = detalle). */
+/** Bolita ROJA de fallo: el motivo aparece al pasar el mouse POR LA BOLITA
+ *  (tooltip por portal — dentro de la burbuja lo recortaba el overflow). */
+function FailDot({ text }: { text?: string }) {
+  const [pos, setPos] = useState<null | { left: number; bottom: number }>(null);
+  return (
+    <>
+      <span
+        className="inline-flex cursor-help"
+        onMouseEnter={(e) => {
+          if (!text) return;
+          const r = e.currentTarget.getBoundingClientRect();
+          const W = 300;
+          setPos({
+            left: Math.min(Math.max(8, r.left - W + 24), Math.max(8, window.innerWidth - W - 8)),
+            bottom: window.innerHeight - r.top + 6,
+          });
+        }}
+        onMouseLeave={() => setPos(null)}
+      >
+        <AlertCircle className="h-[13px] w-[13px] text-[#f15c6d]" />
+      </span>
+      {pos && text
+        ? createPortal(
+            <span
+              className="wa-pop fixed z-[80] block w-[300px] rounded-lg bg-[#fde8e8] px-3 py-2 text-[12px] leading-snug text-[#8a1f2d] shadow-md dark:bg-[#3b1d22] dark:text-[#f5a3ad]"
+              style={{ left: pos.left, bottom: pos.bottom }}
+            >
+              {text}
+            </span>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
+/** Chulitos de WhatsApp: reloj (enviando), ✓, ✓✓, ✓✓ azul, bolita roja. */
 export function Ticks({
   status,
   pending,
   onMedia = false,
-  onFail,
+  failText: ft,
 }: {
   status: WaMessage['status'];
   pending: boolean;
   onMedia?: boolean;
-  /** Con handler, la bolita roja es CLICABLE (muestra el error). */
-  onFail?: () => void;
+  /** Motivo del fallo (tooltip al pasar el mouse por la bolita roja). */
+  failText?: string;
 }) {
   const base = onMedia ? 'text-white' : 'text-[#667781] dark:text-[#8696a0]';
   if (pending) return <Clock3 className={cn('h-[13px] w-[13px]', base)} />;
   if (!status) return null;
-  if (status === 'failed') {
-    const icon = <AlertCircle className="h-[13px] w-[13px] text-[#f15c6d]" />;
-    return onFail ? (
-      <button type="button" onClick={onFail} aria-label="Ver por qué falló" title="Ver por qué falló">
-        {icon}
-      </button>
-    ) : (
-      icon
-    );
-  }
+  if (status === 'failed') return <FailDot text={ft} />;
   const double = status !== 'sent';
   const color = status === 'read' ? 'text-[#53bdeb]' : base;
   return (
@@ -418,6 +431,7 @@ export function WhatsappPanel({
     reactions: [],
     status: null,
     error: null,
+    edited: false,
     starred: false,
     createdAt: new Date().toISOString(),
   });
@@ -1856,7 +1870,6 @@ function WaBubble({
             className={cn('group relative max-w-[85%] md:max-w-[65%]', pending && 'opacity-90')}
           >
             {!grouped ? <Tail mine={mine} /> : null}
-            <FailBanner m={m} mine={mine} />
             <MsgMenu m={m} mine={mine} actions={actions} open={menuOpen} onOpenChange={setMenuOpen} />
             <HoverActions m={m} mine={mine} actions={actions} onReact={() => setReactOpen(true)} />
             {reactOpen ? (
@@ -1915,7 +1928,6 @@ function BareMessage({
       }}
       className={cn('group relative flex max-w-[85%] flex-col md:max-w-[65%]', mine ? 'items-end' : 'items-start')}
     >
-      <FailBanner m={m} mine={mine} />
       <MsgMenu m={m} mine={mine} actions={actions} open={menuOpen} onOpenChange={onMenuChange} />
       <HoverActions m={m} mine={mine} actions={actions} onReact={() => setReactOpen(true)} />
       {reactOpen ? (
@@ -1944,7 +1956,7 @@ function BareMessage({
         )}
       >
         {timeOf(m.createdAt)}
-        {mine ? <Ticks status={m.status} pending={pending} /> : null}
+        {mine ? <Ticks status={m.status} pending={pending} failText={failText(m)} /> : null}
       </span>
       <ReactionChips message={m} mine={mine} bare actions={actions} />
     </div>
@@ -2044,9 +2056,10 @@ function BubbleContent({
       )}
     >
       {m.starred ? <Star className="h-[11px] w-[11px] fill-current" /> : null}
+      {m.edited ? <span>Editado</span> : null}
       {timeOf(m.createdAt)}
       {mine ? (
-        <Ticks status={m.status} pending={pending} onMedia={onMedia} />
+        <Ticks status={m.status} pending={pending} onMedia={onMedia} failText={failText(m)} />
       ) : null}
     </span>
   );
@@ -2242,6 +2255,26 @@ const fmtSecs = (s: number): string => {
   return `${m}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 };
 
+/** Audios ya ESCUCHADOS (verde -> azul en recibidos), persistente. */
+const HEARD_KEY = 'wa-heard-audios';
+const getHeardSet = (): Set<string> => {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(HEARD_KEY) ?? '[]');
+    return new Set(Array.isArray(raw) ? raw.map(String) : []);
+  } catch {
+    return new Set();
+  }
+};
+const addHeard = (id: string): void => {
+  try {
+    const s = getHeardSet();
+    s.add(id);
+    window.localStorage.setItem(HEARD_KEY, JSON.stringify([...s].slice(-500)));
+  } catch {
+    /* sin storage */
+  }
+};
+
 /**
  * Reproductor de nota de voz CALCADO a WhatsApp: avatar con microfono, play,
  * ONDAS REALES del audio (Web Audio API decodifica y saca los picos; si el
@@ -2309,11 +2342,21 @@ function WaAudio({
   const bars = peaks ?? fallbackBars(m.id);
   const progress = dur && dur > 0 ? Math.min(1, t / dur) : 0;
 
+  const [heard, setHeard] = useState(false);
+  useEffect(() => setHeard(getHeardSet().has(m.id)), [m.id]);
+
   const toggle = () => {
     const a = audioRef.current;
     if (!a) return;
-    if (playing) a.pause();
-    else void a.play();
+    if (playing) {
+      a.pause();
+    } else {
+      void a.play();
+      if (!heard) {
+        addHeard(m.id);
+        setHeard(true);
+      }
+    }
   };
   const seek = (e: React.MouseEvent<HTMLDivElement>) => {
     const a = audioRef.current;
@@ -2322,11 +2365,72 @@ function WaAudio({
     a.currentTime = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1) * dur;
   };
 
-  const barPlayed = mine ? 'bg-[#4f7d68] dark:bg-[#94b8ab]' : 'bg-[#7a8a93] dark:bg-[#8696a0]';
+  // Colores CALCADOS: enviado -> mic gris verdoso y bolita azul; recibido ->
+  // mic y bolita VERDES hasta escucharlo, luego azules.
+  const dotColor = mine ? '#4fc3f7' : heard ? '#4fc3f7' : '#00a884';
+  const micColor = mine ? '#7d9c95' : heard ? '#4fc3f7' : '#00a884';
+  const barPlayed = 'bg-[#7a8a93] dark:bg-[#8696a0]';
   const barIdle = mine ? 'bg-[#a9cbb7] dark:bg-[#1d5c4d]' : 'bg-[#cdd4d8] dark:bg-[#3b4a54]';
 
+  const avatar = (
+    // Avatar con microfono RELLENO: a la DERECHA en enviados, a la IZQUIERDA
+    // en recibidos (la Cloud API no expone la foto del contacto).
+    <span className="relative h-[42px] w-[42px] shrink-0">
+      <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#dfe5e7] text-[#9aa8b0] dark:bg-[#2a3942] dark:text-[#667781]">
+        <User className="h-7 w-7 translate-y-1" strokeWidth={1.6} fill="currentColor" />
+      </span>
+      <Mic
+        className={cn('absolute bottom-0 h-[15px] w-[15px]', mine ? '-right-1' : '-left-1')}
+        style={{ color: micColor }}
+        fill="currentColor"
+        strokeWidth={1}
+      />
+    </span>
+  );
+
+  const playBtn = (
+    // Play/pausa NEGRO y pequeño, centrado con el avatar.
+    <button
+      type="button"
+      onClick={toggle}
+      className="shrink-0 text-[#111b21] dark:text-[#e9edef]"
+      aria-label={playing ? 'Pausar' : 'Reproducir'}
+    >
+      {playing ? <Pause className="h-[22px] w-[22px] fill-current" /> : <Play className="h-[22px] w-[22px] fill-current" />}
+    </button>
+  );
+
+  const wave = (
+    <div className="min-w-0 flex-1 self-center">
+      {/* Onda + BOLITA siempre visible (al inicio si no se ha reproducido). */}
+      <div className="relative flex h-[22px] cursor-pointer items-center gap-[2px]" onClick={seek}>
+        {bars.map((v, i) => (
+          <span
+            key={i}
+            className={cn(
+              'w-[2.5px] shrink-0 rounded-full',
+              i / BAR_COUNT <= progress && (playing || t > 0) ? barPlayed : barIdle,
+            )}
+            style={{ height: `${Math.round(3 + v * 16)}px` }}
+          />
+        ))}
+        <span
+          className="absolute top-1/2 h-[12px] w-[12px] -translate-y-1/2 rounded-full shadow"
+          style={{ left: `calc(${(progress * 100).toFixed(2)}% - 6px)`, backgroundColor: dotColor }}
+        />
+      </div>
+      <div className="mt-0.5 flex items-center justify-between text-[11px] text-[#667781] dark:text-[#8696a0]">
+        <span>{fmtSecs(playing || t > 0 ? t : (dur ?? 0))}</span>
+        <span className="flex items-center gap-1">
+          {timeOf(m.createdAt)}
+          {mine ? <Ticks status={m.status} pending={pending} failText={failText(m)} /> : null}
+        </span>
+      </div>
+    </div>
+  );
+
   return (
-    <div className="flex w-[300px] max-w-full items-center gap-2.5 px-2 pb-1 pt-2">
+    <div className="flex w-[300px] max-w-full items-center gap-2.5 px-2 py-1.5">
       <audio
         ref={audioRef}
         src={src}
@@ -2347,49 +2451,20 @@ function WaAudio({
           if (Number.isFinite(d)) setDur(d);
         }}
       />
-      {/* Avatar con microfono (la Cloud API no expone la foto del contacto). */}
-      <span className="relative h-[45px] w-[45px] shrink-0">
-        <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#dfe5e7] text-[#9aa8b0] dark:bg-[#2a3942] dark:text-[#667781]">
-          <User className="h-7 w-7 translate-y-1" strokeWidth={1.6} fill="currentColor" />
-        </span>
-        <Mic className={cn('absolute -left-1 bottom-0 h-4 w-4', mine ? 'text-[#00a884]' : 'text-[#53bdeb]')} />
-      </span>
-      <button
-        type="button"
-        onClick={toggle}
-        className="shrink-0 text-[#667781] transition-colors hover:text-[#54656f] dark:text-[#8696a0]"
-        aria-label={playing ? 'Pausar' : 'Reproducir'}
-      >
-        {playing ? <Pause className="h-7 w-7 fill-current" /> : <Play className="h-7 w-7 fill-current" />}
-      </button>
-      <div className="min-w-0 flex-1">
-        {/* Onda + punto de progreso */}
-        <div className="relative flex h-[26px] cursor-pointer items-center gap-[2px]" onClick={seek}>
-          {bars.map((v, i) => (
-            <span
-              key={i}
-              className={cn(
-                'w-[2.5px] shrink-0 rounded-full',
-                i / BAR_COUNT <= progress && (playing || t > 0) ? barPlayed : barIdle,
-              )}
-              style={{ height: `${Math.round(4 + v * 20)}px` }}
-            />
-          ))}
-          {playing || t > 0 ? (
-            <span
-              className="absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-[#4fc3f7] shadow"
-              style={{ left: `calc(${(progress * 100).toFixed(2)}% - 6px)` }}
-            />
-          ) : null}
-        </div>
-        <div className="mt-0.5 flex items-center justify-between text-[11px] text-[#667781] dark:text-[#8696a0]">
-          <span>{fmtSecs(playing || t > 0 ? t : (dur ?? 0))}</span>
-          <span className="flex items-center gap-1">
-            {timeOf(m.createdAt)}
-            {mine ? <Ticks status={m.status} pending={pending} /> : null}
-          </span>
-        </div>
-      </div>
+      {/* Enviado: [avatar] [play] [onda] · Recibido: [play] [onda] [avatar] */}
+      {mine ? (
+        <>
+          {avatar}
+          {playBtn}
+          {wave}
+        </>
+      ) : (
+        <>
+          {playBtn}
+          {wave}
+          {avatar}
+        </>
+      )}
     </div>
   );
 }
