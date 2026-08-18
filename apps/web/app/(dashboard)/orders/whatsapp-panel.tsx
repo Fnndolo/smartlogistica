@@ -320,6 +320,16 @@ export function Ticks({
   );
 }
 
+/** Microfono RELLENO clasico (capsula + soporte en U + tallo), como WhatsApp. */
+function MicFilled({ className, style }: { className?: string; style?: React.CSSProperties }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} style={style} fill="currentColor" aria-hidden>
+      <rect x="8.6" y="1.5" width="6.8" height="12.6" rx="3.4" />
+      <path d="M5.6 10.7a1 1 0 0 1 1 1v.3a5.4 5.4 0 0 0 10.8 0v-.3a1 1 0 1 1 2 0v.3a7.41 7.41 0 0 1-6.4 7.33V22a1 1 0 1 1-2 0v-2.67a7.41 7.41 0 0 1-6.4-7.33v-.3a1 1 0 0 1 1-1z" />
+    </svg>
+  );
+}
+
 /** Cola de la burbuja (primera del grupo), como en WhatsApp Web. */
 function Tail({ mine }: { mine: boolean }) {
   return mine ? (
@@ -553,15 +563,50 @@ export function WhatsappPanel({
   );
 
   const sendFile = useMutation({
-    mutationFn: (file: File) => {
+    mutationFn: (vars: { file: File; tempId: string }) => {
       const fd = new FormData();
-      fd.append('file', file, file.name);
+      fd.append('file', vars.file, vars.file.name);
       return api.upload<WaMessage>(`${base}/file`, fd);
     },
-    onSuccess: (msg) => appendMessage(msg),
-    onError: (err) =>
-      toast.error(err instanceof ApiError ? err.message : 'No se pudo enviar el archivo'),
+    // OPTIMISTA: la foto/video/audio/archivo aparece AL INSTANTE con el
+    // archivo LOCAL (blob) y relojito; la subida corre por detras.
+    onMutate: (vars) => {
+      const t = vars.file.type;
+      const kind = t.startsWith('image/')
+        ? ('image' as const)
+        : t.startsWith('video/')
+          ? ('video' as const)
+          : t.startsWith('audio/')
+            ? ('audio' as const)
+            : ('file' as const);
+      appendMessage({
+        ...optimistic(''),
+        id: vars.tempId,
+        kind,
+        body: kind === 'file' ? vars.file.name : null,
+        mediaUrl: URL.createObjectURL(vars.file),
+      });
+    },
+    onSuccess: (msg, vars) => {
+      qc.setQueryData<WaThread>(['wa-thread', base], (old) => {
+        if (!old) return old;
+        const already = old.messages.some((x) => x.id === msg.id);
+        return {
+          ...old,
+          messages: already
+            ? old.messages.filter((x) => x.id !== vars.tempId)
+            : old.messages.map((x) => (x.id === vars.tempId ? msg : x)),
+        };
+      });
+    },
+    onError: (err, vars) => {
+      qc.setQueryData<WaThread>(['wa-thread', base], (old) =>
+        old ? { ...old, messages: old.messages.filter((x) => x.id !== vars.tempId) } : old,
+      );
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo enviar el archivo');
+    },
   });
+  const sendFileNow = (file: File) => sendFile.mutate({ file, tempId: `temp-${crypto.randomUUID()}` });
 
   // ===== Estado del composer estilo WhatsApp =====
   const [replyTo, setReplyTo] = useState<WaMessage | null>(null);
@@ -809,7 +854,7 @@ export function WhatsappPanel({
         const type = rec.mimeType || 'audio/webm';
         const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
         const file = new File([new Blob(recChunksRef.current, { type })], `nota-de-voz.${ext}`, { type });
-        sendFile.mutate(file);
+        sendFileNow(file);
       };
       mediaRecRef.current = rec;
       rec.start(250);
@@ -1261,11 +1306,11 @@ export function WhatsappPanel({
       {/* Composer estilo WhatsApp: + | emoji | campo | mic/enviar */}
       <div className="relative bg-[#f0f2f5] px-2 py-2 dark:bg-[#202c33] md:px-3">
         {/* Inputs ocultos del menu "+" */}
-        <input ref={fileRef} type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) sendFile.mutate(f); e.target.value = ''; }} />
-        <input ref={docRef} type="file" className="hidden" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip,.rar" onChange={(e) => { const f = e.target.files?.[0]; if (f) sendFile.mutate(f); e.target.value = ''; }} />
-        <input ref={mediaRef} type="file" className="hidden" accept="image/*,video/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) sendFile.mutate(f); e.target.value = ''; }} />
-        <input ref={cameraRef} type="file" className="hidden" accept="image/*" capture="environment" onChange={(e) => { const f = e.target.files?.[0]; if (f) sendFile.mutate(f); e.target.value = ''; }} />
-        <input ref={audioPickRef} type="file" className="hidden" accept="audio/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) sendFile.mutate(f); e.target.value = ''; }} />
+        <input ref={fileRef} type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) sendFileNow(f); e.target.value = ''; }} />
+        <input ref={docRef} type="file" className="hidden" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip,.rar" onChange={(e) => { const f = e.target.files?.[0]; if (f) sendFileNow(f); e.target.value = ''; }} />
+        <input ref={mediaRef} type="file" className="hidden" accept="image/*,video/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) sendFileNow(f); e.target.value = ''; }} />
+        <input ref={cameraRef} type="file" className="hidden" accept="image/*" capture="environment" onChange={(e) => { const f = e.target.files?.[0]; if (f) sendFileNow(f); e.target.value = ''; }} />
+        <input ref={audioPickRef} type="file" className="hidden" accept="audio/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) sendFileNow(f); e.target.value = ''; }} />
         <input
           ref={stickerFileRef}
           type="file"
@@ -1409,11 +1454,10 @@ export function WhatsappPanel({
               <button
                 type="button"
                 onClick={() => void startRec()}
-                disabled={sendFile.isPending}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[#54656f] transition-colors hover:bg-black/5 disabled:opacity-50 dark:text-[#8696a0] dark:hover:bg-white/5"
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-[#54656f] transition-colors hover:bg-black/5 dark:text-[#8696a0] dark:hover:bg-white/5"
                 aria-label="Grabar nota de voz"
               >
-                {sendFile.isPending ? <Loader2 className="h-5 w-5 animate-spin" /> : <Mic className="h-6 w-6" />}
+                <Mic className="h-6 w-6" />
               </button>
             )}
           </div>
@@ -2375,62 +2419,21 @@ function WaAudio({
   const avatar = (
     // Avatar con microfono RELLENO: a la DERECHA en enviados, a la IZQUIERDA
     // en recibidos (la Cloud API no expone la foto del contacto).
-    <span className="relative h-[42px] w-[42px] shrink-0">
+    <span className="relative h-[45px] w-[45px] shrink-0 self-center">
       <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#dfe5e7] text-[#9aa8b0] dark:bg-[#2a3942] dark:text-[#667781]">
-        <User className="h-7 w-7 translate-y-1" strokeWidth={1.6} fill="currentColor" />
+        <User className="h-8 w-8 translate-y-1" strokeWidth={1.6} fill="currentColor" />
       </span>
-      <Mic
-        className={cn('absolute bottom-0 h-[15px] w-[15px]', mine ? '-right-1' : '-left-1')}
+      <MicFilled
+        className={cn('absolute bottom-0 h-[16px] w-[16px]', mine ? '-right-1.5' : '-left-1.5')}
         style={{ color: micColor }}
-        fill="currentColor"
-        strokeWidth={1}
       />
     </span>
   );
 
-  const playBtn = (
-    // Play/pausa NEGRO y pequeño, centrado con el avatar.
-    <button
-      type="button"
-      onClick={toggle}
-      className="shrink-0 text-[#111b21] dark:text-[#e9edef]"
-      aria-label={playing ? 'Pausar' : 'Reproducir'}
-    >
-      {playing ? <Pause className="h-[22px] w-[22px] fill-current" /> : <Play className="h-[22px] w-[22px] fill-current" />}
-    </button>
-  );
-
-  const wave = (
-    <div className="min-w-0 flex-1 self-center">
-      {/* Onda + BOLITA siempre visible (al inicio si no se ha reproducido). */}
-      <div className="relative flex h-[22px] cursor-pointer items-center gap-[2px]" onClick={seek}>
-        {bars.map((v, i) => (
-          <span
-            key={i}
-            className={cn(
-              'w-[2.5px] shrink-0 rounded-full',
-              i / BAR_COUNT <= progress && (playing || t > 0) ? barPlayed : barIdle,
-            )}
-            style={{ height: `${Math.round(3 + v * 16)}px` }}
-          />
-        ))}
-        <span
-          className="absolute top-1/2 h-[12px] w-[12px] -translate-y-1/2 rounded-full shadow"
-          style={{ left: `calc(${(progress * 100).toFixed(2)}% - 6px)`, backgroundColor: dotColor }}
-        />
-      </div>
-      <div className="mt-0.5 flex items-center justify-between text-[11px] text-[#667781] dark:text-[#8696a0]">
-        <span>{fmtSecs(playing || t > 0 ? t : (dur ?? 0))}</span>
-        <span className="flex items-center gap-1">
-          {timeOf(m.createdAt)}
-          {mine ? <Ticks status={m.status} pending={pending} failText={failText(m)} /> : null}
-        </span>
-      </div>
-    </div>
-  );
-
   return (
-    <div className="flex w-[300px] max-w-full items-center gap-2.5 px-2 py-1.5">
+    // ~2cm de alto real, con TODO centrado a la linea media: play alineado a
+    // la ONDA (la bolita a la altura de la punta del play) y avatar al centro.
+    <div className="flex min-h-[66px] w-[300px] max-w-full items-center gap-2.5 px-2 py-2.5">
       <audio
         ref={audioRef}
         src={src}
@@ -2451,20 +2454,50 @@ function WaAudio({
           if (Number.isFinite(d)) setDur(d);
         }}
       />
-      {/* Enviado: [avatar] [play] [onda] · Recibido: [play] [onda] [avatar] */}
-      {mine ? (
-        <>
-          {avatar}
-          {playBtn}
-          {wave}
-        </>
-      ) : (
-        <>
-          {playBtn}
-          {wave}
-          {avatar}
-        </>
-      )}
+      {mine ? avatar : null}
+      <div className="min-w-0 flex-1">
+        {/* Linea superior: play (negro, pequeño) + onda con su bolita. */}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={toggle}
+            className="shrink-0 text-[#111b21] dark:text-[#e9edef]"
+            aria-label={playing ? 'Pausar' : 'Reproducir'}
+          >
+            {playing ? (
+              <Pause className="h-[18px] w-[18px] fill-current" />
+            ) : (
+              <Play className="h-[18px] w-[18px] fill-current" />
+            )}
+          </button>
+          <div className="relative flex h-[20px] min-w-0 flex-1 cursor-pointer items-center gap-[2px]" onClick={seek}>
+            {bars.map((v, i) => (
+              <span
+                key={i}
+                className={cn(
+                  'w-[2.5px] shrink-0 rounded-full',
+                  i / BAR_COUNT <= progress && (playing || t > 0) ? barPlayed : barIdle,
+                )}
+                style={{ height: `${Math.round(3 + v * 15)}px` }}
+              />
+            ))}
+            {/* Bolita SIEMPRE visible (al inicio si no se ha reproducido). */}
+            <span
+              className="absolute top-1/2 h-[12px] w-[12px] -translate-y-1/2 rounded-full shadow"
+              style={{ left: `calc(${(progress * 100).toFixed(2)}% - 6px)`, backgroundColor: dotColor }}
+            />
+          </div>
+        </div>
+        {/* Debajo: duracion (bajo la onda) y hora+chulitos a la derecha. */}
+        <div className="mt-1 flex items-center justify-between pl-[26px] text-[11px] text-[#667781] dark:text-[#8696a0]">
+          <span>{fmtSecs(playing || t > 0 ? t : (dur ?? 0))}</span>
+          <span className="flex items-center gap-1">
+            {timeOf(m.createdAt)}
+            {mine ? <Ticks status={m.status} pending={pending} failText={failText(m)} /> : null}
+          </span>
+        </div>
+      </div>
+      {!mine ? avatar : null}
     </div>
   );
 }

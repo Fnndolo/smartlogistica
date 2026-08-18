@@ -443,14 +443,17 @@ export class WhatsappService {
     try {
       const kind = waTypeOf(file.mimetype || '');
       if (kind === 'audio') {
-        // NOTAS DE VOZ: subir a Meta y enviar por id (por link firmado Meta
-        // fallaba con 131053 al validar la descarga, igual que los stickers).
+        // NOTAS DE VOZ: WhatsApp NO acepta webm (lo que graban los navegadores
+        // Chromium) ni links firmados (131053). Se TRANSCODIFICA a OGG/Opus
+        // (el formato de nota de voz real) y se sube por media id.
+        const ogg = await this.toOggOpus(file.buffer, file.mimetype || '');
+        const up = ogg ?? { buffer: file.buffer, mime: file.mimetype || 'audio/mp4' };
         const mediaId = await this.dialog360.uploadMedia(
           d360!.apiKey,
           d360!.mode,
-          file.buffer,
-          file.mimetype || 'audio/mp4',
-          name,
+          up.buffer,
+          up.mime,
+          ogg ? 'nota-de-voz.ogg' : name,
         );
         if (!mediaId) throw new BadRequestException('Meta no devolvió el id del audio');
         wamid = await this.dialog360.sendMediaId(d360!.http, d360!.mode, `57${phone}`, 'audio', mediaId);
@@ -1106,6 +1109,41 @@ export class WhatsappService {
     });
     await this.publishWaMessage(tenantId, prisma, row);
     return this.toDto(row);
+  }
+
+  /**
+   * Transcodifica CUALQUIER audio del navegador a OGG/Opus (el formato de
+   * nota de voz que WhatsApp SI acepta) con ffmpeg-static. null si falla.
+   */
+  private async toOggOpus(buffer: Buffer, mime: string): Promise<{ buffer: Buffer; mime: string } | null> {
+    try {
+      const ffmpegPath = (await import('ffmpeg-static')).default as unknown as string | null;
+      if (!ffmpegPath) return null;
+      const [os, fs, path, cp, util] = await Promise.all([
+        import('node:os'),
+        import('node:fs/promises'),
+        import('node:path'),
+        import('node:child_process'),
+        import('node:util'),
+      ]);
+      const run = util.promisify(cp.execFile);
+      const inExt = mime.includes('mp4') ? 'm4a' : mime.includes('ogg') ? 'ogg' : 'webm';
+      const inPath = path.join(os.tmpdir(), `${randomUUID()}.${inExt}`);
+      const outPath = path.join(os.tmpdir(), `${randomUUID()}.ogg`);
+      await fs.writeFile(inPath, buffer);
+      await run(
+        ffmpegPath,
+        ['-y', '-i', inPath, '-vn', '-c:a', 'libopus', '-b:a', '32k', '-ar', '48000', '-ac', '1', outPath],
+        { timeout: 30_000 },
+      );
+      const out = await fs.readFile(outPath);
+      await fs.unlink(inPath).catch(() => null);
+      await fs.unlink(outPath).catch(() => null);
+      return out.length > 0 ? { buffer: out, mime: 'audio/ogg' } : null;
+    } catch (err) {
+      this.logger.warn(`Transcode a ogg fallo: ${err instanceof Error ? err.message : err}`);
+      return null;
+    }
   }
 
   /** Telefono (10 digitos) + provider del pedido, o error claro. */
