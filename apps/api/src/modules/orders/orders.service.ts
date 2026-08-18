@@ -1806,13 +1806,23 @@ export class OrdersService {
     );
 
     // Registrar en el pedido: mensaje de sistema + evento en la actividad.
+    // Si Alegra registro un total DISTINTO al enviado (el "peso perdido"),
+    // que quede visible en el chat en vez de descubrirse despues.
+    const sentTotal = input.lines.reduce((s, l) => s + Math.round(l.price) * l.quantity, 0);
+    const emittedTotal = Number(result.total);
+    const totalMismatch =
+      Number.isFinite(emittedTotal) && Math.abs(emittedTotal - sentTotal) >= 0.5;
     await prisma.orderMessage.create({
       data: {
         orderId,
         authorId: auth.userId,
         authorName: displayName(auth),
         kind: 'system',
-        body: `Factura ${result.number} emitida en Alegra (${result.status}).`,
+        body:
+          `Factura ${result.number} emitida en Alegra (${result.status}).` +
+          (totalMismatch
+            ? ` ⚠️ OJO: Alegra la registró por $${emittedTotal} y se enviaron $${sentTotal} — revisar en Alegra.`
+            : ''),
         imeis: [],
       },
     });

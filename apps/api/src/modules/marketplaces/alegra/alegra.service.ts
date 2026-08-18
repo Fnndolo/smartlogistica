@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { BadRequestException } from '@nestjs/common';
 import { isAxiosError, type AxiosInstance } from 'axios';
 import type {
@@ -159,6 +159,8 @@ interface AlegraConnectionRow {
 
 @Injectable()
 export class AlegraService {
+  private readonly logger = new Logger(AlegraService.name);
+
   constructor(
     private readonly client: AlegraClient,
     private readonly envelope: EnvelopeService,
@@ -572,7 +574,10 @@ export class AlegraService {
       }
 
       // 3. Total + fecha + vendedor del usuario (si eligio uno para esta sede).
-      const total = lines.reduce((s, l) => s + l.price * l.quantity, 0);
+      // Precios SIEMPRE en pesos ENTEROS: cualquier decimal que se cuele haria
+      // que Alegra recorte centavos y la factura salga con pesos de menos.
+      const priced = lines.map((l) => ({ ...l, price: Math.round(l.price) }));
+      const total = priced.reduce((s, l) => s + l.price * l.quantity, 0);
       const today = new Date().toISOString().slice(0, 10);
       const sellerPref = await getTenantContext()
         .prisma.alegraSellerPref.findUnique({
@@ -606,7 +611,7 @@ export class AlegraService {
         // En marketplace, "anotaciones" siempre dice ADDI; montado a mano, nada.
         ...(manual ? {} : { anotation: 'ADDI' }),
         ...(sellerPref ? { seller: Number(sellerPref.sellerId) || sellerPref.sellerId } : {}),
-        items: lines.map((l) => ({
+        items: priced.map((l) => ({
           id: l.itemId,
           price: l.price,
           quantity: l.quantity,
@@ -614,6 +619,15 @@ export class AlegraService {
         })),
         ...(payments.length > 0 ? { payments } : {}),
       });
+
+      // VERIFICACION del peso perdido: si Alegra registro un total distinto al
+      // enviado, que quede LOGUEADO y visible (el caller lo anota en el chat).
+      const emitted = Number(created.total);
+      if (Number.isFinite(emitted) && Math.abs(emitted - total) >= 0.5) {
+        this.logger.warn(
+          `Factura ${created.numberTemplate?.fullNumber ?? created.id}: Alegra registro ${emitted} pero se enviaron ${total} (dif ${emitted - total})`,
+        );
+      }
 
       // El PDF ya NO se descarga aqui: alarga el boton ~1-2s y solo se usa
       // para adjuntar al chat. Se trae en background con invoicePdf().

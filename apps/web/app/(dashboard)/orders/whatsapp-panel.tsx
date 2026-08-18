@@ -28,7 +28,7 @@ import {
   Reply,
   Send,
   Smile,
-  SmilePlus,
+
   Star,
   Sticker as StickerIcon,
   Trash2,
@@ -1204,13 +1204,31 @@ export interface BubbleActions {
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
 
-/** Menu contextual del mensaje (flechita al pasar el mouse, como WhatsApp). */
+/**
+ * Menu contextual del mensaje (flechita al pasar el mouse), calcado a
+ * WhatsApp: la barra de REACCIONES siempre visible encima del menu; se abre
+ * hacia ABAJO desde la mitad del mensaje (un poco encimado) si hay espacio, y
+ * si no, hacia ARRIBA alineado a la esquina superior; con mini animacion.
+ */
 function MsgMenu({ m, mine, actions }: { m: WaMessage; mine: boolean; actions: BubbleActions }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState<null | { up: boolean }>(null);
   const [reacts, setReacts] = useState(false);
   const close = () => {
-    setOpen(false);
+    setOpen(null);
     setReacts(false);
+  };
+  const POPUP_H = 440; // reacciones + menu, aprox
+  const openMenu = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const anchor = (e.currentTarget.parentElement ?? e.currentTarget) as HTMLElement;
+    const rect = anchor.getBoundingClientRect();
+    const below = window.innerHeight - rect.bottom;
+    const above = rect.top;
+    setOpen({ up: below < POPUP_H && above > below });
+  };
+  const pickReaction = (emoji: string) => {
+    actions.react(m, emoji);
+    pushRecentEmoji(emoji);
+    close();
   };
   const item = (
     icon: typeof Reply,
@@ -1238,7 +1256,7 @@ function MsgMenu({ m, mine, actions }: { m: WaMessage; mine: boolean; actions: B
     <>
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={openMenu}
         className={cn(
           'absolute right-0.5 top-0.5 z-10 rounded-full p-0.5 opacity-0 transition-opacity group-hover:opacity-100',
           mine
@@ -1254,79 +1272,101 @@ function MsgMenu({ m, mine, actions }: { m: WaMessage; mine: boolean; actions: B
           <button type="button" className="fixed inset-0 z-30 cursor-default" onClick={close} aria-label="Cerrar" />
           <div
             className={cn(
-              'shadow-float absolute top-6 z-40 rounded-xl border border-border bg-white py-1.5 dark:bg-[#233138]',
-              reacts ? 'px-1' : 'w-60',
-              mine ? 'right-0' : 'left-0',
+              'wa-pop absolute z-40 flex w-64 flex-col gap-1.5',
+              mine ? 'right-0 items-end' : 'left-0 items-start',
+              // ABAJO: desde la mitad del mensaje, un poco encimado.
+              // ARRIBA: pegado sobre la esquina superior.
+              open.up ? 'bottom-[calc(100%-6px)]' : 'top-[calc(50%-4px)]',
             )}
+            style={{ transformOrigin: `${open.up ? 'bottom' : 'top'} ${mine ? 'right' : 'left'}` }}
           >
-            {reacts ? (
-              <div className="flex items-center gap-0.5 px-1 py-0.5">
-                {QUICK_REACTIONS.map((e) => (
-                  <button
-                    key={e}
-                    type="button"
-                    className="rounded-full p-1.5 text-[20px] transition-transform hover:scale-125"
-                    onClick={() => {
-                      actions.react(m, e);
-                      close();
-                    }}
-                  >
-                    {e}
-                  </button>
-                ))}
-                {m.reactions.some((r) => r.mine) ? (
-                  <button
-                    type="button"
-                    className="rounded-full p-1.5 text-[#8696a0] hover:bg-black/5 dark:hover:bg-white/10"
-                    onClick={() => {
-                      actions.react(m, '');
-                      close();
-                    }}
-                    aria-label="Quitar reacción"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                ) : null}
-              </div>
-            ) : (
-              <>
-                {item(Reply, 'Responder', () => {
-                  actions.reply(m);
-                  close();
-                })}
-                {item(SmilePlus, 'Reaccionar', () => setReacts(true))}
-                {item(Forward, 'Reenviar', () => {
-                  actions.forward(m);
-                  close();
-                })}
-                {item(Star, m.starred ? 'Quitar destacado' : 'Destacar', () => {
-                  actions.star(m);
-                  close();
-                })}
-                {m.kind === 'sticker' && m.mediaUrl
-                  ? item(Heart, 'Añadir a Favoritos', () => {
-                      actions.favSticker(m);
-                      close();
-                    })
-                  : null}
-                {m.kind === 'text' && m.body
-                  ? item(Copy, 'Copiar', () => {
-                      void navigator.clipboard.writeText(m.body ?? '');
-                      close();
-                    })
-                  : null}
-                <div className="my-1 border-t border-border" />
-                {item(
-                  Trash2,
-                  'Eliminar',
-                  () => {
-                    actions.remove(m);
+            {/* Barra de REACCIONES siempre encima del menu (como WhatsApp). */}
+            <div className="shadow-float flex items-center gap-0.5 rounded-full border border-border bg-white px-1.5 py-1 dark:bg-[#233138]">
+              {QUICK_REACTIONS.map((e) => (
+                <button
+                  key={e}
+                  type="button"
+                  className="rounded-full p-1 text-[22px] leading-[28px] transition-transform hover:scale-125"
+                  onClick={() => pickReaction(e)}
+                >
+                  {e}
+                </button>
+              ))}
+              {m.reactions.some((r) => r.mine) ? (
+                <button
+                  type="button"
+                  className="ml-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-black/5 text-[#54656f] hover:bg-black/10 dark:bg-white/10 dark:text-[#8696a0]"
+                  onClick={() => pickReaction('')}
+                  aria-label="Quitar reacción"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="ml-0.5 flex h-8 w-8 items-center justify-center rounded-full bg-black/5 text-[#54656f] hover:bg-black/10 dark:bg-white/10 dark:text-[#8696a0]"
+                  onClick={() => setReacts((v) => !v)}
+                  aria-label="Más emojis"
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            <div className="shadow-float w-60 rounded-xl border border-border bg-white py-1.5 dark:bg-[#233138]">
+              {reacts ? (
+                <div className="h-52 overflow-y-auto px-2">
+                  <div className="flex flex-wrap">
+                    {EMOJI_GROUPS.flatMap((g) => splitEmojis(g.list)).map((e, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => pickReaction(e)}
+                        className="rounded-lg p-1 text-[22px] leading-[28px] transition-transform hover:scale-110"
+                      >
+                        {e}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {item(Reply, 'Responder', () => {
+                    actions.reply(m);
                     close();
-                  },
-                  true,
-                )}
-              </>
-            )}
+                  })}
+                  {m.kind === 'text' && m.body
+                    ? item(Copy, 'Copiar', () => {
+                        void navigator.clipboard.writeText(m.body ?? '');
+                        close();
+                      })
+                    : null}
+                  {item(Forward, 'Reenviar', () => {
+                    actions.forward(m);
+                    close();
+                  })}
+                  {item(Star, m.starred ? 'Quitar destacado' : 'Destacar', () => {
+                    actions.star(m);
+                    close();
+                  })}
+                  {m.kind === 'sticker' && m.mediaUrl
+                    ? item(Heart, 'Añadir a Favoritos', () => {
+                        actions.favSticker(m);
+                        close();
+                      })
+                    : null}
+                  <div className="my-1 border-t border-border" />
+                  {item(
+                    Trash2,
+                    'Eliminar',
+                    () => {
+                      actions.remove(m);
+                      close();
+                    },
+                    true,
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </>
       ) : null}
