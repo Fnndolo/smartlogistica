@@ -74,6 +74,14 @@ export function WaBubble({
         // DOBLE CLIC solo en el espacio LATERAL de la fila: responder (con
         // destello verde). DENTRO de la burbuja no aplica — ahi el doble
         // clic queda libre (seleccionar texto, controles del audio, etc.).
+        onMouseDown={(e) => {
+          // Segundo clic del doble clic FUERA de la burbuja: se frena aqui
+          // para que el navegador no seleccione (el azulito de medio segundo).
+          if (e.detail < 2) return;
+          const t = e.target as Node;
+          if (bubbleRef.current?.contains(t) || bareRef.current?.contains(t)) return;
+          e.preventDefault();
+        }}
         onDoubleClick={(e) => {
           const t = e.target as Node;
           if (bubbleRef.current?.contains(t) || bareRef.current?.contains(t)) return;
