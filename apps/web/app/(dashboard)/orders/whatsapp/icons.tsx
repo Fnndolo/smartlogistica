@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertCircle, Clock3 } from 'lucide-react';
+import { AlertCircle } from 'lucide-react';
 import type { WaMessage } from '@smartlogistica/shared';
 
 import { cn } from '@/lib/utils';
@@ -75,22 +75,7 @@ function FailDot({ text }: { text?: string }) {
   );
 }
 
-/** Relojito con GRACIA de 800ms: si el envio confirma antes, jamas se ve
- * (ocupa su espacio invisible para que la fila de la hora no salte). */
-function ClockDelayed({ className }: { className?: string }) {
-  const [show, setShow] = useState(false);
-  useEffect(() => {
-    const t = window.setTimeout(() => setShow(true), 800);
-    return () => window.clearTimeout(t);
-  }, []);
-  return show ? (
-    <Clock3 className={className} />
-  ) : (
-    <span className="inline-block h-[13px] w-[13px]" aria-hidden />
-  );
-}
-
-/** Chulitos de WhatsApp: reloj (enviando), ✓, ✓✓, ✓✓ azul, bolita roja. */
+/** Chulitos de WhatsApp: ✓ (al enviar), ✓✓ (entregado), ✓✓ azul, bolita roja. */
 export function Ticks({
   status,
   pending,
@@ -104,13 +89,12 @@ export function Ticks({
   failText?: string;
 }) {
   const base = onMedia ? 'text-white' : 'text-[#667781] dark:text-[#8696a0]';
-  // 'queued' = aceptado por NUESTRO server (el envio a Meta va en cola). Como
-  // WhatsApp real: el relojito solo APARECE si el envio se demora (>800ms) —
-  // con buen internet nunca se ve; el chulito llega directo por SSE.
-  if (pending || status === 'queued') return <ClockDelayed className={cn('h-[13px] w-[13px]', base)} />;
-  if (!status) return null;
+  if (!status && !pending) return null;
   if (status === 'failed') return <FailDot text={ft} />;
-  const double = status !== 'sent';
+  // El PRIMER chulito se pinta desde que se presiona enviar (pending/queued/
+  // sent): ancho constante -> la hora nunca queda pegada ni salta. El SEGUNDO
+  // solo cuando Meta confirma la ENTREGA real; un fallo lo vuelve bolita roja.
+  const double = status === 'delivered' || status === 'read';
   const color = status === 'read' ? 'text-[#53bdeb]' : base;
   return (
     <svg viewBox="0 0 18 11" className={cn('h-[11px] w-[18px] shrink-0', color)} fill="none">
