@@ -1359,6 +1359,10 @@ export class WhatsappService {
             where: { id: rowId, status: 'queued' },
             data: { status: wamid ? 'sent' : null },
           });
+          // ¿Meta ya habia avisado delivered/read ANTES de devolvernos el
+          // wamid? El estado quedo en el buzon: aplicarlo YA (el publish de
+          // abajo lo lleva al panel de una).
+          if (wamid) await this.webhook.applyStashedStatus(prisma, wamid);
         } catch (err) {
           const detail =
             err instanceof HttpException

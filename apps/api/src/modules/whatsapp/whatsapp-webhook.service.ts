@@ -335,7 +335,11 @@ export class WhatsappWebhookService {
     const detail = err ? `${err.code ?? ''} ${err.title ?? err.message ?? ''}`.trim() : 'motivo desconocido';
 
     const msg = await prisma.waMessage.findUnique({ where: { externalId: wamid } });
-    if (!msg) return null;
+    if (!msg) {
+      // Fallo que llego ANTES que el wamid quede escrito: al buzon.
+      this.stashStatus(wamid, 'failed', `Meta: ${detail}`);
+      return null;
+    }
     if (msg.status === 'failed') return null; // ya procesado (reintentos del webhook)
     // Bolita roja + detalle del error EN el mensaje (nada de notas al hilo:
     // el detalle se ve al tocar la bolita). DTO completo: sin refetch.
@@ -377,6 +381,48 @@ export class WhatsappWebhookService {
     if (row) await this.publisher.publishWaMessage(tenantId, prisma, row);
   }
 
+  /**
+   * BUZON de estados ADELANTADOS: Meta a veces entrega el mensaje y avisa
+   * 'delivered' ANTES de que nuestra respuesta HTTP con el wamid termine de
+   * volver (el mensaje aun no tiene externalId y el estado se perderia — el
+   * ✓✓ quedaba pegado hasta un reintento). Se guarda aqui y se aplica apenas
+   * el wamid quede escrito (dispatchWaSend / eco de coexistencia).
+   */
+  private readonly statusStash = new Map<string, { status: string; error: string | null; at: number }>();
+
+  private stashStatus(wamid: string, status: string, error: string | null): void {
+    const rank: Record<string, number> = { sent: 1, delivered: 2, read: 3, failed: 4 };
+    const prev = this.statusStash.get(wamid);
+    if (!prev || (rank[status] ?? 0) > (rank[prev.status] ?? 0)) {
+      this.statusStash.set(wamid, { status, error, at: Date.now() });
+    }
+    if (this.statusStash.size > 500) {
+      const cutoff = Date.now() - 600_000;
+      for (const [k, v] of this.statusStash) if (v.at < cutoff) this.statusStash.delete(k);
+    }
+  }
+
+  /** Aplica (SIN publicar) el estado guardado de un wamid recien escrito.
+   * Devuelve true si actualizo la fila (el caller re-lee y publica). */
+  async applyStashedStatus(prisma: PrismaClient, wamid: string | null): Promise<boolean> {
+    if (!wamid) return false;
+    const hit = this.statusStash.get(wamid);
+    if (!hit) return false;
+    this.statusStash.delete(wamid);
+    const rank: Record<string, number> = { queued: 0, sent: 1, delivered: 2, read: 3, failed: 4 };
+    const row = await prisma.waMessage.findUnique({
+      where: { externalId: wamid },
+      select: { id: true, status: true },
+    });
+    if (!row) return false;
+    if ((rank[row.status ?? ''] ?? 0) >= (rank[hit.status] ?? 0)) return false;
+    await prisma.waMessage.update({
+      where: { id: row.id },
+      data: { status: hit.status, ...(hit.error ? { error: hit.error } : {}) },
+    });
+    return true;
+  }
+
   private async applyDeliveryStatus(
     tenantId: string,
     prisma: PrismaClient,
@@ -388,7 +434,11 @@ export class WhatsappWebhookService {
       where: { externalId: String(s.id) },
       select: { id: true, phone: true, status: true },
     });
-    if (!row) return null;
+    if (!row) {
+      // Llego ANTES que el mensaje (carrera con el wamid): al buzon.
+      this.stashStatus(String(s.id), next, null);
+      return null;
+    }
     if ((rank[row.status ?? ''] ?? 0) >= (rank[next] ?? 0)) return null;
     await prisma.waMessage.update({ where: { id: row.id }, data: { status: next } });
     // Chulito INSTANTANEO: DTO completo, sin refetch.
@@ -627,9 +677,14 @@ export class WhatsappWebhookService {
           externalId,
         },
       });
+      // ¿Un estado llego ANTES que este mensaje (eco de coexistencia)? Aplicarlo ya.
+      let fresh = row;
+      if (externalId && (await this.applyStashedStatus(prisma, externalId))) {
+        fresh = (await prisma.waMessage.findUnique({ where: { id: row.id } })) ?? row;
+      }
       // Pintado INSTANTANEO en los paneles abiertos (el mensaje va en el
       // evento). En import de historial NO (pueden ser miles).
-      if (opts.instant !== false) await this.publisher.publishWaMessage(tenantId, prisma, row);
+      if (opts.instant !== false) await this.publisher.publishWaMessage(tenantId, prisma, fresh);
 
       // Refrescar el nombre del contacto si WhatsApp lo trae.
       const name = names.get(String(rawPhone));
