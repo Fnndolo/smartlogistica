@@ -63,8 +63,9 @@ export const waMessageSchema = z.object({
   replyTo: waReplyRefSchema.nullable().default(null),
   /** Reacciones sobre el mensaje (emoji chips): mine = del negocio. */
   reactions: z.array(z.object({ emoji: z.string(), mine: z.boolean() })).default([]),
-  /** Chulitos de salientes: sent | delivered | read | failed (null = sin dato). */
-  status: z.enum(['sent', 'delivered', 'read', 'failed']).nullable().default(null),
+  /** Chulitos de salientes: queued (relojito: aceptado por NUESTRO server,
+   *  el envio a Meta va en cola) | sent | delivered | read | failed. */
+  status: z.enum(['queued', 'sent', 'delivered', 'read', 'failed']).nullable().default(null),
   /** Detalle del FALLO de entrega (se muestra al tocar la bolita roja). */
   error: z.string().nullable().default(null),
   /** Editado desde el celular ("Editado" junto a la hora). */
@@ -177,8 +178,8 @@ export const waInboxItemSchema = z.object({
   lastKind: waMessageKindSchema,
   lastBody: z.string().nullable(),
   lastDirection: z.enum(['in', 'out']),
-  /** Chulitos del ultimo mensaje SALIENTE (sent/delivered/read/failed). */
-  lastStatus: z.enum(['sent', 'delivered', 'read', 'failed']).nullable().default(null),
+  /** Chulitos del ultimo mensaje SALIENTE (queued/sent/delivered/read/failed). */
+  lastStatus: z.enum(['queued', 'sent', 'delivered', 'read', 'failed']).nullable().default(null),
   /** Mensajes entrantes sin leer POR ESTE usuario (contador verde). */
   unread: z.number().int().min(0),
   /** Operaciones de bandeja (menu contextual), globales del negocio. */

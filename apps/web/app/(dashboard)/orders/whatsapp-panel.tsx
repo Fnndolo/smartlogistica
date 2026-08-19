@@ -303,7 +303,9 @@ export function Ticks({
   failText?: string;
 }) {
   const base = onMedia ? 'text-white' : 'text-[#667781] dark:text-[#8696a0]';
-  if (pending) return <Clock3 className={cn('h-[13px] w-[13px]', base)} />;
+  // 'queued' = aceptado por NUESTRO server (el envio a Meta va en cola):
+  // mismo relojito que el envio optimista; el SSE lo sube a chulito.
+  if (pending || status === 'queued') return <Clock3 className={cn('h-[13px] w-[13px]', base)} />;
   if (!status) return null;
   if (status === 'failed') return <FailDot text={ft} />;
   const double = status !== 'sent';

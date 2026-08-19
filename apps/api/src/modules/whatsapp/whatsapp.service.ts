@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ForbiddenException,
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
@@ -285,6 +286,23 @@ export class WhatsappService {
     await prisma.dialog360Connection.deleteMany({});
   }
 
+  /** Plantillas de la WABA con CACHE de 60s (cada relectura cuesta ~0.5-1s). */
+  private readonly tplCache = new Map<
+    string,
+    { at: number; list: Awaited<ReturnType<Dialog360Client['listTemplates']>> }
+  >();
+
+  private async cachedTemplates(
+    tenantId: string,
+    http: AxiosInstance,
+  ): Promise<Awaited<ReturnType<Dialog360Client['listTemplates']>>> {
+    const hit = this.tplCache.get(tenantId);
+    if (hit && Date.now() - hit.at < 60_000) return hit.list;
+    const list = await this.dialog360.listTemplates(http);
+    this.tplCache.set(tenantId, { at: Date.now(), list });
+    return list;
+  }
+
   /** Cliente 360dialog listo (null si no hay conexion). Prisma explicito: lo usa tambien el webhook. */
   private async dialog360OrNull(
     tenantId: string,
@@ -398,18 +416,8 @@ export class WhatsappService {
         select: { id: true, externalId: true },
       });
     }
-    let wamid: string | null = null;
-    try {
-      wamid = await this.dialog360.sendText(
-        d360!.http,
-        d360!.mode,
-        `57${phone}`,
-        input.text,
-        quoted?.externalId ?? null,
-      );
-    } catch (err) {
-      throw this.translateError(err, 'No se pudo enviar el mensaje');
-    }
+    // ACK PRIMERO: el mensaje queda YA en el hilo con relojito ('queued') y
+    // el viaje a Meta (~1-1.5s) ocurre en segundo plano.
     const row = await prisma.waMessage.create({
       data: {
         phone,
@@ -419,11 +427,19 @@ export class WhatsappService {
         replyToId: quoted?.id ?? null,
         authorId: auth.userId,
         authorName: auth.name?.trim() || auth.email,
-        externalId: wamid,
-        status: wamid ? 'sent' : null,
+        status: 'queued',
       },
     });
     await this.publishWaMessage(tenantId, prisma, row);
+    const quotedId = quoted?.id ?? null;
+    this.dispatchWaSend(tenantId, prisma, row.id, phone, 'No se pudo enviar el mensaje', async () => {
+      // La cita se re-resuelve al DESPACHAR: si lo citado tambien estaba en
+      // cola, para entonces ya tiene su wamid (la cola es por chat, en orden).
+      const q = quotedId
+        ? await prisma.waMessage.findFirst({ where: { id: quotedId }, select: { externalId: true } })
+        : null;
+      return this.dialog360.sendText(d360!.http, d360!.mode, `57${phone}`, input.text, q?.externalId ?? null);
+    });
     return this.toDto(row);
   }
 
@@ -460,16 +476,29 @@ export class WhatsappService {
     await this.storage.put(key, file.buffer, file.mimetype || 'application/octet-stream');
     const url = await this.storage.getSignedUrl(key);
 
-    let wamid: string | null = null;
-    try {
-      const kind = waTypeOf(file.mimetype || '');
+    // ACK PRIMERO: la burbuja del medio aparece YA (nuestro storage firma la
+    // URL) y el trabajo pesado (transcodificar audio, subir a Meta, enviar)
+    // corre en la cola del chat. Un fallo se ve como bolita roja con motivo.
+    const kind = waTypeOf(file.mimetype || '');
+    const row = await prisma.waMessage.create({
+      data: {
+        phone,
+        direction: 'out',
+        kind,
+        body: name,
+        attachmentKey: key,
+        authorId: auth.userId,
+        authorName: auth.name?.trim() || auth.email,
+        status: 'queued',
+      },
+    });
+    await this.publishWaMessage(tenantId, prisma, row);
+    this.dispatchWaSend(tenantId, prisma, row.id, phone, 'No se pudo enviar el archivo', async () => {
       if (kind === 'audio') {
         // NOTAS DE VOZ: los navegadores graban webm U Opus-DENTRO-de-mp4 y
         // WhatsApp no ENTREGA ninguno de los dos (131053 async, aunque el
         // envio devuelva wamid). SIEMPRE se transcodifica a OGG/Opus (receta
         // VERIFICADA con entrega real por probe) y se sube por media id.
-        // Si no se puede transcodificar NO se envia: fallar aqui con la causa
-        // real es mejor que una burbuja "enviada" que jamas llega.
         const ogg = await this.toOggOpus(file.buffer, file.mimetype || '');
         if (!ogg) {
           throw new BadRequestException(
@@ -484,36 +513,17 @@ export class WhatsappService {
           'nota-de-voz.ogg',
         );
         if (!mediaId) throw new BadRequestException('Meta no devolvió el id del audio');
-        wamid = await this.dialog360.sendMediaId(d360!.http, d360!.mode, `57${phone}`, 'audio', mediaId);
-      } else {
-        wamid = await this.dialog360.sendMediaLink(
-          d360!.http,
-          d360!.mode,
-          `57${phone}`,
-          kind === 'file' ? 'document' : kind,
-          url,
-          kind === 'file' ? name : undefined,
-        );
+        return this.dialog360.sendMediaId(d360!.http, d360!.mode, `57${phone}`, 'audio', mediaId);
       }
-    } catch (err) {
-      await this.storage.delete(key).catch(() => null);
-      throw this.translateError(err, 'No se pudo enviar el archivo');
-    }
-
-    const row = await prisma.waMessage.create({
-      data: {
-        phone,
-        direction: 'out',
-        kind: waTypeOf(file.mimetype || ''),
-        body: name,
-        attachmentKey: key,
-        authorId: auth.userId,
-        authorName: auth.name?.trim() || auth.email,
-        externalId: wamid,
-        status: wamid ? 'sent' : null,
-      },
+      return this.dialog360.sendMediaLink(
+        d360!.http,
+        d360!.mode,
+        `57${phone}`,
+        kind === 'file' ? 'document' : kind,
+        url,
+        kind === 'file' ? name : undefined,
+      );
     });
-    await this.publishWaMessage(tenantId, prisma, row);
     return this.toDto(row);
   }
 
@@ -716,12 +726,8 @@ export class WhatsappService {
       select: { id: true, externalId: true, reactions: true },
     });
     if (!msg?.externalId) throw new NotFoundException('Mensaje no encontrado (o sin id de WhatsApp)');
-    try {
-      await this.dialog360.sendReaction(d360!.http, d360!.mode, `57${phone}`, msg.externalId, input.emoji);
-    } catch (err) {
-      throw this.translateError(err, 'No se pudo enviar la reacción');
-    }
-    // Reflejo local: UNA reaccion del negocio por mensaje (se reemplaza/quita).
+    // LOCAL PRIMERO (instantaneo): una reaccion del negocio por mensaje.
+    // Meta va en segundo plano; si falla, se revierte y se re-publica.
     const prev = (Array.isArray(msg.reactions) ? msg.reactions : []) as Array<{ emoji: string; mine: boolean }>;
     const rest = prev.filter((r) => !r.mine);
     const next = input.emoji ? [...rest, { emoji: input.emoji, mine: true }] : rest;
@@ -730,6 +736,20 @@ export class WhatsappService {
       data: { reactions: next as unknown as Prisma.InputJsonValue },
     });
     await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    const externalId = msg.externalId;
+    void (async () => {
+      try {
+        await this.dialog360.sendReaction(d360!.http, d360!.mode, `57${phone}`, externalId, input.emoji);
+      } catch (err) {
+        this.logger.warn(
+          `Reaccion no llego a Meta (se revierte): ${err instanceof Error ? err.message : err}`,
+        );
+        await prisma.waMessage
+          .update({ where: { id: msg.id }, data: { reactions: prev as unknown as Prisma.InputJsonValue } })
+          .catch(() => null);
+        await this.realtime.publish(tenantId, { kind: 'wa.message', phone }).catch(() => null);
+      }
+    })();
     return { ok: true };
   }
 
@@ -769,31 +789,7 @@ export class WhatsappService {
     const src = await prisma.waMessage.findUnique({ where: { id: input.messageId } });
     if (!src) throw new NotFoundException('Mensaje no encontrado');
 
-    let wamid: string | null = null;
-    try {
-      if (src.kind === 'text' || (!src.attachmentKey && !src.mediaUrl)) {
-        wamid = await this.dialog360.sendText(d360!.http, d360!.mode, `57${to}`, src.body ?? '');
-      } else {
-        const url = src.attachmentKey
-          ? await this.storage.getSignedUrl(src.attachmentKey)
-          : src.mediaUrl!;
-        const kind =
-          src.kind === 'file'
-            ? ('document' as const)
-            : (src.kind as 'image' | 'video' | 'audio' | 'sticker');
-        wamid = await this.dialog360.sendMediaLink(
-          d360!.http,
-          d360!.mode,
-          `57${to}`,
-          kind,
-          url,
-          kind === 'document' ? (src.body ?? undefined) : undefined,
-        );
-      }
-    } catch (err) {
-      throw this.translateError(err, 'No se pudo reenviar el mensaje');
-    }
-
+    // ACK PRIMERO: el reenviado aparece YA en el chat destino con relojito.
     const row = await prisma.waMessage.create({
       data: {
         phone: to,
@@ -804,11 +800,28 @@ export class WhatsappService {
         mediaUrl: src.mediaUrl,
         authorId: auth.userId,
         authorName: auth.name?.trim() || auth.email,
-        externalId: wamid,
-        status: wamid ? 'sent' : null,
+        status: 'queued',
       },
     });
     await this.publishWaMessage(tenantId, prisma, row);
+    this.dispatchWaSend(tenantId, prisma, row.id, to, 'No se pudo reenviar el mensaje', async () => {
+      if (src.kind === 'text' || (!src.attachmentKey && !src.mediaUrl)) {
+        return this.dialog360.sendText(d360!.http, d360!.mode, `57${to}`, src.body ?? '');
+      }
+      const url = src.attachmentKey ? await this.storage.getSignedUrl(src.attachmentKey) : src.mediaUrl!;
+      const kind =
+        src.kind === 'file'
+          ? ('document' as const)
+          : (src.kind as 'image' | 'video' | 'audio' | 'sticker');
+      return this.dialog360.sendMediaLink(
+        d360!.http,
+        d360!.mode,
+        `57${to}`,
+        kind,
+        url,
+        kind === 'document' ? (src.body ?? undefined) : undefined,
+      );
+    });
     return this.toDto(row);
   }
 
@@ -820,12 +833,7 @@ export class WhatsappService {
     if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
     const d360 = await this.dialog360OrNull(tenantId, prisma);
     this.requireD360(d360, 'external');
-    let wamid: string | null = null;
-    try {
-      wamid = await this.dialog360.sendContact(d360!.http, d360!.mode, `57${phone}`, input.name, input.phone);
-    } catch (err) {
-      throw this.translateError(err, 'No se pudo enviar el contacto');
-    }
+    // ACK PRIMERO: la tarjeta aparece YA con relojito; Meta en segundo plano.
     const row = await prisma.waMessage.create({
       data: {
         phone,
@@ -834,11 +842,13 @@ export class WhatsappService {
         body: `👤 ${input.name}\n${input.phone}`,
         authorId: auth.userId,
         authorName: auth.name?.trim() || auth.email,
-        externalId: wamid,
-        status: wamid ? 'sent' : null,
+        status: 'queued',
       },
     });
     await this.publishWaMessage(tenantId, prisma, row);
+    this.dispatchWaSend(tenantId, prisma, row.id, phone, 'No se pudo enviar el contacto', () =>
+      this.dialog360.sendContact(d360!.http, d360!.mode, `57${phone}`, input.name, input.phone),
+    );
     return this.toDto(row);
   }
 
@@ -902,9 +912,21 @@ export class WhatsappService {
     if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
     const d360 = await this.dialog360OrNull(tenantId, prisma);
     this.requireD360(d360, 'external');
-    let wamid: string | null = null;
-    try {
-      // Normalizar (<100KB, 512x512) + SUBIR a Meta + enviar por media id.
+    // ACK PRIMERO: el sticker aparece YA (desde nuestro storage); normalizar
+    // (<100KB 512x512), subir a Meta y enviar corre en la cola del chat.
+    const row = await prisma.waMessage.create({
+      data: {
+        phone,
+        direction: 'out',
+        kind: 'sticker',
+        attachmentKey: key,
+        authorId: auth.userId,
+        authorName: auth.name?.trim() || auth.email,
+        status: 'queued',
+      },
+    });
+    await this.publishWaMessage(tenantId, prisma, row);
+    this.dispatchWaSend(tenantId, prisma, row.id, phone, 'No se pudo enviar el sticker', async () => {
       const obj = await this.storage.get(key);
       if (!obj) throw new NotFoundException('Sticker no disponible en el storage');
       const webp = await this.normalizeSticker(obj.buffer);
@@ -916,24 +938,8 @@ export class WhatsappService {
         'sticker.webp',
       );
       if (!mediaId) throw new BadRequestException('Meta no devolvió el id del sticker');
-      wamid = await this.dialog360.sendMediaId(d360!.http, d360!.mode, `57${phone}`, 'sticker', mediaId);
-    } catch (err) {
-      if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
-      throw this.translateError(err, 'No se pudo enviar el sticker');
-    }
-    const row = await prisma.waMessage.create({
-      data: {
-        phone,
-        direction: 'out',
-        kind: 'sticker',
-        attachmentKey: key,
-        authorId: auth.userId,
-        authorName: auth.name?.trim() || auth.email,
-        externalId: wamid,
-        status: wamid ? 'sent' : null,
-      },
+      return this.dialog360.sendMediaId(d360!.http, d360!.mode, `57${phone}`, 'sticker', mediaId);
     });
-    await this.publishWaMessage(tenantId, prisma, row);
     return this.toDto(row);
   }
 
@@ -1036,7 +1042,7 @@ export class WhatsappService {
     // El sandbox no tiene WABA propia con plantillas: lista vacia (la UI lo dice).
     if (!d360 || d360.mode !== 'production') return [];
     try {
-      const list = await this.dialog360.listTemplates(d360.http);
+      const list = await this.cachedTemplates(tenantId, d360.http);
       return list.map((t) => ({ ...t, variables: templateVarCount(t.body) }));
     } catch (err) {
       throw this.translateError(err, 'No se pudieron cargar las plantillas de la WABA');
@@ -1079,10 +1085,11 @@ export class WhatsappService {
     }
 
     // Se relee de la WABA (no se confia en el cliente): cuerpo, estado y
-    // numero de variables REALES de la plantilla.
+    // numero de variables REALES de la plantilla. Con CACHE de 60s: sin el,
+    // cada envio pagaba una vuelta extra a 360dialog (~0.5-1s).
     let all;
     try {
-      all = await this.dialog360.listTemplates(d360.http);
+      all = await this.cachedTemplates(tenantId, d360.http);
     } catch (err) {
       throw this.translateError(err, 'No se pudieron cargar las plantillas de la WABA');
     }
@@ -1105,21 +1112,8 @@ export class WhatsappService {
       vars > 0
         ? [{ type: 'body', parameters: params.map((text) => ({ type: 'text', text })) }]
         : [];
-    let wamid: string | null = null;
-    try {
-      wamid = await this.dialog360.sendTemplate(
-        d360.http,
-        d360.mode,
-        `57${phone}`,
-        tpl.name,
-        tpl.language,
-        components,
-      );
-    } catch (err) {
-      throw this.translateError(err, '360dialog no pudo enviar la plantilla');
-    }
-
-    // En el hilo queda el TEXTO REAL (variables sustituidas) + sus botones.
+    // ACK PRIMERO: en el hilo queda YA el TEXTO REAL (variables sustituidas)
+    // + botones, con relojito; el envio a Meta corre en la cola del chat.
     const row = await prisma.waMessage.create({
       data: {
         phone,
@@ -1128,14 +1122,16 @@ export class WhatsappService {
         body: renderTemplateBody(tpl.body, params),
         authorId: auth.userId,
         authorName: auth.name?.trim() || auth.email,
-        externalId: wamid,
-        status: wamid ? 'sent' : null,
+        status: 'queued',
         ...(tpl.buttons.length
           ? { buttons: tpl.buttons as unknown as Prisma.InputJsonValue }
           : {}),
       },
     });
     await this.publishWaMessage(tenantId, prisma, row);
+    this.dispatchWaSend(tenantId, prisma, row.id, phone, '360dialog no pudo enviar la plantilla', () =>
+      this.dialog360.sendTemplate(d360.http, d360.mode, `57${phone}`, tpl.name, tpl.language, components),
+    );
     return this.toDto(row);
   }
 
@@ -1895,7 +1891,7 @@ export class WhatsappService {
       // texto REAL de la que salio. Si la consulta falla: defaults del env.
       if (d360.mode === 'production') {
         try {
-          const list = await this.dialog360.listTemplates(d360.http);
+          const list = await this.cachedTemplates(tenantId, d360.http);
           const pick = CONFIRMATION_TEMPLATE_PRIORITY.map((name) =>
             list.find((t) => t.name === name && t.status === 'approved'),
           ).find(Boolean);
@@ -2044,6 +2040,57 @@ export class WhatsappService {
     } catch {
       await this.realtime.publish(tenantId, { kind: 'wa.message', phone: row.phone });
     }
+  }
+
+  /**
+   * Despacho ASINCRONO a WhatsApp (ack primero, como WhatsApp real): el
+   * endpoint guarda el mensaje con status 'queued' (relojito) y responde YA
+   * (~200ms); esta cola POR CHAT lo envia a Meta en orden y al terminar
+   * actualiza el mensaje (sent/failed) y lo re-publica por SSE — el relojito
+   * pasa a chulito (o bolita roja con el motivo) sin esperar el viaje a Meta.
+   */
+  private readonly sendChains = new Map<string, Promise<void>>();
+
+  private dispatchWaSend(
+    tenantId: string,
+    prisma: PrismaClient,
+    rowId: string,
+    phone: string,
+    fallbackError: string,
+    send: () => Promise<string | null>,
+  ): void {
+    const chainKey = `${tenantId}:${phone}`;
+    const prev = this.sendChains.get(chainKey) ?? Promise.resolve();
+    const next = prev
+      .then(async () => {
+        try {
+          const wamid = await send();
+          if (wamid) {
+            await prisma.waMessage.update({ where: { id: rowId }, data: { externalId: wamid } });
+          }
+          // Subir a 'sent' SOLO si sigue encolado (un webhook de estado pudo
+          // habernos adelantado con delivered/read/failed).
+          await prisma.waMessage.updateMany({
+            where: { id: rowId, status: 'queued' },
+            data: { status: wamid ? 'sent' : null },
+          });
+        } catch (err) {
+          const detail =
+            err instanceof HttpException
+              ? err.message
+              : this.translateError(err, fallbackError).message;
+          await prisma.waMessage
+            .updateMany({ where: { id: rowId }, data: { status: 'failed', error: detail } })
+            .catch(() => null);
+          this.logger.warn(`Envio WA en cola fallo (${rowId}): ${detail}`);
+        }
+        const row = await prisma.waMessage.findUnique({ where: { id: rowId } });
+        if (row) await this.publishWaMessage(tenantId, prisma, row as WaMessageRow & { phone: string });
+      })
+      .finally(() => {
+        if (this.sendChains.get(chainKey) === next) this.sendChains.delete(chainKey);
+      });
+    this.sendChains.set(chainKey, next);
   }
 
   private async toDto(r: WaMessageRow, byId?: Map<string, WaMessageRow>): Promise<WaMessageDto> {
