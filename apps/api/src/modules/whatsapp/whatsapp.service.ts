@@ -1159,9 +1159,13 @@ export class WhatsappService {
       const inPath = path.join(os.tmpdir(), `${randomUUID()}.${inExt}`);
       const outPath = path.join(os.tmpdir(), `${randomUUID()}.ogg`);
       await fs.writeFile(inPath, buffer);
+      // OJO: -map_metadata -1 es OBLIGATORIO. ffmpeg copia la metadata del
+      // mp4 del navegador (creation_time/handler_name/major_brand...) dentro
+      // del OGG y Meta RECHAZA la entrega de esos OGG con 131053 (verificado
+      // por probe: el mismo audio limpio ENTREGA, con metadata NO).
       await run(
         ffmpegPath,
-        ['-y', '-i', inPath, '-vn', '-c:a', 'libopus', '-b:a', '32k', '-ar', '48000', '-ac', '1', outPath],
+        ['-y', '-i', inPath, '-vn', '-map_metadata', '-1', '-map', '0:a:0', '-c:a', 'libopus', '-b:a', '32k', '-ar', '48000', '-ac', '1', '-fflags', '+bitexact', '-flags:a', '+bitexact', outPath],
         { timeout: 30_000 },
       );
       const out = await fs.readFile(outPath);
