@@ -60,7 +60,10 @@ export class WaPublisherService {
           .filter((x) => x && typeof x.emoji === 'string' && x.emoji)
           .map((x) => ({ emoji: String(x.emoji), mine: Boolean(x.mine) }))
       : [];
-    const status = ['sent', 'delivered', 'read', 'failed'].includes(r.status ?? '')
+    // OJO: 'queued' debe estar aqui — si se sanitiza a null, el chulito del
+    // mensaje recien enviado DESAPARECE un instante (la hora se corre) hasta
+    // que llega el 'sent' de la cola.
+    const status = ['queued', 'sent', 'delivered', 'read', 'failed'].includes(r.status ?? '')
       ? (r.status as WaMessageDto['status'])
       : null;
     return {
