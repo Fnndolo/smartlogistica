@@ -71,9 +71,12 @@ export function WaBubble({
           hasReactions && 'mb-4',
           flash && 'wa-reply-flash rounded-lg',
         )}
-        // DOBLE CLIC en el mensaje o su espacio lateral: responder (con
-        // destello verde de medio segundo, como WhatsApp).
-        onDoubleClick={() => {
+        // DOBLE CLIC solo en el espacio LATERAL de la fila: responder (con
+        // destello verde). DENTRO de la burbuja no aplica — ahi el doble
+        // clic queda libre (seleccionar texto, controles del audio, etc.).
+        onDoubleClick={(e) => {
+          const t = e.target as Node;
+          if (bubbleRef.current?.contains(t) || bareRef.current?.contains(t)) return;
           setFlash(true);
           actions.reply(m);
         }}
@@ -372,7 +375,7 @@ function BubbleContent({
             // El espaciador reserva TODO lo que lleve la fila de la hora:
             // base (hora+chulitos) + "Editado" (+44px) + estrella (+15px).
             // Si no cabe junto al texto, salta solo a la linea de abajo.
-            style={{ width: (mine ? 88 : 62) + (m.edited ? 24 : 0) + (m.starred ? 15 : 0) }}
+            style={{ width: (mine ? 72 : 62) + (m.edited ? 32 : 0) + (m.starred ? 15 : 0) }}
             aria-hidden
           />
         </p>
