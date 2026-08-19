@@ -5,7 +5,7 @@
     "buildCommand": "pnpm install --frozen-lockfile && pnpm --filter @smartlogistica/shared build && pnpm --filter @smartlogistica/api db:generate && pnpm --filter @smartlogistica/api build"
   },
   "deploy": {
-    "startCommand": "pnpm --filter @smartlogistica/api db:migrate:deploy && node apps/api/dist/main.js",
+    "startCommand": "pnpm --filter @smartlogistica/api db:migrate:deploy && node apps/api/scripts/ensure-ffmpeg.mjs && node apps/api/dist/main.js",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }

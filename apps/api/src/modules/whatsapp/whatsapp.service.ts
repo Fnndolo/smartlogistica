@@ -190,6 +190,27 @@ export class WhatsappService {
     private readonly control: ControlPlaneService,
   ) {}
 
+  /** Al arrancar: verificar que el BINARIO de ffmpeg existe (notas de voz).
+   * Deja en el log la verdad operativa — si falta, TODA nota de voz fallara
+   * con error claro al enviar (y ensure-ffmpeg.mjs del startCommand intenta
+   * descargarlo antes de llegar aqui). */
+  async onModuleInit(): Promise<void> {
+    try {
+      const p = (await import('ffmpeg-static')).default as unknown as string | null;
+      const fsp = await import('node:fs/promises');
+      const ok = p ? await fsp.access(p).then(() => true, () => false) : false;
+      if (ok) this.logger.log(`ffmpeg listo para notas de voz: ${p}`);
+      else
+        this.logger.error(
+          `FALTA el binario de ffmpeg (ruta: ${p ?? 'sin resolver'}). Las notas de voz fallaran hasta que exista.`,
+        );
+    } catch (err) {
+      this.logger.error(
+        `ffmpeg-static no importable: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
   // === Conexion 360dialog (Cloud API de Meta) ===
 
   async getDialog360(auth: AuthContext): Promise<Dialog360ConnectionSummary | null> {
@@ -443,24 +464,24 @@ export class WhatsappService {
     try {
       const kind = waTypeOf(file.mimetype || '');
       if (kind === 'audio') {
-        // NOTAS DE VOZ: WhatsApp NO acepta webm (lo que graban los navegadores
-        // Chromium) ni links firmados (131053). Se TRANSCODIFICA a OGG/Opus
-        // (el formato de nota de voz real) y se sube por media id.
+        // NOTAS DE VOZ: los navegadores graban webm U Opus-DENTRO-de-mp4 y
+        // WhatsApp no ENTREGA ninguno de los dos (131053 async, aunque el
+        // envio devuelva wamid). SIEMPRE se transcodifica a OGG/Opus (receta
+        // VERIFICADA con entrega real por probe) y se sube por media id.
+        // Si no se puede transcodificar NO se envia: fallar aqui con la causa
+        // real es mejor que una burbuja "enviada" que jamas llega.
         const ogg = await this.toOggOpus(file.buffer, file.mimetype || '');
-        if (!ogg && (file.mimetype ?? '').includes('webm')) {
-          // WebM sin transcodificar JAMAS llega (Meta lo rechaza async con
-          // 131053): mejor fallar YA con la causa real.
+        if (!ogg) {
           throw new BadRequestException(
             'No se pudo convertir la nota de voz (ffmpeg no disponible en el servidor). Avisa al administrador.',
           );
         }
-        const up = ogg ?? { buffer: file.buffer, mime: file.mimetype || 'audio/mp4' };
         const mediaId = await this.dialog360.uploadMedia(
           d360!.apiKey,
           d360!.mode,
-          up.buffer,
-          up.mime,
-          ogg ? 'nota-de-voz.ogg' : name,
+          ogg.buffer,
+          ogg.mime,
+          'nota-de-voz.ogg',
         );
         if (!mediaId) throw new BadRequestException('Meta no devolvió el id del audio');
         wamid = await this.dialog360.sendMediaId(d360!.http, d360!.mode, `57${phone}`, 'audio', mediaId);

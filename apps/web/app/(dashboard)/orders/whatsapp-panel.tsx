@@ -24,7 +24,6 @@ import {
   Mic,
   Pause,
   Phone,
-  Play,
   Plug,
   Plus,
   Reply,
@@ -34,7 +33,6 @@ import {
   Star,
   Sticker as StickerIcon,
   Trash2,
-  User,
   UserRound,
   X,
 } from 'lucide-react';
@@ -205,26 +203,26 @@ function PhoneToken({ raw }: { raw: string }) {
       </button>
       {open
         ? createPortal(
-            <>
-              <button type="button" className="fixed inset-0 z-[70] cursor-default" onClick={close} aria-label="Cerrar" />
-              <span
-                className="wa-pop fixed z-[80] flex w-max flex-col rounded-xl border border-border bg-white py-1 shadow-float dark:bg-[#233138]"
-                style={{
-                  left: open.left,
-                  ...(open.top != null ? { top: open.top } : { bottom: open.bottom }),
-                  transformOrigin: open.top != null ? 'top left' : 'bottom left',
-                }}
-              >
-                {item(MessageCircle, `Chatear con +57 ${ten}`, goChat)}
-                {item(Copy, 'Copiar número de teléfono', () => {
-                  void navigator.clipboard.writeText(`+57${ten}`);
-                  close();
-                  toast.success('Número copiado');
-                })}
-              </span>
-            </>,
-            document.body,
-          )
+          <>
+            <button type="button" className="fixed inset-0 z-[70] cursor-default" onClick={close} aria-label="Cerrar" />
+            <span
+              className="wa-pop fixed z-[80] flex w-max flex-col rounded-xl border border-border bg-white py-1 shadow-float dark:bg-[#233138]"
+              style={{
+                left: open.left,
+                ...(open.top != null ? { top: open.top } : { bottom: open.bottom }),
+                transformOrigin: open.top != null ? 'top left' : 'bottom left',
+              }}
+            >
+              {item(MessageCircle, `Chatear con +57 ${ten}`, goChat)}
+              {item(Copy, 'Copiar número de teléfono', () => {
+                void navigator.clipboard.writeText(`+57${ten}`);
+                close();
+                toast.success('Número copiado');
+              })}
+            </span>
+          </>,
+          document.body,
+        )
         : null}
     </>
   );
@@ -278,14 +276,14 @@ function FailDot({ text }: { text?: string }) {
       </span>
       {pos && text
         ? createPortal(
-            <span
-              className="wa-pop fixed z-[80] block w-[300px] rounded-lg bg-[#fde8e8] px-3 py-2 text-[12px] leading-snug text-[#8a1f2d] shadow-md dark:bg-[#3b1d22] dark:text-[#f5a3ad]"
-              style={{ left: pos.left, bottom: pos.bottom }}
-            >
-              {text}
-            </span>,
-            document.body,
-          )
+          <span
+            className="wa-pop fixed z-[80] block w-[300px] rounded-lg bg-[#fde8e8] px-3 py-2 text-[12px] leading-snug text-[#8a1f2d] shadow-md dark:bg-[#3b1d22] dark:text-[#f5a3ad]"
+            style={{ left: pos.left, bottom: pos.bottom }}
+          >
+            {text}
+          </span>,
+          document.body,
+        )
         : null}
     </>
   );
@@ -320,12 +318,57 @@ export function Ticks({
   );
 }
 
-/** Microfono RELLENO clasico (capsula + soporte en U + tallo), como WhatsApp. */
+/** Microfono del avatar de audio: SVG REAL de WhatsApp Web (ptt-status), tal
+ * cual — borde blanco alrededor + mic en currentColor (el color por estado). */
 function MicFilled({ className, style }: { className?: string; style?: React.CSSProperties }) {
   return (
-    <svg viewBox="0 0 24 24" className={className} style={style} fill="currentColor" aria-hidden>
-      <rect x="8.6" y="1.5" width="6.8" height="12.6" rx="3.4" />
-      <path d="M5.6 10.7a1 1 0 0 1 1 1v.3a5.4 5.4 0 0 0 10.8 0v-.3a1 1 0 1 1 2 0v.3a7.41 7.41 0 0 1-6.4 7.33V22a1 1 0 1 1-2 0v-2.67a7.41 7.41 0 0 1-6.4-7.33v-.3a1 1 0 0 1 1-1z" />
+    <svg
+      viewBox="0 0 19 26"
+      preserveAspectRatio="xMidYMid meet"
+      className={className}
+      style={style}
+      aria-hidden
+    >
+      <path
+        fill="#d9fdd3"
+        d="M9.217,24.401c-1.158,0-2.1-0.941-2.1-2.1v-2.366c-2.646-0.848-4.652-3.146-5.061-5.958L2.004,13.62 l-0.003-0.081c-0.021-0.559,0.182-1.088,0.571-1.492c0.39-0.404,0.939-0.637,1.507-0.637h0.3c0.254,0,0.498,0.044,0.724,0.125v-6.27 C5.103,2.913,7.016,1,9.367,1c2.352,0,4.265,1.913,4.265,4.265v6.271c0.226-0.081,0.469-0.125,0.723-0.125h0.3 c0.564,0,1.112,0.233,1.501,0.64s0.597,0.963,0.571,1.526c0,0.005,0.001,0.124-0.08,0.6c-0.47,2.703-2.459,4.917-5.029,5.748v2.378 c0,1.158-0.942,2.1-2.1,2.1H9.217V24.401z"
+      />
+      <path
+        fill="currentColor"
+        d="M9.367,15.668c1.527,0,2.765-1.238,2.765-2.765V5.265c0-1.527-1.238-2.765-2.765-2.765 S6.603,3.738,6.603,5.265v7.638C6.603,14.43,7.84,15.668,9.367,15.668z M14.655,12.91h-0.3c-0.33,0-0.614,0.269-0.631,0.598 c0,0,0,0-0.059,0.285c-0.41,1.997-2.182,3.505-4.298,3.505c-2.126,0-3.904-1.521-4.304-3.531C5.008,13.49,5.008,13.49,5.008,13.49 c-0.016-0.319-0.299-0.579-0.629-0.579h-0.3c-0.33,0-0.591,0.258-0.579,0.573c0,0,0,0,0.04,0.278 c0.378,2.599,2.464,4.643,5.076,4.978v3.562c0,0.33,0.27,0.6,0.6,0.6h0.3c0.33,0,0.6-0.27,0.6-0.6V18.73 c2.557-0.33,4.613-2.286,5.051-4.809c0.057-0.328,0.061-0.411,0.061-0.411C15.243,13.18,14.985,12.91,14.655,12.91z"
+      />
+    </svg>
+  );
+}
+
+/** Muñequito del avatar: SVG REAL de WhatsApp Web (default-contact-refreshed),
+ * dibujado para llenar el circulo completo (el aire ya viene dentro del path). */
+function DefaultContactIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 48 48" preserveAspectRatio="xMidYMid meet" className={className} fill="none" aria-hidden>
+      <path
+        fill="currentColor"
+        d="M24 23q-1.86 0-3.18-1.32T19.5 18.5t1.32-3.18T24 14t3.18 1.32q1.32 1.32 1.32 3.18t-1.32 3.18T24 23m-6.75 10q-.93 0-1.59-.66T15 30.75v-.9q0-.96.5-1.76a3.3 3.3 0 0 1 1.3-1.22 16.7 16.7 0 0 1 3.54-1.3q1.8-.44 3.66-.44t3.66.43 3.54 1.31q.82.42 1.3 1.22t.5 1.76v.9q0 .93-.66 1.59t-1.59.66z"
+      />
+    </svg>
+  );
+}
+
+/** Play del audio: SVG REAL de WhatsApp Web (ic-play-arrow-filled). */
+function PlayFilled({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet" className={className} fill="currentColor" aria-hidden>
+      <path d="M9.53 18.02a.91.91 0 0 1-1.02.04.95.95 0 0 1-.51-.88V6.82c0-.4.17-.7.51-.88a.91.91 0 0 1 1.02.03l8.15 5.18c.3.2.45.48.45.85s-.15.65-.45.85l-8.15 5.17Z" />
+    </svg>
+  );
+}
+
+/** Pausa a juego con el play de WhatsApp (dos barras redondeadas). */
+function PauseFilled({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" preserveAspectRatio="xMidYMid meet" className={className} fill="currentColor" aria-hidden>
+      <rect x="6.8" y="5.6" width="3.6" height="12.8" rx="1.3" />
+      <rect x="13.6" y="5.6" width="3.6" height="12.8" rx="1.3" />
     </svg>
   );
 }
@@ -334,7 +377,7 @@ function MicFilled({ className, style }: { className?: string; style?: React.CSS
 function Tail({ mine }: { mine: boolean }) {
   return mine ? (
     <svg viewBox="0 0 8 13" className="absolute -right-[8px] top-0 h-[13px] w-2 text-[#d9fdd3] dark:text-[#005c4b]">
-      <path fill="currentColor" d="M6.467 2.568 0 11.193V0h5.188c1.77 0 2.338 1.156 1.279 2.568z" transform="translate(8,0) scale(-1,1)" />
+      <path fill="currentColor" d="M6.467 2.568 0 11.193V0h5.188c1.77 0 2.338 1.156 1.279 2.568z" transform="translate(0,0) scale(1,1)" />
     </svg>
   ) : (
     <svg viewBox="0 0 8 13" className="absolute -left-[8px] top-0 h-[13px] w-2 text-white dark:text-[#202c33]">
@@ -423,6 +466,24 @@ export function WhatsappPanel({
   const stickBottomRef = useRef(true);
   const initialScrollDoneRef = useRef(false);
 
+  // CADENA de notas de voz (como WhatsApp): cuando un audio termina, WaAudio
+  // avisa con 'wa-audio-next'; si el SIGUIENTE mensaje del hilo tambien es un
+  // audio, se le ordena reproducirse ('wa-audio-play-id').
+  useEffect(() => {
+    const h = (ev: Event) => {
+      const afterId = (ev as CustomEvent<{ afterId?: string }>).detail?.afterId;
+      const list = thread?.messages ?? [];
+      if (!afterId || !list.length) return;
+      const idx = list.findIndex((x) => x.id === afterId);
+      const next = idx >= 0 ? list[idx + 1] : undefined;
+      if (next && next.kind === 'audio' && next.mediaUrl) {
+        window.dispatchEvent(new CustomEvent('wa-audio-play-id', { detail: { id: next.id } }));
+      }
+    };
+    window.addEventListener('wa-audio-next', h);
+    return () => window.removeEventListener('wa-audio-next', h);
+  }, [thread]);
+
   const onThreadScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
@@ -459,12 +520,12 @@ export function WhatsappPanel({
         id: vars.tempId,
         replyTo: quoted
           ? {
-              id: quoted.id,
-              direction: quoted.direction,
-              kind: quoted.kind,
-              body: quoted.body,
-              authorName: quoted.authorName,
-            }
+            id: quoted.id,
+            direction: quoted.direction,
+            kind: quoted.kind,
+            body: quoted.body,
+            authorName: quoted.authorName,
+          }
           : null,
       });
     },
@@ -731,19 +792,19 @@ export function WhatsappPanel({
       qc.setQueryData<WaThread>(['wa-thread', base], (old) =>
         old
           ? {
-              ...old,
-              messages: old.messages.map((m) =>
-                m.id === vars.messageId
-                  ? {
-                      ...m,
-                      reactions: [
-                        ...m.reactions.filter((r) => !r.mine),
-                        ...(vars.emoji ? [{ emoji: vars.emoji, mine: true }] : []),
-                      ],
-                    }
-                  : m,
-              ),
-            }
+            ...old,
+            messages: old.messages.map((m) =>
+              m.id === vars.messageId
+                ? {
+                  ...m,
+                  reactions: [
+                    ...m.reactions.filter((r) => !r.mine),
+                    ...(vars.emoji ? [{ emoji: vars.emoji, mine: true }] : []),
+                  ],
+                }
+                : m,
+            ),
+          }
           : old,
       );
     },
@@ -758,11 +819,11 @@ export function WhatsappPanel({
       qc.setQueryData<WaThread>(['wa-thread', base], (old) =>
         old
           ? {
-              ...old,
-              messages: old.messages.map((m) =>
-                m.id === vars.messageId ? { ...m, starred: vars.starred } : m,
-              ),
-            }
+            ...old,
+            messages: old.messages.map((m) =>
+              m.id === vars.messageId ? { ...m, starred: vars.starred } : m,
+            ),
+          }
           : old,
       );
     },
@@ -829,9 +890,14 @@ export function WhatsappPanel({
   const recChunksRef = useRef<Blob[]>([]);
   const recCancelRef = useRef(false);
   const recTimerRef = useRef<number | undefined>(undefined);
+  // Segundos REALES grabados (ref: el closure de onstop no ve el estado).
+  const recSecsRef = useRef(0);
 
   const startRecTimer = () => {
-    recTimerRef.current = window.setInterval(() => setRecSecs((s) => s + 1), 1000);
+    recTimerRef.current = window.setInterval(() => {
+      recSecsRef.current += 1;
+      setRecSecs((s) => s + 1);
+    }, 1000);
   };
 
   const startRec = async () => {
@@ -851,6 +917,12 @@ export function WhatsappPanel({
         stream.getTracks().forEach((t) => t.stop());
         setRecStream(null);
         if (recCancelRef.current) return;
+        // Minimo 1 segundo (como WhatsApp): los audios de menos de ~1s los
+        // rechaza Meta en la ENTREGA (131053) aunque el envio de OK.
+        if (recSecsRef.current < 1) {
+          toast.error('La nota de voz es muy corta: graba al menos 1 segundo.');
+          return;
+        }
         const type = rec.mimeType || 'audio/webm';
         const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
         const file = new File([new Blob(recChunksRef.current, { type })], `nota-de-voz.${ext}`, { type });
@@ -862,6 +934,7 @@ export function WhatsappPanel({
       setRecording(true);
       setRecPaused(false);
       setRecSecs(0);
+      recSecsRef.current = 0;
       startRecTimer();
     } catch (err) {
       // El navegador PIDE el permiso solo cuando esta en "preguntar"; si el
@@ -1093,32 +1166,32 @@ export function WhatsappPanel({
         >
           <div className="mt-auto" aria-hidden />
           <div ref={contentRef} className="flex flex-col">
-          {thread.messages.length === 0 ? (
-            <div className="py-8 text-center">
-              <span className="inline-block rounded-lg bg-[#ffeecd] px-3 py-2 text-[12.5px] text-[#54656f] shadow-sm dark:bg-[#182229] dark:text-[#8696a0]">
-                Aún no hay historial para este teléfono. Aquí queda todo lo que se envíe y todo lo
-                que llegue o salga por el número.
-              </span>
-            </div>
-          ) : (
-            thread.messages.map((m, i) => (
-              <div key={m.id} className="contents">
-                {m.id === dividerId ? (
-                  /* BANDA de borde a borde (oscurecida) + pastilla en negrita,
-                     calcada al divisor de WhatsApp. */
-                  <div
-                    data-unread-divider
-                    className="-mx-4 my-2 flex justify-center bg-[#00000010] py-2 dark:bg-[#ffffff0d] md:-mx-[6.82%]"
-                  >
-                    <span className="rounded-full bg-white px-3.5 py-[5px] text-[12.5px] font-semibold text-[#111b21] shadow-sm dark:bg-[#182229] dark:text-[#e9edef]">
-                      {dividerCount === 1 ? '1 mensaje no leído' : `${dividerCount} mensajes no leídos`}
-                    </span>
-                  </div>
-                ) : null}
-                <WaBubble message={m} prev={thread.messages[i - 1]} base={base} actions={bubbleActions} />
+            {thread.messages.length === 0 ? (
+              <div className="py-8 text-center">
+                <span className="inline-block rounded-lg bg-[#ffeecd] px-3 py-2 text-[12.5px] text-[#54656f] shadow-sm dark:bg-[#182229] dark:text-[#8696a0]">
+                  Aún no hay historial para este teléfono. Aquí queda todo lo que se envíe y todo lo
+                  que llegue o salga por el número.
+                </span>
               </div>
-            ))
-          )}
+            ) : (
+              thread.messages.map((m, i) => (
+                <div key={m.id} className="contents">
+                  {m.id === dividerId ? (
+                    /* BANDA de borde a borde (oscurecida) + pastilla en negrita,
+                       calcada al divisor de WhatsApp. */
+                    <div
+                      data-unread-divider
+                      className="-mx-4 my-2 flex justify-center bg-[#00000010] py-2 dark:bg-[#ffffff0d] md:-mx-[6.82%]"
+                    >
+                      <span className="rounded-full bg-white px-3.5 py-[5px] text-[12.5px] font-semibold text-[#111b21] shadow-sm dark:bg-[#182229] dark:text-[#e9edef]">
+                        {dividerCount === 1 ? '1 mensaje no leído' : `${dividerCount} mensajes no leídos`}
+                      </span>
+                    </div>
+                  ) : null}
+                  <WaBubble message={m} prev={thread.messages[i - 1]} base={base} actions={bubbleActions} />
+                </div>
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -1652,9 +1725,9 @@ function MsgMenu({
                   })}
                   {m.kind === 'text' && m.body
                     ? item(Copy, 'Copiar', () => {
-                        void navigator.clipboard.writeText(m.body ?? '');
-                        close();
-                      })
+                      void navigator.clipboard.writeText(m.body ?? '');
+                      close();
+                    })
                     : null}
                   {item(Forward, 'Reenviar', () => {
                     actions.forward(m);
@@ -1666,9 +1739,9 @@ function MsgMenu({
                   })}
                   {m.kind === 'sticker' && m.mediaUrl
                     ? item(Heart, 'Añadir a Favoritos', () => {
-                        actions.favSticker(m);
-                        close();
-                      })
+                      actions.favSticker(m);
+                      close();
+                    })
                     : null}
                   <div className="my-1 border-t border-border" />
                   {item(
@@ -2182,11 +2255,17 @@ function BubbleContent({
         <p className={cn('whitespace-pre-wrap break-words', emojiBig && 'text-[28px] leading-[38px]')}>
           {m.body ? renderBodyWithPhones(m.body) : null}
           <span
-            className={cn('inline-block h-0', mine ? 'w-[88px]' : 'w-[62px]')}
+            className="inline-block h-0"
+            // El espaciador reserva TODO lo que lleve la fila de la hora:
+            // base (hora+chulitos) + "Editado" (+44px) + estrella (+15px).
+            // Si no cabe junto al texto, salta solo a la linea de abajo.
+            style={{ width: (mine ? 88 : 62) + (m.edited ? 24 : 0) + (m.starred ? 15 : 0) }}
             aria-hidden
           />
         </p>
-        <span className="absolute bottom-[3px] right-[7px]">{timeRow()}</span>
+        {/* bottom-[Npx]: distancia al FONDO de la burbuja -> MAS PEQUEÑO = MAS
+            ABAJO baja toda la fila junta (Editado + hora + chulitos). */}
+        <span className="absolute bottom-[-1px] right-[7px]">{timeRow()}</span>
       </div>
       {m.buttons && m.buttons.length > 0 ? (
         <div>
@@ -2324,6 +2403,34 @@ const addHeard = (id: string): void => {
  * ONDAS REALES del audio (Web Audio API decodifica y saca los picos; si el
  * navegador no puede, onda de respaldo), punto de progreso, duracion y hora.
  */
+/** Solo UN audio a la vez en toda la app: darle play a uno pausa al que suene. */
+let waActiveAudio: HTMLAudioElement | null = null;
+
+/** Sonidito de transicion al saltar a la siguiente nota de voz (como WhatsApp). */
+function playChainBeep() {
+  try {
+    type AC = typeof AudioContext;
+    const Ctx: AC | undefined =
+      window.AudioContext ?? (window as unknown as { webkitAudioContext?: AC }).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(950, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(1350, ctx.currentTime + 0.09);
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.12, ctx.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.16);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.18);
+    osc.onended = () => void ctx.close();
+  } catch {
+    /* sin beep: no bloquea la reproduccion */
+  }
+}
+
 function WaAudio({
   message: m,
   mine,
@@ -2345,41 +2452,75 @@ function WaAudio({
   const apiSrc = `${base}/audio/${m.id}`;
   const [src, setSrc] = useState(apiSrc);
 
-  // Ondas REALES: decodificar el audio y muestrear los picos por bloque.
+  // UNA sola descarga del audio: con el mismo archivo se muestrean los picos
+  // de la onda REAL y se crea un blob EN MEMORIA que pasa a ser el src del
+  // <audio> -> el play es INSTANTANEO (cero red, cero esperas de streaming).
   useEffect(() => {
     let alive = true;
+    let blobUrl: string | null = null;
     void (async () => {
       try {
         let res = await fetch(apiSrc, { credentials: 'include' });
         if (!res.ok && m.mediaUrl) res = await fetch(m.mediaUrl);
         if (!res.ok) return;
         const buf = await res.arrayBuffer();
+        // El blob se arma ANTES de decodificar (decodeAudioData vacia el buffer).
+        const blob = new Blob([buf.slice(0)], {
+          type: res.headers.get('content-type') ?? 'audio/ogg',
+        });
         type AC = typeof AudioContext;
         const Ctx: AC | undefined =
           window.AudioContext ?? (window as unknown as { webkitAudioContext?: AC }).webkitAudioContext;
-        if (!Ctx) return;
-        const ctx = new Ctx();
-        const decoded = await ctx.decodeAudioData(buf);
-        const ch = decoded.getChannelData(0);
-        const block = Math.max(1, Math.floor(ch.length / BAR_COUNT));
-        const p: number[] = [];
-        for (let i = 0; i < BAR_COUNT; i++) {
-          let peak = 0;
-          for (let j = 0; j < block; j += 32) peak = Math.max(peak, Math.abs(ch[i * block + j] ?? 0));
-          p.push(peak);
+        if (Ctx) {
+          try {
+            const ctx = new Ctx();
+            const decoded = await ctx.decodeAudioData(buf);
+            const ch = decoded.getChannelData(0);
+            const block = Math.max(1, Math.floor(ch.length / BAR_COUNT));
+            const p: number[] = [];
+            for (let i = 0; i < BAR_COUNT; i++) {
+              let peak = 0;
+              for (let j = 0; j < block; j += 32)
+                peak = Math.max(peak, Math.abs(ch[i * block + j] ?? 0));
+              p.push(peak);
+            }
+            const max = Math.max(...p, 0.01);
+            if (alive) {
+              setPeaks(p.map((v) => Math.max(0.18, v / max)));
+              if (Number.isFinite(decoded.duration)) setDur(decoded.duration);
+            }
+            void ctx.close();
+          } catch {
+            /* formato raro: quedan las barras de respaldo */
+          }
         }
-        const max = Math.max(...p, 0.01);
-        if (alive) {
-          setPeaks(p.map((v) => Math.max(0.18, v / max)));
-          if (Number.isFinite(decoded.duration)) setDur(decoded.duration);
+        if (!alive) return;
+        // Pasarse al blob local: si aun no ha avanzado (parado o TRABADO en
+        // 0), se cambia ya mismo; y si el usuario ya habia dado play, se
+        // reanuda solo sobre el blob (esto destranca el primer play lento).
+        const a = audioRef.current;
+        if (!a || a.currentTime < 0.1) {
+          blobUrl = URL.createObjectURL(blob);
+          const resume = a ? !a.paused : false;
+          const keepRate = a?.playbackRate ?? 1;
+          setSrc(blobUrl);
+          if (resume) {
+            window.setTimeout(() => {
+              const el = audioRef.current;
+              if (el) {
+                el.playbackRate = keepRate;
+                void el.play();
+              }
+            }, 60);
+          }
         }
-        void ctx.close();
       } catch {
-        /* CORS o formato raro: quedan las barras de respaldo */
+        /* CORS o red: el <audio> sigue con la URL normal */
       }
     })();
     return () => {
       alive = false;
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
     };
   }, [apiSrc, m.mediaUrl]);
 
@@ -2389,12 +2530,23 @@ function WaAudio({
   const [heard, setHeard] = useState(false);
   useEffect(() => setHeard(getHeardSet().has(m.id)), [m.id]);
 
+  // Velocidad de reproduccion (el boton 1x/1.5x/2x de WhatsApp, que aparece
+  // en el puesto del avatar MIENTRAS suena la nota).
+  const [rate, setRate] = useState(1);
+  const cycleRate = () => {
+    const next = rate === 1 ? 1.5 : rate === 1.5 ? 2 : 1;
+    setRate(next);
+    const a = audioRef.current;
+    if (a) a.playbackRate = next;
+  };
+
   const toggle = () => {
     const a = audioRef.current;
     if (!a) return;
     if (playing) {
       a.pause();
     } else {
+      a.playbackRate = rate;
       void a.play();
       if (!heard) {
         addHeard(m.id);
@@ -2402,36 +2554,106 @@ function WaAudio({
       }
     }
   };
-  const seek = (e: React.MouseEvent<HTMLDivElement>) => {
+  // Autoplay en cadena: el panel avisa que ESTE audio es el que sigue ->
+  // sonidito de transicion y a reproducir (queda como escuchado).
+  useEffect(() => {
+    const h = (ev: Event) => {
+      if ((ev as CustomEvent<{ id?: string }>).detail?.id !== m.id) return;
+      const a = audioRef.current;
+      if (!a) return;
+      playChainBeep();
+      addHeard(m.id);
+      setHeard(true);
+      window.setTimeout(() => {
+        a.playbackRate = rate;
+        void a.play();
+      }, 180);
+    };
+    window.addEventListener('wa-audio-play-id', h);
+    return () => window.removeEventListener('wa-audio-play-id', h);
+  }, [m.id, rate]);
+
+  // Progreso FLUIDO (60fps): mientras suena, la posicion se lee en cada frame
+  // con requestAnimationFrame (el evento timeupdate solo llega ~4 veces/seg).
+  useEffect(() => {
+    if (!playing) return;
+    let raf = 0;
+    const loop = () => {
+      const a = audioRef.current;
+      if (a) setT(a.currentTime);
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [playing]);
+
+  // Adelantar/retroceder: click O ARRASTRE de la bolita (pointer capture ->
+  // el arrastre sigue fluido aunque el mouse se salga de la onda).
+  const draggingRef = useRef(false);
+  const scrubTo = (clientX: number, el: HTMLElement) => {
     const a = audioRef.current;
     if (!a || !dur) return;
-    const rect = e.currentTarget.getBoundingClientRect();
-    a.currentTime = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1) * dur;
+    const rect = el.getBoundingClientRect();
+    const frac = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1);
+    a.currentTime = frac * dur;
+    setT(frac * dur);
+  };
+  const onScrubDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    draggingRef.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    scrubTo(e.clientX, e.currentTarget);
+  };
+  const onScrubMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (draggingRef.current) scrubTo(e.clientX, e.currentTarget);
+  };
+  const onScrubEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    draggingRef.current = false;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ya estaba suelto */
+    }
   };
 
   // Colores CALCADOS: enviado -> mic gris verdoso y bolita azul; recibido ->
   // mic y bolita VERDES hasta escucharlo, luego azules.
-  const dotColor = mine ? '#4fc3f7' : heard ? '#4fc3f7' : '#00a884';
-  const micColor = mine ? '#7d9c95' : heard ? '#4fc3f7' : '#00a884';
+  const dotColor = mine ? '#4fc3f7' : heard ? '#4fc3f7' : '#25d366';
+  const micColor = mine ? '#4d5e56' : heard ? '#4fc3f7' : '#25d366';
   const barPlayed = 'bg-[#7a8a93] dark:bg-[#8696a0]';
   const barIdle = mine ? 'bg-[#a9cbb7] dark:bg-[#1d5c4d]' : 'bg-[#cdd4d8] dark:bg-[#3b4a54]';
 
   const avatar = (
-    // Avatar de 1cm EXACTO (38px) para AMBOS. Mic RELLENO: en enviados medio
-    // cm mas ADENTRO (right 13px); en recibidos al filo izquierdo.
-    <span className="relative h-[38px] w-[38px] shrink-0">
-      <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#dfe5e7] text-[#9aa8b0] dark:bg-[#2a3942] dark:text-[#667781]">
-        <User className="h-7 w-7 translate-y-1" strokeWidth={1.6} fill="currentColor" />
-      </span>
-      <MicFilled
-        className={cn('absolute bottom-0 h-[15px] w-[15px]', mine ? 'right-[13px]' : '-left-0.5')}
-        style={{ color: micColor }}
-      />
+    // Avatar REAL de WhatsApp (default-contact-refreshed a circulo completo).
+    // Mientras SUENA la nota, el avatar se reemplaza por el boton de
+    // velocidad (1x -> 1.5x -> 2x), igual que en WhatsApp Web.
+    <span className="relative flex h-[54px] w-[54px] shrink-0 items-center justify-center">
+      {playing ? (
+        <button
+          type="button"
+          onClick={cycleRate}
+          className="flex h-[26px] min-w-[42px] items-center justify-center rounded-full bg-[#8696a0] px-1.5 text-[13px] font-semibold leading-none text-white dark:bg-[#3b4a54] dark:text-[#e9edef]"
+          aria-label={`Velocidad ${rate}×`}
+        >
+          {rate}×
+        </button>
+      ) : (
+        <>
+          <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full bg-[#dfe5e7] text-[#606263] dark:bg-[#2a3942] dark:text-[#8696a0]">
+            <DefaultContactIcon className="h-full w-full" />
+          </span>
+          <MicFilled
+            className={cn('absolute bottom-0 h-[26px] w-[17px]', mine ? 'right-[2px]' : '-left-[0px]')}
+            style={{ color: micColor }}
+          />
+        </>
+      )}
     </span>
   );
 
   const playBtn = (
-    <span className="shrink-0 px-2.5">
+    // El -left-[6px] corre SOLO el boton a la izquierda (posicion relativa:
+    // no empuja al avatar, la onda, la hora ni la duracion).
+    <span className="relative -left-[6px] shrink-0 mx-4">
       <button
         type="button"
         onClick={toggle}
@@ -2439,9 +2661,9 @@ function WaAudio({
         aria-label={playing ? 'Pausar' : 'Reproducir'}
       >
         {playing ? (
-          <Pause className="h-[18px] w-[18px] fill-current" />
+          <PauseFilled className="h-[22px] w-[22px]" />
         ) : (
-          <Play className="h-[18px] w-[18px] fill-current" />
+          <PlayFilled className="h-[22px] w-[22px]" />
         )}
       </button>
     </span>
@@ -2451,51 +2673,97 @@ function WaAudio({
   // la fila de duracion/hora abajo -> su borde inferior queda EXACTO al filo
   // inferior del circulo del avatar.
   const waveCol = (
-    <div className="flex h-[38px] min-w-0 flex-1 flex-col justify-between">
-      <div className="relative flex h-[20px] min-w-0 cursor-pointer items-center gap-[2px] pl-1.5" onClick={seek}>
-        {bars.map((v, i) => (
-          <span
-            key={i}
-            className={cn(
-              'w-[2.5px] shrink-0 rounded-full',
-              i / BAR_COUNT <= progress && (playing || t > 0) ? barPlayed : barIdle,
-            )}
-            style={{ height: `${Math.round(3 + v * 13)}px` }}
-          />
-        ))}
+    // Añadimos mr-8 (margen derecho de 32px) directamente aquí adentro
+    <div className="flex h-[38px] min-w-0 flex-1 flex-col justify-between mr-8">
+      <div
+        className="relative h-[20px] min-w-0 cursor-pointer touch-none select-none"
+        onPointerDown={onScrubDown}
+        onPointerMove={onScrubMove}
+        onPointerUp={onScrubEnd}
+        onPointerCancel={onScrubEnd}
+      >
+        {/* Capa 1: la onda completa en color SIN escuchar. El espaciado es
+            AUTOMATICO (justify-between): la onda llena EXACTO el ancho del
+            contenedor y termina justo donde la bolita llega al 100%. */}
+        <div className="flex h-full items-center justify-between pl-1.5">
+          {bars.map((v, i) => (
+            <span
+              key={i}
+              className={cn('w-[2.5px] shrink-0 rounded-full', barIdle)}
+              style={{ height: `${Math.round(3 + v * 13)}px` }}
+            />
+          ))}
+        </div>
+        {/* Capa 2: la MISMA onda en color escuchado, RECORTADA al mismo % que
+            posiciona la bolita. La copia interna mide 100/progress% (el
+            inverso) -> siempre igual de ancha que la capa 1, barra por barra. */}
+        <div
+          className="pointer-events-none absolute inset-y-0 left-0 overflow-hidden"
+          style={{ width: `${(progress * 100).toFixed(3)}%` }}
+        >
+          <div
+            className="flex h-full items-center justify-between pl-1.5"
+            style={{ width: progress > 0.0001 ? `${(100 / progress).toFixed(3)}%` : '100%' }}
+          >
+            {bars.map((v, i) => (
+              <span
+                key={i}
+                className={cn('w-[2.5px] shrink-0 rounded-full', barPlayed)}
+                style={{ height: `${Math.round(3 + v * 13)}px` }}
+              />
+            ))}
+          </div>
+        </div>
         {/* Bolita SIEMPRE visible (al inicio si no se ha reproducido). */}
         <span
           className="absolute top-1/2 h-[12px] w-[12px] -translate-y-1/2 rounded-full shadow"
-          style={{ left: `calc(${(progress * 100).toFixed(2)}% - 4px)`, backgroundColor: dotColor }}
+          style={{ left: `calc(${(progress * 100).toFixed(3)}% - 4px)`, backgroundColor: dotColor }}
         />
       </div>
-      <div className="flex items-center justify-between pl-1.5 text-[11px] leading-[12px] text-[#667781] dark:text-[#8696a0]">
+      <div className="flex items-center w-full pl-1.5 text-[11px] leading-[12px] text-[#667781] dark:text-[#8696a0]">
+
+        {/* El contador de la izquierda (0:01) */}
         <span>{fmtSecs(playing || t > 0 ? t : (dur ?? 0))}</span>
-        <span className="flex items-center gap-1">
+
+        {/* 2. CONTROL TOTAL: Usa ml-[px] para empujarlo los píxeles exactos que quieras */}
+        {/* Añadimos whitespace-nowrap al contenedor de la hora para prohibir los saltos de línea */}
+        <span className="flex items-center gap-1 ml-[105px] whitespace-nowrap">
           {timeOf(m.createdAt)}
           {mine ? <Ticks status={m.status} pending={pending} failText={failText(m)} /> : null}
         </span>
+
       </div>
     </div>
   );
 
+
+
+
   return (
     // BURBUJA de 1.3cm EXACTOS (49px) para AMBOS, contenido CENTRADO
     // verticalmente (mismo aire arriba y abajo del avatar: (49-38)/2).
-    <div className="flex h-[49px] w-[310px] max-w-full items-center px-1.5">
+    <div className="flex h-[65px] w-[325px] max-w-full items-center px-1.5 ">
       <audio
         ref={audioRef}
         src={src}
-        preload="metadata"
+        preload="none"
         className="hidden"
         onError={() => {
           if (m.mediaUrl && src !== m.mediaUrl) setSrc(m.mediaUrl);
         }}
-        onPlay={() => setPlaying(true)}
+        onPlay={(e) => {
+          // Reproduccion EXCLUSIVA: si otro audio esta sonando, se pausa.
+          const el = e.currentTarget;
+          if (waActiveAudio && waActiveAudio !== el) waActiveAudio.pause();
+          waActiveAudio = el;
+          setPlaying(true);
+        }}
         onPause={() => setPlaying(false)}
         onEnded={() => {
           setPlaying(false);
           setT(0);
+          // Aviso para la CADENA: si el siguiente mensaje es audio, sigue el.
+          window.dispatchEvent(new CustomEvent('wa-audio-next', { detail: { afterId: m.id } }));
         }}
         onTimeUpdate={(e) => setT(e.currentTarget.currentTime)}
         onLoadedMetadata={(e) => {
@@ -2506,16 +2774,22 @@ function WaAudio({
       {mine ? (
         <>
           {avatar}
+          <div className="w-2 shrink-0" />
           {playBtn}
-          {waveCol}
+          {/* Agregamos mt-2 para bajar la onda de audio y la hora */}
+          <div className="min-w-0 flex-1 mt-4">{waveCol}</div>
         </>
       ) : (
         <>
           {playBtn}
-          {waveCol}
-          <span className="shrink-0 pl-2">{avatar}</span>
+          {/* Agregamos mt-2 para bajar la onda de audio y la hora */}
+          <div className="min-w-0 flex-1 mt-4">{waveCol}</div>
+          <div className="h-[54px] w-[54px] min-w-[54px] max-w-[54px] shrink-0">
+            {avatar}
+          </div>
         </>
       )}
+
     </div>
   );
 }
