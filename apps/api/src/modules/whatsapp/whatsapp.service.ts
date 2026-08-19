@@ -217,6 +217,7 @@ export class WhatsappService {
     const conn = await prisma.dialog360Connection.create({
       data: { encryptedApiKey, mode: input.mode, webhookUrl, status: 'connected', lastError: null },
     });
+    this.waConn.invalidate(tenantId);
     return {
       mode: input.mode,
       status: 'connected',
@@ -228,8 +229,9 @@ export class WhatsappService {
 
   async disconnectDialog360(auth: AuthContext): Promise<void> {
     this.assertAdmin(auth);
-    const { prisma } = getTenantContext();
+    const { tenantId, prisma } = getTenantContext();
     await prisma.dialog360Connection.deleteMany({});
+    this.waConn.invalidate(tenantId);
   }
 
   /** Plantillas de la WABA con CACHE de 60s (cada relectura cuesta ~0.5-1s). */
@@ -665,11 +667,12 @@ export class WhatsappService {
     const prev = (Array.isArray(msg.reactions) ? msg.reactions : []) as Array<{ emoji: string; mine: boolean }>;
     const rest = prev.filter((r) => !r.mine);
     const next = input.emoji ? [...rest, { emoji: input.emoji, mine: true }] : rest;
-    await prisma.waMessage.update({
+    const updated = await prisma.waMessage.update({
       where: { id: msg.id },
       data: { reactions: next as unknown as Prisma.InputJsonValue },
     });
-    await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    // DTO completo: los demas admins la ven al instante (cero refetch).
+    await this.publisher.publishWaMessage(tenantId, prisma, updated);
     const externalId = msg.externalId;
     void (async () => {
       try {
@@ -678,10 +681,10 @@ export class WhatsappService {
         this.logger.warn(
           `Reaccion no llego a Meta (se revierte): ${err instanceof Error ? err.message : err}`,
         );
-        await prisma.waMessage
+        const reverted = await prisma.waMessage
           .update({ where: { id: msg.id }, data: { reactions: prev as unknown as Prisma.InputJsonValue } })
           .catch(() => null);
-        await this.realtime.publish(tenantId, { kind: 'wa.message', phone }).catch(() => null);
+        if (reverted) await this.publisher.publishWaMessage(tenantId, prisma, reverted).catch(() => null);
       }
     })();
     return { ok: true };
@@ -697,7 +700,10 @@ export class WhatsappService {
       data: { starred: input.starred },
     });
     if (res.count === 0) throw new NotFoundException('Mensaje no encontrado');
-    await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    // DTO completo: la estrella aparece al instante (cero refetch).
+    const updated = await prisma.waMessage.findUnique({ where: { id: input.messageId } });
+    if (updated) await this.publisher.publishWaMessage(tenantId, prisma, updated);
+    else await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
     return { ok: true };
   }
 

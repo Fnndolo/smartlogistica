@@ -153,7 +153,7 @@ export class WhatsappWebhookService {
             });
             if (phone) touched.add(phone);
           } else if (['sent', 'delivered', 'read'].includes(String(s.status))) {
-            const phone = await this.applyDeliveryStatus(prisma, s).catch(() => null);
+            const phone = await this.applyDeliveryStatus(tenantId, prisma, s).catch(() => null);
             if (phone) touched.add(phone);
           }
         }
@@ -338,10 +338,11 @@ export class WhatsappWebhookService {
     if (!msg) return null;
     if (msg.status === 'failed') return null; // ya procesado (reintentos del webhook)
     // Bolita roja + detalle del error EN el mensaje (nada de notas al hilo:
-    // el detalle se ve al tocar la bolita).
+    // el detalle se ve al tocar la bolita). DTO completo: sin refetch.
     await prisma.waMessage
       .update({ where: { id: msg.id }, data: { status: 'failed', error: `Meta: ${detail}` } })
       .catch(() => null);
+    await this.publishRow(tenantId, prisma, msg.id);
 
     // ¿Era una confirmacion? Revertir el evento -> badge "Sin enviar" de nuevo.
     const events = await prisma.orderEvent.findMany({
@@ -363,15 +364,25 @@ export class WhatsappWebhookService {
       await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
       this.logger.warn(`Confirmacion NO entregada (${detail}): ${events.length} pedido(s) vuelven a "Sin enviar"`);
     }
-    return msg.phone;
+    return null;
   }
 
   /**
-   * Chulito del mensaje (sent -> delivered -> read), sin degradar nunca
-   * (los webhooks pueden llegar en desorden). Devuelve el telefono del hilo.
+   * Publica el DTO COMPLETO de un mensaje ya actualizado: el panel lo funde en
+   * su cache y PINTA AL INSTANTE (cero refetch). El generico {phone} — que
+   * obliga a refetchear el hilo entero (~0.5-1s) — queda solo de respaldo.
    */
-  private async applyDeliveryStatus(prisma: PrismaClient, s: Any): Promise<string | null> {
-    const rank: Record<string, number> = { sent: 1, delivered: 2, read: 3, failed: 4 };
+  private async publishRow(tenantId: string, prisma: PrismaClient, rowId: string): Promise<void> {
+    const row = await prisma.waMessage.findUnique({ where: { id: rowId } });
+    if (row) await this.publisher.publishWaMessage(tenantId, prisma, row);
+  }
+
+  private async applyDeliveryStatus(
+    tenantId: string,
+    prisma: PrismaClient,
+    s: Any,
+  ): Promise<string | null> {
+    const rank: Record<string, number> = { queued: 0, sent: 1, delivered: 2, read: 3, failed: 4 };
     const next = String(s.status);
     const row = await prisma.waMessage.findUnique({
       where: { externalId: String(s.id) },
@@ -380,7 +391,9 @@ export class WhatsappWebhookService {
     if (!row) return null;
     if ((rank[row.status ?? ''] ?? 0) >= (rank[next] ?? 0)) return null;
     await prisma.waMessage.update({ where: { id: row.id }, data: { status: next } });
-    return row.phone;
+    // Chulito INSTANTANEO: DTO completo, sin refetch.
+    await this.publishRow(tenantId, prisma, row.id);
+    return null;
   }
 
   /**
@@ -436,6 +449,11 @@ export class WhatsappWebhookService {
                 where: { id: target.id },
                 data: { body: String(newBody), edited: true },
               });
+              // Edicion INSTANTANEA en el panel: DTO completo, sin refetch.
+              if (opts.instant !== false) {
+                await this.publishRow(tenantId, prisma, target.id);
+                return null;
+              }
               return phone;
             }
           }
@@ -471,6 +489,10 @@ export class WhatsappWebhookService {
               where: { id: dup.id },
               data: { body: newBody, edited: true },
             });
+            if (opts.instant !== false) {
+              await this.publishRow(tenantId, prisma, dup.id);
+              return null;
+            }
             return phone; // repintar el hilo
           }
           return null;
@@ -500,6 +522,11 @@ export class WhatsappWebhookService {
           where: { id: target.id },
           data: { reactions: next as unknown as Prisma.InputJsonValue },
         });
+        // Reaccion INSTANTANEA en el panel: DTO completo, sin refetch.
+        if (opts.instant !== false) {
+          await this.publishRow(tenantId, prisma, target.id);
+          return null;
+        }
         return phone;
       }
 

@@ -1,3 +1,4 @@
+import { Agent as HttpsAgent } from 'node:https';
 import { Injectable, Logger } from '@nestjs/common';
 import axios, { type AxiosInstance } from 'axios';
 import type { Dialog360Mode } from '@smartlogistica/shared';
@@ -28,12 +29,27 @@ export class Dialog360Client {
       : 'https://waba-v2.360dialog.io';
   }
 
+  /**
+   * Conexiones REUTILIZADAS (keep-alive): sin esto, cada envio pagaba
+   * DNS + TCP + TLS nuevos hacia 360dialog (~300-600ms regalados por mensaje).
+   * La instancia se cachea por apiKey+modo y comparte el agente.
+   */
+  private readonly keepAlive = new HttpsAgent({ keepAlive: true, maxSockets: 20 });
+  private readonly httpCache = new Map<string, AxiosInstance>();
+
   buildHttp(apiKey: string, mode: Dialog360Mode): AxiosInstance {
-    return axios.create({
+    const cacheKey = `${mode}:${apiKey}`;
+    const hit = this.httpCache.get(cacheKey);
+    if (hit) return hit;
+    const instance = axios.create({
       baseURL: this.baseUrl(mode),
       timeout: TIMEOUT_MS,
       headers: { 'D360-API-KEY': apiKey, 'Content-Type': 'application/json' },
+      httpsAgent: this.keepAlive,
     });
+    if (this.httpCache.size > 100) this.httpCache.clear(); // tope defensivo
+    this.httpCache.set(cacheKey, instance);
+    return instance;
   }
 
   private messagesPath(mode: Dialog360Mode): string {
