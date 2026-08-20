@@ -686,6 +686,32 @@ export class WhatsappWebhookService {
       // evento). En import de historial NO (pueden ser miles).
       if (opts.instant !== false) await this.publisher.publishWaMessage(tenantId, prisma, fresh);
 
+      // "Visto" INFERIDO: si el cliente CONTESTA, leyo lo anterior. Los
+      // recibos de los mensajes enviados desde el CELULAR (coexistencia)
+      // jamas llegan por la Cloud API — la respuesta es la mejor señal real:
+      // todo lo saliente anterior en sent/delivered pasa a azul. (Los 'read'
+      // reales que lleguen despues quedan igual: mismo rango, sin degradar.)
+      if (direction === 'in' && opts.instant !== false) {
+        const seen = await prisma.waMessage.findMany({
+          where: {
+            phone,
+            direction: 'out',
+            status: { in: ['sent', 'delivered'] },
+            createdAt: { lte: row.createdAt },
+          },
+          select: { id: true },
+          orderBy: { createdAt: 'desc' },
+          take: 50,
+        });
+        if (seen.length > 0) {
+          await prisma.waMessage.updateMany({
+            where: { id: { in: seen.map((u) => u.id) } },
+            data: { status: 'read' },
+          });
+          for (const u of seen) await this.publishRow(tenantId, prisma, u.id);
+        }
+      }
+
       // Refrescar el nombre del contacto si WhatsApp lo trae.
       const name = names.get(String(rawPhone));
       if (direction === 'in' && name) {
