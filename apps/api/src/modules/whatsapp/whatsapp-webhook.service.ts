@@ -227,11 +227,11 @@ export class WhatsappWebhookService {
     };
 
     if (btn || pay) {
-      // ¿El boton de INTERES del respaldo (flujo de venta)? Cancela el flujo,
-      // etiqueta "Interesado" y responde al instante.
+      // ¿El boton del RESPALDO (flujo de venta)? SOLO se etiqueta
+      // "Interesado" y se cancela el flujo — del cierre se encarga el asesor
+      // (nada de respuestas automaticas aqui).
       if (this.upsell.isInterestButton(pay, btn)) {
         await this.upsell.markInterested(tenantId, prisma, phone);
-        await say(this.upsell.interestedReply());
         return;
       }
       // ¿Confirmando el BORRADOR de la direccion nueva?

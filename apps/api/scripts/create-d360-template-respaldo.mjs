@@ -17,12 +17,16 @@ const adminDb = (u, db) => { const x = new URL(u); x.pathname = `/${db}`; return
 
 const BODY =
   '🎉 ¡{{1}}, su equipo ya está en sus manos!\n\n' +
-  'Disfrútelo al máximo — y ahora que ya lo tiene, no se preocupe por un robo o un accidente: todavía está a tiempo de activar el RESPALDO de Smart Gadgets 🛡️\n\n' +
-  'Por solo el 10% del valor de su equipo queda protegido UN AÑO COMPLETO: robo 🚨, caídas y accidentes cubiertos. Y puede pagarlo con las cuotas cómodas de Addi 💙\n\n' +
-  'Es el mejor momento — toque el botón y un asesor le cuenta todo, sin compromiso 👇';
+  'Disfrútelo — y ahora protéjalo. Un robo 🚨 o una caída 📱💥 en los primeros meses es más común de lo que uno cree, y volver a pagar un equipo completo duele el doble.\n\n' +
+  'Con el RESPALDO de Smart Gadgets eso queda resuelto:\n\n' +
+  '✅ Cubre ROBO, caídas y accidentes\n' +
+  '✅ UN AÑO completo de protección\n' +
+  '✅ Solo el 10% del valor de su equipo\n' +
+  '✅ En cuotas cómodas con Addi 💙\n\n' +
+  'Todavía está a tiempo de activarlo: toque el botón y su asesor le confirma de una vez las cuotas y el medio de pago 👇';
 
 const TEMPLATE = {
-  name: process.argv[2] ?? 'respaldo_entregado_full',
+  name: process.argv[2] ?? 'respaldo_entregado_pro',
   language: 'es',
   category: 'MARKETING',
   components: [

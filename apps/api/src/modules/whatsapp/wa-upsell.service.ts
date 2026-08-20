@@ -27,14 +27,17 @@ import { normBtn, tenDigits } from './wa-shared';
  * categoria) — un job encolado nunca dispara de mas.
  */
 
-/** Boton de los toques 1 y 2 (sesion; max 20 caracteres). */
-export const UPSELL_BUTTON = { id: 'upsell_interes', title: '🛡️ Me interesa' };
-/** Boton de la plantilla del toque 3 (los quick reply llegan como texto). */
+/** Boton de los toques 1 y 2 (sesion; max 20 caracteres). Primera persona y
+ * compromiso: quien lo toca ya DECIDIO comprar (el asesor solo coordina el
+ * pago) — nada de "me interesa" tibio. */
+export const UPSELL_BUTTON = { id: 'upsell_interes', title: '¡Quiero mi respaldo!' };
+/** Boton de las plantillas del toque 3 (los quick reply llegan como texto). */
 export const UPSELL_TEMPLATE_BUTTON = 'Quiero mi respaldo';
 /** Prioridad FIJA de la plantilla del toque 3 (primera APROBADA gana). */
 const UPSELL_TEMPLATE_PRIORITY = [
   ...(process.env.D360_UPSELL_TEMPLATE ? [process.env.D360_UPSELL_TEMPLATE] : []),
-  'respaldo_entregado_full', // version enriquecida: robo + 10% + cuotas Addi
+  'respaldo_entregado_pro', // copy de VENTA: necesidad + info completa + cierre
+  'respaldo_entregado_full',
   'respaldo_entregado_smart',
 ];
 /** Etiqueta (con color) que marca al cliente que toco el boton. */
@@ -43,20 +46,30 @@ const INTERESTED_COLOR = '#f59e0b';
 
 const STEP_DELAY_MS = 2 * 60_000;
 
+// COPY DE VENTA: pre-vende completo (necesidad + cobertura + precio + cuotas)
+// para que el boton sea la DECISION de compra — el asesor solo coordina las
+// cuotas y el medio de pago.
 const MSG_STEP1 =
-  'Mientras preparamos su envío 📦, queremos contarle un beneficio exclusivo que tenemos para nuestros clientes: el RESPALDO de Smart Gadgets 🛡️\n\n' +
-  'Por solo el 10% del valor de su equipo, queda protegido UN AÑO COMPLETO contra robo 🚨, caídas y accidentes 📱💥 — para que estrene sin preocupaciones.\n\n' +
-  'Y lo mejor: puede pagarlo con las cuotas cómodas de Addi 💙\n\n' +
-  'Toque el botón y le contamos todo, sin compromiso 👇';
+  'Mientras preparamos su envío 📦, piense en esto un segundo:\n\n' +
+  'Usted acaba de invertir en un equipo nuevo. Ahora imagine que a los pocos días se lo roban en la calle 🚨 o se le va al piso y la pantalla no sobrevive 📱💥… tocaría empezar de cero, pagando todo otra vez.\n\n' +
+  'Para que esa NUNCA sea su historia, existe el RESPALDO de Smart Gadgets 🛡️:\n\n' +
+  '✅ Cubre ROBO, caídas y accidentes\n' +
+  '✅ Protección por UN AÑO completo\n' +
+  '✅ Cuesta solo el 10% del valor de su equipo\n' +
+  '✅ Y lo paga en cuotas cómodas con Addi 💙\n\n' +
+  'Estrenar tranquilo cuesta poquito — perder el equipo cuesta TODO.\n\n' +
+  'Toque el botón y su asesor le confirma de una vez las cuotas y el medio de pago 👇';
 
 const MSG_STEP2 =
   '🚚 ¡Su equipo ya va en camino!\n\n' +
-  'Mientras llega a sus manos, no se preocupe por un robo o un accidente: con el RESPALDO de Smart Gadgets, por solo el 10% del valor de su equipo queda protegido UN AÑO COMPLETO 🛡️ — robo 🚨, caídas y accidentes cubiertos.\n\n' +
-  'Y puede pagarlo con las cuotas cómodas de Addi 💙\n\n' +
-  'Toque el botón y un asesor le cuenta los detalles 👇';
-
-const MSG_INTERESTED_REPLY =
-  '¡Excelente decisión! 🙌 En un momento uno de nuestros asesores le comparte toda la información del RESPALDO 🛡️';
+  'Y justo ahora toca decidir algo importante: ¿qué pasa si se lo roban 🚨 o se le cae al tercer día de estreno? 📱💥 Nadie lo planea — por eso es lo que más duele en el bolsillo.\n\n' +
+  'Con el RESPALDO de Smart Gadgets eso deja de ser un riesgo:\n\n' +
+  '✅ ROBO, caídas y accidentes cubiertos\n' +
+  '✅ UN AÑO completo de protección\n' +
+  '✅ Solo el 10% del valor de su equipo\n' +
+  '✅ En cuotas cómodas con Addi 💙\n\n' +
+  'Su equipo llega en cualquier momento — que llegue ya protegido.\n\n' +
+  'Toque el botón y su asesor le confirma de una vez las cuotas y el medio de pago 👇';
 
 interface UpsellJob {
   tenantId: string;
@@ -214,11 +227,12 @@ export class WaUpsellService {
     );
   }
 
-  /** ¿Este boton es el de interes del respaldo? (sesion O plantilla). */
+  /** ¿Este boton es el del respaldo? (sesion O plantilla, todas las
+   * versiones: 'quiero mi respaldo', 'me interesa'...). btn llega normalizado. */
   isInterestButton(pay: string | null, btn: string | null): boolean {
     return (
       pay === UPSELL_BUTTON.id ||
-      (btn != null && (btn === normBtn(UPSELL_BUTTON.title) || btn === normBtn(UPSELL_TEMPLATE_BUTTON)))
+      (btn != null && (btn.includes('respaldo') || btn === 'me interesa'))
     );
   }
 
@@ -247,11 +261,6 @@ export class WaUpsellService {
     }
     await this.realtime.publish(tenantId, { kind: 'wa.message', phone }).catch(() => null);
     this.logger.log(`Cliente ${phone} INTERESADO en el respaldo (flujo cancelado, etiquetado)`);
-  }
-
-  /** Respuesta instantanea al interesado (dentro de la ventana: acaba de tocar). */
-  interestedReply(): string {
-    return MSG_INTERESTED_REPLY;
   }
 }
 
