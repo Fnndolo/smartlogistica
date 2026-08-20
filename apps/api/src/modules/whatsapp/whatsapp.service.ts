@@ -905,6 +905,58 @@ export class WhatsappService {
     return this.markChatRead(phone, auth);
   }
 
+  // === "Escribiendo..." ===
+
+  /** Throttle del indicador hacia el CELULAR (Meta lo muestra ~25s por aviso). */
+  private readonly typingToMetaAt = new Map<string, number>();
+
+  async typingByOrder(orderId: string, auth: AuthContext): Promise<{ ok: true }> {
+    const { phone } = await this.orderPhone(orderId);
+    return this.typing(phone, auth);
+  }
+
+  /**
+   * Un admin esta ESCRIBIENDO en este chat: (1) SSE a los demas admins (el
+   * panel filtra al propio autor) y (2) indicador NATIVO "escribiendo..." en
+   * el celular del cliente (Cloud API, throttled). Best-effort total: jamas
+   * le falla al que teclea.
+   */
+  async typing(rawPhone: string, auth: AuthContext): Promise<{ ok: true }> {
+    this.assertAdmin(auth);
+    const { tenantId, prisma } = getTenantContext();
+    const phone = tenDigits(rawPhone);
+    if (phone.length < 7) return { ok: true };
+    await this.realtime
+      .publish(tenantId, {
+        kind: 'wa.typing',
+        phone,
+        userId: auth.userId,
+        name: auth.name?.trim() || auth.email,
+      })
+      .catch(() => null);
+    const key = `${tenantId}:${phone}`;
+    if (Date.now() - (this.typingToMetaAt.get(key) ?? 0) > 20_000) {
+      this.typingToMetaAt.set(key, Date.now());
+      void (async () => {
+        try {
+          const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
+          if (!d360 || d360.mode !== 'production') return;
+          const lastIn = await prisma.waMessage.findFirst({
+            where: { phone, direction: 'in', externalId: { not: null } },
+            orderBy: { createdAt: 'desc' },
+            select: { externalId: true },
+          });
+          if (lastIn?.externalId) {
+            await this.dialog360.sendTypingIndicator(d360.http, d360.mode, lastIn.externalId);
+          }
+        } catch {
+          /* best-effort: sin indicador no pasa nada */
+        }
+      })();
+    }
+    return { ok: true };
+  }
+
   // === Plantillas de Meta (el picker de "/" en el chat) ===
 
   /**

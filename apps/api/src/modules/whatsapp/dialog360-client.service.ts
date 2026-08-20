@@ -56,6 +56,21 @@ export class Dialog360Client {
     return mode === 'sandbox' ? '/v1/messages' : '/messages';
   }
 
+  /**
+   * "Escribiendo..." EN EL CELULAR del cliente (indicador nativo de la Cloud
+   * API): va junto con el read del ultimo mensaje entrante; Meta lo muestra
+   * ~25s o hasta que salga el mensaje. OJO: marca ese entrante como LEIDO
+   * en el celular del cliente (sus chulitos se ponen azules).
+   */
+  async sendTypingIndicator(http: AxiosInstance, mode: Dialog360Mode, messageId: string): Promise<void> {
+    await http.post(this.messagesPath(mode), {
+      messaging_product: 'whatsapp',
+      status: 'read',
+      message_id: messageId,
+      typing_indicator: { type: 'text' },
+    });
+  }
+
   /** Configura el webhook (a donde 360dialog manda TODO lo que pasa por el numero). */
   async setWebhook(http: AxiosInstance, url: string): Promise<void> {
     await http.post('/v1/configs/webhook', { url });

@@ -214,10 +214,42 @@ export function WhatsappInbox() {
     return () => window.removeEventListener('keydown', onKey);
   }, [selected]);
 
+  // "Escribiendo..." por chat (de OTROS admins), con auto-expiracion.
+  const [typing, setTyping] = useState<Record<string, string>>({});
+  const typingTimersRef = useRef<Record<string, number>>({});
+  const noteTyping = useCallback((phone: string, name: string) => {
+    setTyping((t) => ({ ...t, [phone]: name }));
+    const timers = typingTimersRef.current;
+    if (timers[phone]) window.clearTimeout(timers[phone]);
+    timers[phone] = window.setTimeout(() => {
+      setTyping((t) => {
+        if (!(phone in t)) return t;
+        const next = { ...t };
+        delete next[phone];
+        return next;
+      });
+    }, 3500);
+  }, []);
+  const clearTyping = useCallback((phone: string) => {
+    setTyping((t) => {
+      if (!(phone in t)) return t;
+      const next = { ...t };
+      delete next[phone];
+      return next;
+    });
+  }, []);
+
   // Tiempo real: el evento trae el MENSAJE -> lista al instante.
   useOrdersStream(
     useCallback(
       (event) => {
+        if (event?.kind === 'wa.typing') {
+          const phone = typeof event.phone === 'string' ? event.phone : null;
+          if (!phone) return;
+          if (me?.id && (event as { userId?: string }).userId === me.id) return;
+          noteTyping(phone, String((event as { name?: string }).name ?? ''));
+          return;
+        }
         if (event?.kind !== 'wa.message') return;
         const phone = typeof event.phone === 'string' ? event.phone : null;
         if (!phone) return;
@@ -226,10 +258,18 @@ export function WhatsappInbox() {
           void qc.invalidateQueries({ queryKey: ['wa-inbox'] });
           return;
         }
+        clearTyping(phone);
         const isOpen = selectedRef.current === phone;
         qc.setQueryData<WaInbox>(['wa-inbox'], (old) => {
           if (!old) return old;
           const existing = old.chats.find((c) => c.phone === phone);
+          // Un UPDATE de un mensaje VIEJO (chulito en cascada, reaccion,
+          // editado) NO es "el ultimo mensaje": no reescribe la fila.
+          if (existing && msg.createdAt < existing.lastAt) return old;
+          // ¿Es actualizacion del MISMO mensaje que ya se muestra? -> no
+          // volver a contar el no-leido.
+          const isUpdateOfShown =
+            existing && msg.createdAt === existing.lastAt && msg.direction === existing.lastDirection;
           const updated: WaInboxItem = {
             phone,
             name: existing?.name ?? null,
@@ -240,7 +280,14 @@ export function WhatsappInbox() {
             lastDirection: msg.direction,
             lastStatus: msg.direction === 'out' ? msg.status : null,
             // Regla: ultimo mensaje NUESTRO -> respondido -> 0.
-            unread: msg.direction === 'out' ? 0 : isOpen ? 0 : (existing?.unread ?? 0) + 1,
+            unread:
+              msg.direction === 'out'
+                ? 0
+                : isOpen
+                  ? 0
+                  : isUpdateOfShown
+                    ? (existing?.unread ?? 0)
+                    : (existing?.unread ?? 0) + 1,
             archived: existing?.archived ?? false,
             muted: existing?.muted ?? false,
             pinned: existing?.pinned ?? false,
@@ -253,7 +300,7 @@ export function WhatsappInbox() {
         if (!existingName(qc, phone)) void qc.invalidateQueries({ queryKey: ['wa-inbox'] });
       },
       // eslint-disable-next-line react-hooks/exhaustive-deps
-      [qc],
+      [qc, me?.id, noteTyping, clearTyping],
     ),
   );
 
@@ -456,10 +503,17 @@ export function WhatsappInbox() {
                   </span>
                   <span className="mt-0.5 flex items-center justify-between gap-2">
                     <span className="flex min-w-0 items-center gap-1 text-[13px] text-[#667781] dark:text-[#8696a0]">
-                      {c.lastDirection === 'out' && c.lastStatus ? (
-                        <Ticks status={c.lastStatus} pending={false} />
-                      ) : null}
-                      <span className="truncate">{preview(c)}</span>
+                      {typing[c.phone] ? (
+                        /* Otro admin teclea en este chat (verde, como WhatsApp). */
+                        <span className="truncate font-medium italic text-[#00a884]">escribiendo…</span>
+                      ) : (
+                        <>
+                          {c.lastDirection === 'out' && c.lastStatus ? (
+                            <Ticks status={c.lastStatus} pending={false} />
+                          ) : null}
+                          <span className="truncate">{preview(c)}</span>
+                        </>
+                      )}
                     </span>
                     <span className="flex shrink-0 items-center gap-1">
                       {c.labels.slice(0, 2).map((l) => (
@@ -512,6 +566,7 @@ export function WhatsappInbox() {
             <ChatHeader
               chat={selectedChat ?? { phone: selected, name: null, labels: [] }}
               labelColor={labelColor}
+              typingName={typing[selected] ?? null}
               onLabels={() => setLabelFor(selected)}
               onClose={() => setSelected(null)}
             />
@@ -809,11 +864,14 @@ function LabelModal({
 function ChatHeader({
   chat,
   labelColor,
+  typingName,
   onLabels,
   onClose,
 }: {
   chat: { phone: string; name: string | null; labels: string[] };
   labelColor: Map<string, string>;
+  /** Nombre del ADMIN que esta tecleando en este chat (null = nadie). */
+  typingName?: string | null;
   onLabels: () => void;
   onClose: () => void;
 }) {
@@ -832,7 +890,13 @@ function ChatHeader({
         <p className="truncate text-[15px] font-medium text-[#111b21] dark:text-[#e9edef]">
           {displayName(chat)}
         </p>
-        <p className="truncate text-[12px] text-[#667781] dark:text-[#8696a0]">+57 {chat.phone}</p>
+        {typingName ? (
+          <p className="truncate text-[12px] font-medium italic text-[#00a884]">
+            {typingName} está escribiendo…
+          </p>
+        ) : (
+          <p className="truncate text-[12px] text-[#667781] dark:text-[#8696a0]">+57 {chat.phone}</p>
+        )}
       </div>
       <div className="hidden items-center gap-1 sm:flex">
         {chat.labels.map((l) => (

@@ -26,6 +26,7 @@ import { toast } from 'sonner';
 import type { WaMessage, WaTemplate, WaTemplateList, WaThread } from '@smartlogistica/shared';
 
 import { Button } from '@/components/ui/button';
+import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { ApiError, api } from '@/lib/api-client';
 import { cn, titleCaseName } from '@/lib/utils';
 
@@ -84,15 +85,28 @@ export function WhatsappPanel({
   // Mensaje nuevo (entrante o de otro admin) -> refrescar el hilo al instante.
   const phoneRef = useRef<string | null>(null);
   phoneRef.current = thread?.phone ?? null;
+  // "Escribiendo..." de OTRO admin en este chat (burbujita de puntitos).
+  const me = useCurrentUser();
+  const [typingBy, setTypingBy] = useState<string | null>(null);
+  const typingHideRef = useRef<number | undefined>(undefined);
   useOrdersStream(
     useCallback(
       (event) => {
+        if (event?.kind === 'wa.typing') {
+          if (event.phone !== phoneRef.current) return;
+          if (me?.id && (event as { userId?: string }).userId === me.id) return;
+          setTypingBy(String((event as { name?: string }).name ?? 'Alguien'));
+          if (typingHideRef.current) window.clearTimeout(typingHideRef.current);
+          typingHideRef.current = window.setTimeout(() => setTypingBy(null), 3500);
+          return;
+        }
         if (event?.kind !== 'wa.message') return;
         if (event.phone && phoneRef.current && event.phone !== phoneRef.current) return;
         // INSTANTANEO: si el evento trae el mensaje completo, se pinta YA
         // (cero refetch). El evento generico {phone} queda como respaldo.
         const msg = (event as { message?: WaMessage }).message;
         if (msg?.id) {
+          setTypingBy(null); // llego el mensaje: fuera puntitos
           qc.setQueryData<WaThread>(['wa-thread', base], (old) => {
             if (!old) return old;
             return old.messages.some((x) => x.id === msg.id)
@@ -103,9 +117,18 @@ export function WhatsappPanel({
         }
         qc.invalidateQueries({ queryKey: ['wa-thread', base] });
       },
-      [qc, base],
+      [qc, base, me?.id],
     ),
   );
+
+  // Avisar "escribiendo..." (throttled 3s; el primero sale con la 1ra letra).
+  const typingPingRef = useRef(0);
+  const pingTyping = () => {
+    const now = Date.now();
+    if (now - typingPingRef.current < 3000) return;
+    typingPingRef.current = now;
+    void api.post(`${opBase}/typing`, {}).catch(() => null);
+  };
 
   const appendMessage = useCallback(
     (msg: WaMessage) => {
@@ -852,6 +875,23 @@ export function WhatsappPanel({
                 </div>
               ))
             )}
+            {typingBy ? (
+              /* Burbujita "escribiendo..." (otro admin), con los 3 puntitos. */
+              <div className="mt-2 flex justify-start">
+                <div
+                  className="flex items-center gap-[4px] rounded-[7.5px] rounded-tl-none bg-white px-3.5 py-[11px] shadow-[0_1px_0.5px_rgba(11,20,26,0.13)] dark:bg-[#202c33]"
+                  title={`${typingBy} está escribiendo…`}
+                >
+                  {[0, 1, 2].map((i) => (
+                    <span
+                      key={i}
+                      className="h-[7px] w-[7px] animate-bounce rounded-full bg-[#8696a0]"
+                      style={{ animationDelay: `${i * 150}ms`, animationDuration: '0.9s' }}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -1149,7 +1189,12 @@ export function WhatsappPanel({
             <input
               ref={inputRef}
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => {
+                setText(e.target.value);
+                // Desde la PRIMERA letra: "escribiendo..." a los demas admins
+                // y al celular del cliente (throttled).
+                if (e.target.value) pingTyping();
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'Escape' && slashMode) {
                   e.preventDefault();

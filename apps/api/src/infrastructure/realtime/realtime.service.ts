@@ -14,6 +14,7 @@ export interface OrderRealtimeEvent {
     | 'order.removed'
     | 'orders.refresh'
     | 'wa.message'
+    | 'wa.typing'
     | 'chat.message'
     | 'chat.reaction'
     | 'chat.typing';

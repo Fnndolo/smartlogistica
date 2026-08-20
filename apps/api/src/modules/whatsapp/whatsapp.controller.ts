@@ -128,6 +128,13 @@ export class WhatsappInboxController {
     return this.whatsapp.markChatRead(phone, user);
   }
 
+  /** "Escribiendo...": avisa a los demas admins y al celular del cliente. */
+  @Post('chats/:phone/typing')
+  @HttpCode(200)
+  async typing(@Param('phone') phone: string, @CurrentUser() user: AuthContext): Promise<{ ok: true }> {
+    return this.whatsapp.typing(phone, user);
+  }
+
   /** Marcar como NO leido (corre la marca antes del ultimo entrante). */
   @Post('chats/:phone/unread')
   @HttpCode(200)
@@ -355,6 +362,13 @@ export class OrderWhatsappController {
   @HttpCode(200)
   async read(@Param('id') id: string, @CurrentUser() user: AuthContext): Promise<{ ok: true }> {
     return this.whatsapp.markChatReadByOrder(id, user);
+  }
+
+  /** "Escribiendo...": avisa a los demas admins y al celular del cliente. */
+  @Post(':id/whatsapp/typing')
+  @HttpCode(200)
+  async typing(@Param('id') id: string, @CurrentUser() user: AuthContext): Promise<{ ok: true }> {
+    return this.whatsapp.typingByOrder(id, user);
   }
 
   /** Audio de una nota de voz del hilo, servido same-origin (onda real sin CORS). */
