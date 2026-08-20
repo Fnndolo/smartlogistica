@@ -8,6 +8,7 @@ import { StorageService } from '../../infrastructure/storage/storage.service';
 import { Dialog360Client } from './dialog360-client.service';
 import { WaConnectionService } from './wa-connection.service';
 import { WaPublisherService } from './wa-publisher.service';
+import { WaUpsellService } from './wa-upsell.service';
 import { normBtn, tenDigits } from './wa-shared';
 
 const MSG_CONFIRMED =
@@ -45,6 +46,7 @@ export class WhatsappWebhookService {
     private readonly realtime: RealtimeService,
     private readonly waConn: WaConnectionService,
     private readonly publisher: WaPublisherService,
+    private readonly upsell: WaUpsellService,
   ) {}
 
   /**
@@ -225,6 +227,13 @@ export class WhatsappWebhookService {
     };
 
     if (btn || pay) {
+      // ¿El boton de INTERES del respaldo (flujo de venta)? Cancela el flujo,
+      // etiqueta "Interesado" y responde al instante.
+      if (this.upsell.isInterestButton(pay, btn)) {
+        await this.upsell.markInterested(tenantId, prisma, phone);
+        await say(this.upsell.interestedReply());
+        return;
+      }
       // ¿Confirmando el BORRADOR de la direccion nueva?
       if (state === 'confirming' || state === 'confirming_retry') {
         if (pay === 'DRAFT_OK' || btn?.includes('si es correcto')) {
@@ -232,6 +241,8 @@ export class WhatsappWebhookService {
           await setState(null, null);
           if (addr) await this.applyAddressNative(tenantId, prisma, phone, 'modified', addr);
           await say(MSG_CONFIRMED);
+          // Flujo de venta del RESPALDO: toque 1 en 2 minutos (solo celulares).
+          await this.upsell.scheduleAfterConfirmation(tenantId, prisma, phone);
           return;
         }
         if (pay === 'DRAFT_NO' || btn?.includes('no es correcto')) {
@@ -245,6 +256,8 @@ export class WhatsappWebhookService {
         await setState(null, null);
         await this.applyAddressNative(tenantId, prisma, phone, 'confirmed');
         await say(MSG_CONFIRMED);
+        // Flujo de venta del RESPALDO: toque 1 en 2 minutos (solo celulares).
+        await this.upsell.scheduleAfterConfirmation(tenantId, prisma, phone);
         return;
       }
       if (pay === 'MODIFY' || btn?.includes('modificar')) {

@@ -58,6 +58,7 @@ import { CoordinadoraService } from '../marketplaces/coordinadora/coordinadora.s
 import type { RastreoResult } from '../marketplaces/coordinadora/coordinadora-client.service';
 import { MktDocumentService } from '../marketplaces/vtex/mkt-document.service';
 import { VtexClient } from '../marketplaces/vtex/vtex-client.service';
+import { WaUpsellService } from '../whatsapp/wa-upsell.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { WarehousesService } from '../warehouses/warehouses.service';
 import { loadPlatforms } from './platforms.store';
@@ -146,6 +147,7 @@ export class OrdersService {
     private readonly mkt: MktDocumentService,
     private readonly control: ControlPlaneService,
     private readonly whatsapp: WhatsappService,
+    private readonly upsell: WaUpsellService,
   ) {}
 
   async list(query: ListOrdersQuery, auth: AuthContext): Promise<ListOrdersResponse> {
@@ -2037,6 +2039,11 @@ export class OrdersService {
           data: { shippingState: state, shippingStatus: status, shippingUpdatedAt: new Date() },
         });
         updated++;
+        // TRANSICION a ENTREGADO: dispara el toque 3 del flujo del respaldo
+        // (plantilla; el sender re-verifica celular/interes/duplicado).
+        if (state === 'entregado' && order.shippingState !== 'entregado') {
+          this.upsell.triggerDelivered(tenantId, prisma, order.id);
+        }
       }
     }
     if (updated > 0) await this.realtime.publish(tenantId, { kind: 'orders.refresh' });

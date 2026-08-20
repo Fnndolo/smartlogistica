@@ -182,6 +182,11 @@ export const waInboxItemSchema = z.object({
   lastStatus: z.enum(['queued', 'sent', 'delivered', 'read', 'failed']).nullable().default(null),
   /** Mensajes entrantes sin leer POR ESTE usuario (contador verde). */
   unread: z.number().int().min(0),
+  /** Estado del ENVIO del ultimo pedido del telefono (pastilla sobre la
+   *  hora): canonico (sin_movimientos|en_transito|novedad|entregado) + el
+   *  texto crudo de Coordinadora. null = sin guia / sin pedido. */
+  shippingState: z.string().nullable().default(null),
+  shippingStatus: z.string().nullable().default(null),
   /** Operaciones de bandeja (menu contextual), globales del negocio. */
   archived: z.boolean().default(false),
   muted: z.boolean().default(false),

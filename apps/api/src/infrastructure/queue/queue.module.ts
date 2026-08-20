@@ -6,6 +6,8 @@ export const QUEUE_VTEX_BACKFILL = 'vtex-backfill';
 export const QUEUE_VTEX_WEBHOOK = 'vtex-webhook';
 export const QUEUE_VTEX_RECONCILE = 'vtex-reconcile';
 export const QUEUE_SHIPPING_REFRESH = 'shipping-refresh';
+/** Flujo de venta del RESPALDO por WhatsApp (toques diferidos +2min). */
+export const QUEUE_WA_UPSELL = 'wa-upsell';
 
 @Global()
 @Module({
@@ -39,6 +41,7 @@ export const QUEUE_SHIPPING_REFRESH = 'shipping-refresh';
       { name: QUEUE_VTEX_WEBHOOK },
       { name: QUEUE_VTEX_RECONCILE },
       { name: QUEUE_SHIPPING_REFRESH },
+      { name: QUEUE_WA_UPSELL },
     ),
   ],
   exports: [BullModule],

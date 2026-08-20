@@ -40,6 +40,7 @@ import { Dialog360Client } from './dialog360-client.service';
 import { WaConnectionService } from './wa-connection.service';
 import { normalizeSticker, toOggOpus } from './wa-media.util';
 import { WaPublisherService } from './wa-publisher.service';
+import { WaUpsellService } from './wa-upsell.service';
 import {
   renderTemplateBody,
   templateVarCount,
@@ -135,6 +136,7 @@ export class WhatsappService {
     private readonly waConn: WaConnectionService,
     private readonly publisher: WaPublisherService,
     private readonly webhook: WhatsappWebhookService,
+    private readonly upsell: WaUpsellService,
   ) {}
 
   /** Al arrancar: verificar que el BINARIO de ffmpeg existe (notas de voz).
@@ -284,7 +286,7 @@ export class WhatsappService {
       };
     }
 
-    const [rows, contact, readMark] = await Promise.all([
+    const [rows, contact, readMark, vtexOrder] = await Promise.all([
       prisma.waMessage.findMany({
         where: { phone },
         orderBy: { createdAt: 'asc' },
@@ -292,7 +294,17 @@ export class WhatsappService {
       }),
       prisma.waContact.findUnique({ where: { phone } }),
       prisma.waChatRead.findUnique({ where: { userId_phone: { userId, phone } } }),
+      // Nombre del PEDIDO (VTEX/manual) primero: manda sobre el de WhatsApp.
+      prisma.order.findFirst({
+        where: { customerPhone: { contains: phone } },
+        orderBy: { updatedAt: 'desc' },
+        select: { customerName: true, customerPhone: true },
+      }),
     ]);
+    const vtexName =
+      vtexOrder && tenDigits(vtexOrder.customerPhone ?? '') === phone && vtexOrder.customerName?.trim()
+        ? vtexOrder.customerName.trim()
+        : null;
 
     // Divisor "N mensajes no leidos": VERDAD del servidor (marca de lectura de
     // ESTE usuario). Sin marca previa no se pinta divisor (chat nunca abierto).
@@ -313,7 +325,7 @@ export class WhatsappService {
     return {
       phone,
       connected: Boolean(conn),
-      contactName: contact?.name ?? null,
+      contactName: vtexName ?? contact?.name ?? null,
       firstUnreadId,
       unreadCount,
       messages: await Promise.all(rows.map((r) => this.publisher.toDto(r, byId))),
@@ -466,6 +478,38 @@ export class WhatsappService {
   // === Bandeja de entrada (inbox estilo WhatsApp Web) ===
 
   /** Todos los chats: ultimo mensaje, no leidos (por usuario) y etiquetas. */
+  /**
+   * Ultimo PEDIDO por telefono (10 digitos): nombre del cliente segun VTEX
+   * (manda sobre el nombre "raro" del perfil de WhatsApp) + estado del envio
+   * para la pastilla de la bandeja. customerPhone se guarda CRUDO -> se
+   * normaliza en SQL.
+   */
+  private async ordersByPhone(
+    prisma: PrismaClient,
+  ): Promise<Map<string, { name: string | null; shippingState: string | null; shippingStatus: string | null; hasGuide: boolean }>> {
+    const rows = await prisma.$queryRaw<
+      Array<{ ph: string; name: string | null; guide: string | null; state: string | null; status: string | null }>
+    >`SELECT DISTINCT ON (ph) ph, name, guide, state, status FROM (
+        SELECT RIGHT(regexp_replace("customerPhone", '\\D', '', 'g'), 10) AS ph,
+               "customerName" AS name, "guideNumber" AS guide,
+               "shippingState" AS state, "shippingStatus" AS status, "updatedAt"
+        FROM "Order"
+        WHERE "customerPhone" IS NOT NULL
+          AND length(regexp_replace("customerPhone", '\\D', '', 'g')) >= 7
+      ) t ORDER BY ph, "updatedAt" DESC`;
+    return new Map(
+      rows.map((r) => [
+        r.ph,
+        {
+          name: r.name?.trim() ? r.name.trim() : null,
+          shippingState: r.guide ? (r.state ?? 'sin_movimientos') : null,
+          shippingStatus: r.guide ? r.status : null,
+          hasGuide: Boolean(r.guide),
+        },
+      ]),
+    );
+  }
+
   async inbox(auth: AuthContext): Promise<WaInbox> {
     this.assertAdmin(auth);
     const { prisma } = getTenantContext();
@@ -499,7 +543,10 @@ export class WhatsappService {
         },
       }),
     ]);
-    const labelRows = await prisma.waLabel.findMany({ orderBy: { name: 'asc' } });
+    const [labelRows, orderInfo] = await Promise.all([
+      prisma.waLabel.findMany({ orderBy: { name: 'asc' } }),
+      this.ordersByPhone(prisma),
+    ]);
 
     const byPhone = new Map(contacts.map((c) => [c.phone, c] as const));
     const unread = new Map(unreadRows.map((r) => [r.phone, Number(r.unread)] as const));
@@ -510,18 +557,24 @@ export class WhatsappService {
       .slice(0, 400)
       .map((m) => {
         const c = byPhone.get(m.phone);
+        const ord = orderInfo.get(m.phone);
         return {
           phone: m.phone,
-          name: c?.name ?? null,
+          // Nombre del PEDIDO (VTEX/manual) primero: nada de emojis ni nombres
+          // raros de WhatsApp cuando el numero es un cliente con pedido.
+          name: ord?.name ?? c?.name ?? null,
           labels: Array.isArray(c?.labels) ? (c?.labels as unknown[]).map(String) : [],
           lastAt: m.createdAt.toISOString(),
           lastKind: waKindOf(m.kind),
           lastBody: m.body,
           lastDirection: m.direction === 'out' ? ('out' as const) : ('in' as const),
           lastStatus:
-            m.direction === 'out' && ['sent', 'delivered', 'read', 'failed'].includes(m.status ?? '')
-              ? (m.status as 'sent' | 'delivered' | 'read' | 'failed')
+            m.direction === 'out' &&
+            ['queued', 'sent', 'delivered', 'read', 'failed'].includes(m.status ?? '')
+              ? (m.status as 'queued' | 'sent' | 'delivered' | 'read' | 'failed')
               : null,
+          shippingState: ord?.shippingState ?? null,
+          shippingStatus: ord?.shippingStatus ?? null,
           // Si el ULTIMO mensaje es NUESTRO (bot del flujo o un admin), el chat
           // ya quedo respondido: NO cuenta como no leido.
           unread: m.direction === 'out' ? 0 : (unread.get(m.phone) ?? 0),
@@ -989,6 +1042,9 @@ export class WhatsappService {
           data: { phone, direction: 'out', kind: 'text', body: tpl.body, authorName: 'SmartLogística' },
         });
         await this.publisher.publishWaMessage(tenantId, prisma, textRow);
+        // Flujo de venta del RESPALDO: toque 2 en 2 minutos (solo celulares;
+        // el sender re-verifica interes/duplicado antes de salir).
+        await this.upsell.scheduleStep(tenantId, order.id, 2).catch(() => null);
         return wamid;
       });
     } catch (err) {
@@ -1090,12 +1146,23 @@ export class WhatsappService {
     this.assertAdmin(auth);
     const { prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
-    const contact = phone
-      ? await prisma.waContact.findUnique({ where: { phone }, select: { name: true } })
-      : null;
+    const [contact, order] = phone
+      ? await Promise.all([
+          prisma.waContact.findUnique({ where: { phone }, select: { name: true } }),
+          prisma.order.findFirst({
+            where: { customerPhone: { contains: phone } },
+            orderBy: { updatedAt: 'desc' },
+            select: { customerName: true, customerPhone: true },
+          }),
+        ])
+      : [null, null];
+    // Nombre del PEDIDO primero: para las variables de plantilla no sirven
+    // los emojis/nombres raros del perfil de WhatsApp.
+    const vtexName =
+      order && tenDigits(order.customerPhone ?? '') === phone ? (order.customerName?.trim() ?? '') : '';
     return {
       templates: await this.waTemplates(),
-      suggestions: { nombre: contact?.name ?? '', productos: '', direccion: '' },
+      suggestions: { nombre: vtexName || (contact?.name ?? ''), productos: '', direccion: '' },
     };
   }
 

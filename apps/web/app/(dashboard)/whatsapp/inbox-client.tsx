@@ -117,6 +117,36 @@ function preview(item: WaInboxItem): string {
 const displayName = (c: { name: string | null; phone: string }): string =>
   c.name?.trim() ? titleCaseName(c.name) : `+57 ${c.phone}`;
 
+/** Pastilla del estado de envio: texto corto + color por estado canonico. */
+function shippingChip(c: WaInboxItem): { text: string; cls: string } | null {
+  if (!c.shippingState && !c.shippingStatus) return null;
+  const raw = (c.shippingStatus ?? '').toLowerCase();
+  const state = c.shippingState ?? '';
+  const text =
+    state === 'entregado'
+      ? 'Entregado'
+      : state === 'novedad'
+        ? 'Novedad'
+        : raw.includes('reparto')
+          ? 'Reparto'
+          : raw.includes('destino')
+            ? 'T. destino'
+            : raw.includes('origen')
+              ? 'Origen'
+              : state === 'sin_movimientos' || raw.includes('sin movimiento')
+                ? 'Guía enviada'
+                : 'En tránsito';
+  const cls =
+    state === 'entregado'
+      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300'
+      : state === 'novedad'
+        ? 'bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300'
+        : state === 'en_transito'
+          ? 'bg-sky-100 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300'
+          : 'bg-black/[0.07] text-[#54656f] dark:bg-white/10 dark:text-[#8696a0]';
+  return { text, cls };
+}
+
 /** Ancla del menu contextual de chat (en el PUNTO del click / la flechita). */
 interface ChatMenuAnchor {
   phone: string;
@@ -288,6 +318,8 @@ export function WhatsappInbox() {
                   : isUpdateOfShown
                     ? (existing?.unread ?? 0)
                     : (existing?.unread ?? 0) + 1,
+            shippingState: existing?.shippingState ?? null,
+            shippingStatus: existing?.shippingStatus ?? null,
             archived: existing?.archived ?? false,
             muted: existing?.muted ?? false,
             pinned: existing?.pinned ?? false,
@@ -490,15 +522,31 @@ export function WhatsappInbox() {
                     <span className="truncate text-[15px] text-[#111b21] dark:text-[#e9edef]">
                       {displayName(c)}
                     </span>
-                    <span
-                      className={cn(
-                        'shrink-0 text-[11.5px]',
-                        c.unread > 0 && !c.muted
-                          ? 'font-medium text-[#00a884]'
-                          : 'text-[#667781] dark:text-[#8696a0]',
-                      )}
-                    >
-                      {listTime(c.lastAt)}
+                    <span className="flex shrink-0 flex-col items-end gap-0.5">
+                      {(() => {
+                        /* Pastilla del ESTADO DE ENVIO (arriba de la hora). */
+                        const s = shippingChip(c);
+                        return s ? (
+                          <span
+                            className={cn(
+                              'rounded-full px-1.5 py-px text-[9.5px] font-semibold uppercase tracking-wide',
+                              s.cls,
+                            )}
+                          >
+                            {s.text}
+                          </span>
+                        ) : null;
+                      })()}
+                      <span
+                        className={cn(
+                          'text-[11.5px]',
+                          c.unread > 0 && !c.muted
+                            ? 'font-medium text-[#00a884]'
+                            : 'text-[#667781] dark:text-[#8696a0]',
+                        )}
+                      >
+                        {listTime(c.lastAt)}
+                      </span>
                     </span>
                   </span>
                   <span className="mt-0.5 flex items-center justify-between gap-2">

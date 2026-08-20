@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { Dialog360Client } from './dialog360-client.service';
 import { WaConnectionService } from './wa-connection.service';
 import { WaPublisherService } from './wa-publisher.service';
+import { WaUpsellProcessor, WaUpsellService } from './wa-upsell.service';
 import { WhatsappService } from './whatsapp.service';
 import { WhatsappWebhookService } from './whatsapp-webhook.service';
 import {
@@ -24,8 +25,10 @@ import { Dialog360WebhookController } from './whatsapp-webhook.controller';
     WhatsappWebhookService,
     WaPublisherService,
     WaConnectionService,
+    WaUpsellService,
+    WaUpsellProcessor,
     Dialog360Client,
   ],
-  exports: [WhatsappService],
+  exports: [WhatsappService, WaUpsellService],
 })
 export class WhatsappModule {}
