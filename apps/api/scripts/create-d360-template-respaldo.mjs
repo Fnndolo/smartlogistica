@@ -17,12 +17,12 @@ const adminDb = (u, db) => { const x = new URL(u); x.pathname = `/${db}`; return
 
 const BODY =
   '🎉 ¡{{1}}, su equipo ya está en sus manos!\n\n' +
-  'Esperamos que lo disfrute al máximo. Y ahora que ya lo tiene, una pregunta honesta: ¿qué pasaría si mañana se le cae? 📱💔\n\n' +
-  '🛡️ Todavía está a tiempo de activarle el RESPALDO de Smart Gadgets y estrenar con total tranquilidad: golpes, caídas y accidentes quedan cubiertos.\n\n' +
+  'Disfrútelo al máximo — y ahora que ya lo tiene, no se preocupe por un robo o un accidente: todavía está a tiempo de activar el RESPALDO de Smart Gadgets 🛡️\n\n' +
+  'Por solo el 10% del valor de su equipo queda protegido UN AÑO COMPLETO: robo 🚨, caídas y accidentes cubiertos. Y puede pagarlo con las cuotas cómodas de Addi 💙\n\n' +
   'Es el mejor momento — toque el botón y un asesor le cuenta todo, sin compromiso 👇';
 
 const TEMPLATE = {
-  name: 'respaldo_entregado_smart',
+  name: process.argv[2] ?? 'respaldo_entregado_full',
   language: 'es',
   category: 'MARKETING',
   components: [
@@ -46,7 +46,7 @@ async function main() {
   if (!conn || conn.mode !== 'production') { console.log('No hay conexion de PRODUCCION.'); return; }
   const apiKey = decField(conn.encryptedApiKey, dek);
   const http = axios.create({ baseURL: 'https://waba-v2.360dialog.io', timeout: 180000, headers: { 'D360-API-KEY': apiKey, 'Content-Type': 'application/json' } });
-  console.log('Creando plantilla respaldo_entregado_smart (es, MARKETING)...');
+  console.log(`Creando plantilla ${TEMPLATE.name} (es, MARKETING)...`);
   try {
     const res = (await http.post('/v1/configs/templates', TEMPLATE)).data;
     console.log('OK:', JSON.stringify(res).slice(0, 600));

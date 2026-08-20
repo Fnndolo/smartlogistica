@@ -34,6 +34,7 @@ export const UPSELL_TEMPLATE_BUTTON = 'Quiero mi respaldo';
 /** Prioridad FIJA de la plantilla del toque 3 (primera APROBADA gana). */
 const UPSELL_TEMPLATE_PRIORITY = [
   ...(process.env.D360_UPSELL_TEMPLATE ? [process.env.D360_UPSELL_TEMPLATE] : []),
+  'respaldo_entregado_full', // version enriquecida: robo + 10% + cuotas Addi
   'respaldo_entregado_smart',
 ];
 /** Etiqueta (con color) que marca al cliente que toco el boton. */
@@ -43,14 +44,15 @@ const INTERESTED_COLOR = '#f59e0b';
 const STEP_DELAY_MS = 2 * 60_000;
 
 const MSG_STEP1 =
-  'Mientras preparamos su envío 📦, un consejo de los que saben: un celular nuevo vive su momento de MAYOR riesgo en los primeros meses — una caída, un golpe de pantalla… y la inversión se ve en aprietos 😰\n\n' +
-  '🛡️ Con el RESPALDO de Smart Gadgets su equipo queda protegido desde el día uno: golpes, caídas y accidentes cubiertos.\n\n' +
-  'Toque el botón y le contamos cómo funciona, sin compromiso 👇';
+  'Mientras preparamos su envío 📦, queremos contarle un beneficio exclusivo que tenemos para nuestros clientes: el RESPALDO de Smart Gadgets 🛡️\n\n' +
+  'Por solo el 10% del valor de su equipo, queda protegido UN AÑO COMPLETO contra robo 🚨, caídas y accidentes 📱💥 — para que estrene sin preocupaciones.\n\n' +
+  'Y lo mejor: puede pagarlo con las cuotas cómodas de Addi 💙\n\n' +
+  'Toque el botón y le contamos todo, sin compromiso 👇';
 
 const MSG_STEP2 =
   '🚚 ¡Su equipo ya va en camino!\n\n' +
-  'Mientras llega a sus manos, piénselo un segundo: los golpes y las caídas casi siempre pasan estrenando 📱💥\n\n' +
-  '🛡️ Active el RESPALDO de Smart Gadgets y reciba su equipo ya protegido: usted estrena tranquilo, nosotros respondemos.\n\n' +
+  'Mientras llega a sus manos, no se preocupe por un robo o un accidente: con el RESPALDO de Smart Gadgets, por solo el 10% del valor de su equipo queda protegido UN AÑO COMPLETO 🛡️ — robo 🚨, caídas y accidentes cubiertos.\n\n' +
+  'Y puede pagarlo con las cuotas cómodas de Addi 💙\n\n' +
   'Toque el botón y un asesor le cuenta los detalles 👇';
 
 const MSG_INTERESTED_REPLY =
