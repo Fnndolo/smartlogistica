@@ -3040,6 +3040,10 @@ function describeEvent(e: OrderEvent): string {
       return 'Confirmación del pedido enviada por WhatsApp';
     case 'wa_confirmation_failed':
       return `La confirmación de WhatsApp NO se entregó (Meta: ${(e.data.error as string | undefined) ?? 'bloqueo de entrega'})`;
+    case 'wa_guide':
+      return 'Guía enviada al cliente por WhatsApp 📲';
+    case 'wa_guide_failed':
+      return `La guía NO se entregó por WhatsApp (Meta: ${(e.data.error as string | undefined) ?? 'bloqueo de entrega'})`;
     default:
       return e.type;
   }

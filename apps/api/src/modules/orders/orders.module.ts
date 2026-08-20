@@ -4,6 +4,7 @@ import { AiModule } from '../ai/ai.module';
 import { AlegraModule } from '../marketplaces/alegra/alegra.module';
 import { CoordinadoraModule } from '../marketplaces/coordinadora/coordinadora.module';
 import { VtexModule } from '../marketplaces/vtex/vtex.module';
+import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { WarehousesModule } from '../warehouses/warehouses.module';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
@@ -13,7 +14,7 @@ import { ShippingRefreshScheduler } from './shipping-refresh.scheduler';
 import { VtexFeesController } from './vtex-fees.controller';
 
 @Module({
-  imports: [WarehousesModule, AiModule, AlegraModule, CoordinadoraModule, VtexModule],
+  imports: [WarehousesModule, AiModule, AlegraModule, CoordinadoraModule, VtexModule, WhatsappModule],
   controllers: [OrdersController, PlatformsController, VtexFeesController],
   providers: [OrdersService, ShippingRefreshProcessor, ShippingRefreshScheduler],
 })

@@ -905,6 +905,99 @@ export class WhatsappService {
     return this.markChatRead(phone, auth);
   }
 
+  // === Guia del pedido por WhatsApp ===
+
+  /**
+   * Prioridad FIJA de plantillas de la GUIA (encabezado DOCUMENTO = el PDF
+   * del rotulo): se usa la primera APROBADA. Al ir en plantilla, la guia
+   * llega SIEMPRE — con o sin ventana de 24h abierta.
+   */
+  private static readonly GUIDE_TEMPLATE_PRIORITY = [
+    ...(process.env.D360_GUIDE_TEMPLATE ? [process.env.D360_GUIDE_TEMPLATE] : []),
+    'guia_envio_smart',
+    'guia_envio_pedido',
+  ];
+
+  /**
+   * Envia la GUIA al cliente: UN mensaje de WhatsApp con el PDF del rotulo
+   * arriba y el texto de seguimiento + pregunta de confirmacion abajo.
+   * Best-effort total (se llama fire-and-forget desde el flujo de la guia);
+   * si Meta NO la entrega, handleFailedStatus avisa al chat interno del
+   * pedido (marcador contactId = guide:<orderId>).
+   */
+  async sendGuideByWhatsApp(
+    tenantId: string,
+    prisma: PrismaClient,
+    order: { id: string; customerPhone: string | null; customerName: string | null },
+    rotulo: Buffer,
+    rotuloKey: string | null,
+  ): Promise<void> {
+    try {
+      const phone = order.customerPhone ? tenDigits(order.customerPhone) : '';
+      if (phone.length < 7) return;
+      const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
+      if (!d360 || d360.mode !== 'production') return;
+      const list = await this.cachedTemplates(tenantId, d360.http).catch(() => []);
+      const tpl = WhatsappService.GUIDE_TEMPLATE_PRIORITY.map((n) =>
+        list.find((x) => x.name === n && x.status === 'approved'),
+      ).find(Boolean);
+      if (!tpl) {
+        this.logger.warn('Guia por WhatsApp: sin plantilla de guia APROBADA en la WABA aun');
+        return;
+      }
+      const clientName = (order.customerName ?? '').trim().toUpperCase();
+      const fileName = `GUIA-${clientName || order.id}.pdf`;
+
+      // En el hilo: el PDF con relojito (rastrea el envio real) + el texto de
+      // la plantilla como burbuja aparte (en el celular van en UN mensaje).
+      const row = await prisma.waMessage.create({
+        data: {
+          phone,
+          direction: 'out',
+          kind: 'file',
+          body: fileName,
+          attachmentKey: rotuloKey,
+          contactId: `guide:${order.id}`,
+          authorName: 'SmartLogística',
+          status: 'queued',
+        },
+      });
+      await this.publisher.publishWaMessage(tenantId, prisma, row);
+      await prisma.orderEvent
+        .create({
+          data: {
+            orderId: order.id,
+            type: 'wa_guide',
+            actorName: 'SmartLogística',
+            data: { phone, template: tpl.name } as Prisma.InputJsonValue,
+          },
+        })
+        .catch(() => null);
+      this.dispatchWaSend(tenantId, prisma, row.id, phone, 'No se pudo enviar la guía por WhatsApp', async () => {
+        const mediaId = await this.dialog360.uploadMedia(
+          d360.apiKey,
+          d360.mode,
+          rotulo,
+          'application/pdf',
+          fileName,
+        );
+        if (!mediaId) throw new BadRequestException('Meta no devolvió el id del PDF de la guía');
+        const wamid = await this.dialog360.sendTemplate(d360.http, d360.mode, `57${phone}`, tpl.name, tpl.language, [
+          { type: 'header', parameters: [{ type: 'document', document: { id: mediaId, filename: fileName } }] },
+        ]);
+        const textRow = await prisma.waMessage.create({
+          data: { phone, direction: 'out', kind: 'text', body: tpl.body, authorName: 'SmartLogística' },
+        });
+        await this.publisher.publishWaMessage(tenantId, prisma, textRow);
+        return wamid;
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Guia por WhatsApp fallo (${order.id}): ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
   // === "Escribiendo..." ===
 
   /** Throttle del indicador hacia el CELULAR (Meta lo muestra ~25s por aviso). */

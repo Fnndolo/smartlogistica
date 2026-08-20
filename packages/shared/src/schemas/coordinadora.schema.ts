@@ -209,8 +209,8 @@ export const createGuideSchema = z.object({
   }),
   package: guidePackageSchema,
   rotuloId: z.coerce.number().int().min(1).max(999).optional(),
-  // Recaudo CONTRAENTREGA (solo pedidos montados a mano): Coordinadora cobra
-  // este valor al entregar. Ausente = guia normal, como siempre.
+  // Recaudo CONTRAENTREGA (para TODOS los pedidos): Coordinadora cobra este
+  // valor al entregar. Ausente = guia normal, como siempre.
   codValue: z.number().positive('Valor a recaudar invalido').optional(),
 });
 export type CreateGuideInput = z.infer<typeof createGuideSchema>;

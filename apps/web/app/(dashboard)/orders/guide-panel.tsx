@@ -144,9 +144,9 @@ export function GuidePanel({
           ...(pkg!.observations.trim() ? { observations: pkg!.observations.trim() } : {}),
         },
         ...(rotuloId ? { rotuloId } : {}),
-        // Recaudo contraentrega (solo montados a mano): Coordinadora cobra este
-        // valor al entregar.
-        ...(manual && codOn && Number(codValue) > 0 ? { codValue: Number(codValue) } : {}),
+        // Recaudo contraentrega (para TODOS los pedidos): Coordinadora cobra
+        // este valor al entregar.
+        ...(codOn && Number(codValue) > 0 ? { codValue: Number(codValue) } : {}),
       }),
     onSuccess: (g) => {
       setResult(g);
@@ -354,10 +354,9 @@ export function GuidePanel({
         </div>
       </section>
 
-      {/* Recaudo contraentrega: SOLO pedidos montados a mano. Coordinadora
-          cobra el valor al entregar (los de marketplace ya van pagados). */}
-      {manual ? (
-        <section className="space-y-3">
+      {/* Recaudo contraentrega: para TODOS los pedidos (manuales y de
+          marketplace). Coordinadora cobra el valor al entregar. */}
+      <section className="space-y-3">
           <SectionTitle>Cobro del envio</SectionTitle>
           <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5">
             <button
@@ -395,7 +394,6 @@ export function GuidePanel({
             </div>
           ) : null}
         </section>
-      ) : null}
 
       <div className="flex items-center justify-between border-t border-border pt-3">
         <p className="text-[11px] text-muted-foreground">

@@ -368,6 +368,36 @@ export class WhatsappWebhookService {
       await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
       this.logger.warn(`Confirmacion NO entregada (${detail}): ${events.length} pedido(s) vuelven a "Sin enviar"`);
     }
+
+    // ¿Era la GUIA del pedido (marcador guide:<orderId>)? Avisar en el CHAT
+    // INTERNO — el negocio debe reenviarla a mano.
+    if (msg.contactId?.startsWith('guide:')) {
+      const orderId = msg.contactId.slice('guide:'.length);
+      await prisma.orderMessage
+        .create({
+          data: {
+            orderId,
+            authorId: 'system',
+            authorName: 'SmartLogística',
+            kind: 'system',
+            body: `⚠️ La guía NO se entregó por WhatsApp (${detail}). Reenvíala manualmente al cliente.`,
+            imeis: [],
+          },
+        })
+        .catch(() => null);
+      await prisma.orderEvent
+        .create({
+          data: {
+            orderId,
+            type: 'wa_guide_failed',
+            actorName: 'Meta',
+            data: { wamid, error: detail } as Prisma.InputJsonValue,
+          },
+        })
+        .catch(() => null);
+      await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+      this.logger.warn(`Guia NO entregada por WhatsApp (${detail}): pedido ${orderId}`);
+    }
     return null;
   }
 

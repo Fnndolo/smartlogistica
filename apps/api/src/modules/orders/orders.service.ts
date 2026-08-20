@@ -58,6 +58,7 @@ import { CoordinadoraService } from '../marketplaces/coordinadora/coordinadora.s
 import type { RastreoResult } from '../marketplaces/coordinadora/coordinadora-client.service';
 import { MktDocumentService } from '../marketplaces/vtex/mkt-document.service';
 import { VtexClient } from '../marketplaces/vtex/vtex-client.service';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { WarehousesService } from '../warehouses/warehouses.service';
 import { loadPlatforms } from './platforms.store';
 
@@ -144,6 +145,7 @@ export class OrdersService {
     private readonly vtex: VtexClient,
     private readonly mkt: MktDocumentService,
     private readonly control: ControlPlaneService,
+    private readonly whatsapp: WhatsappService,
   ) {}
 
   async list(query: ListOrdersQuery, auth: AuthContext): Promise<ListOrdersResponse> {
@@ -2108,16 +2110,11 @@ export class OrdersService {
 
     const { tenantId, prisma } = getTenantContext();
 
-    // Recaudo CONTRAENTREGA: solo pedidos montados a mano (los de marketplace ya
-    // estan pagados via Addi). Referencia del recaudo = Nº de factura de Alegra
-    // si ya existe; si no, el Nº del pedido.
+    // Recaudo CONTRAENTREGA: disponible para TODOS los pedidos (manuales y de
+    // marketplace). Referencia del recaudo = Nº de factura de Alegra si ya
+    // existe; si no, el Nº del pedido.
     let recaudo: { referencia: string; valor: number } | undefined;
     if (input.codValue != null) {
-      if (order.provider !== 'manual') {
-        throw new BadRequestException(
-          'El recaudo contraentrega solo aplica a pedidos montados a mano.',
-        );
-      }
       const inv = await this.existingInvoice(orderId);
       recaudo = { referencia: inv?.number || order.externalId, valor: input.codValue };
     }
@@ -2180,27 +2177,43 @@ export class OrdersService {
     // no entre si -> en paralelo. El cierre segun el origen: marketplace = VTEX
     // (start-handling + invoice + tracking + MKT); montado a mano = cierre local
     // (sin VTEX ni MKT). Ambos best-effort: si fallan, la guia ya quedo.
-    await Promise.all([
+    const [rotuloKey] = await Promise.all([
       this.attachRotulo(orderId, order, guide, rotulo, auth),
       order.provider === 'manual'
         ? this.finalizeManual(order, auth).catch(() => null)
         : this.finalizeVtex(order, auth).catch(() => null),
     ]);
 
+    // GUIA AL CLIENTE por WhatsApp (plantilla con el PDF del rotulo adjunto:
+    // llega SIEMPRE, con o sin ventana de 24h). Fire-and-forget: la guia ya
+    // quedo y esto jamas la bloquea; un fallo de entrega avisa al chat interno.
+    if (rotulo) {
+      void this.whatsapp
+        .sendGuideByWhatsApp(
+          tenantId,
+          prisma,
+          { id: orderId, customerPhone: order.customerPhone, customerName: order.customerName },
+          rotulo,
+          rotuloKey,
+        )
+        .catch(() => null);
+    }
+
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
 
     return { id: guide.id, number: guide.number, url: guide.url, createdAt: new Date().toISOString() };
   }
 
-  /** Sube el rotulo (sticker) a storage y lo adjunta al chat. Best-effort. */
+  /** Sube el rotulo (sticker) a storage y lo adjunta al chat. Best-effort.
+   * Devuelve la KEY del PDF en storage (la reutiliza la guia por WhatsApp). */
   private async attachRotulo(
     orderId: string,
     order: OrderWithItems,
     guide: { number: string },
     rotulo: Buffer | null,
     auth: AuthContext,
-  ): Promise<void> {
-    if (!rotulo || !this.storage.isConfigured()) return;
+  ): Promise<string | null> {
+    if (!rotulo || !this.storage.isConfigured()) return null;
     const { tenantId, prisma } = getTenantContext();
     try {
       const clientName = (order.customerName ?? '').trim().toUpperCase() || guide.number;
@@ -2219,8 +2232,10 @@ export class OrdersService {
           imeis: [],
         },
       });
+      return key;
     } catch {
       // no bloquear la guia por un fallo al adjuntar el rotulo
+      return null;
     }
   }
 
