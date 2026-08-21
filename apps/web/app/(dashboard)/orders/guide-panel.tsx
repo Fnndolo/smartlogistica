@@ -429,7 +429,10 @@ export function GuidePanel({
                       ? `${sdxCity.name} — ${sdxCity.department}`
                       : quotedCity
                         ? `${quotedCity.name} — ${quotedCity.department}`
-                        : (quote?.cityTo ?? '')
+                        : // Sin eleccion ni cotizacion: la ciudad YA resuelta del
+                          // preview (la misma automatica del modo Coordinadora).
+                          quote?.cityTo ||
+                          (recipient?.cityName ?? '').replace(/\s*\(.*?\)\s*/g, '').trim()
                   }
                   onPick={(c: CoordinadoraCity) => {
                     // El catalogo trae "PASTO (NAR)": fuera el parentesis; el
