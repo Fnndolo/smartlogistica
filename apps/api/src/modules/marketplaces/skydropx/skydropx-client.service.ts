@@ -105,9 +105,13 @@ export class SkydropxClient {
     const text = await res.text();
     if (!res.ok) {
       // El cuerpo ENVIADO va en el error: los 400 genericos de Skydropx no
-      // dicen que estuvo mal — asi el propio toast/log lo delata.
+      // dicen que estuvo mal — asi el propio toast/log lo delata. El
+      // request-id es para que SOPORTE de Skydropx rastree la peticion.
+      const reqId =
+        res.headers.get('x-request-id') ?? res.headers.get('cf-ray') ?? res.headers.get('x-amzn-requestid');
       const sent = body !== undefined ? ` | enviado: ${JSON.stringify(body).slice(0, 600)}` : '';
-      throw new Error(`Skydropx ${method} ${path} HTTP ${res.status}: ${text.slice(0, 220)}${sent}`);
+      const rid = reqId ? ` | request-id: ${reqId}` : '';
+      throw new Error(`Skydropx ${method} ${path} HTTP ${res.status}: ${text.slice(0, 220)}${sent}${rid}`);
     }
     return JSON.parse(text) as T;
   }

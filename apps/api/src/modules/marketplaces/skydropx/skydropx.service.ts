@@ -137,6 +137,25 @@ export class SkydropxService {
     try {
       quotation = await this.client.quote(creds, input);
     } catch (err) {
+      // AUTO-EXPERIMENTO ante el 400 generico (que desde local NUNCA se
+      // reproduce): correr una cotizacion de CONTROL con un cuerpo fijo que
+      // sabemos valido. Si el control TAMBIEN falla -> el bloqueo es del
+      // ENTORNO (IP/WAF de Skydropx vs este servidor), no de nuestros datos.
+      const detail = err instanceof Error ? err.message : String(err);
+      if (/HTTP 400/.test(detail)) {
+        let control = 'no ejecutado';
+        try {
+          await this.client.quote(creds, {
+            from: { country_code: 'CO', postal_code: '050015', area_level1: 'Antioquia', area_level2: 'Medellín', area_level3: '' },
+            to: { country_code: 'CO', postal_code: '520003', area_level1: 'Nariño', area_level2: 'Pasto', area_level3: '' },
+            parcel: { length: 20, width: 10, height: 10, weight: 1, declared_amount: 500000 },
+          });
+          control = 'OK (201) — el problema esta en los DATOS de esta cotizacion';
+        } catch (ctrlErr) {
+          control = `TAMBIEN fallo (${ctrlErr instanceof Error ? ctrlErr.message.slice(0, 120) : 'error'}) — bloqueo del ENTORNO/IP contra Skydropx, contactar su soporte con el request-id`;
+        }
+        throw this.asBadRequest(new Error(`${detail} | CONTROL: ${control}`), 'Cotizacion Skydropx fallo');
+      }
       throw this.asBadRequest(err, 'Cotizacion Skydropx fallo');
     }
     const rates = (quotation.rates ?? [])
