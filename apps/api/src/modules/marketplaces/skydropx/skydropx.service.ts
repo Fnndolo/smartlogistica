@@ -49,9 +49,13 @@ export class SkydropxService {
     try {
       await this.client.validate({ apiKey: input.apiKey, apiSecret: input.apiSecret, mode: input.mode });
     } catch (err) {
-      throw new BadRequestException(
-        `Skydropx no acepto las credenciales: ${err instanceof Error ? err.message : 'error desconocido'}`,
-      );
+      const detail = err instanceof Error ? err.message : 'error desconocido';
+      // El 401 invalid_client casi siempre es llaves del OTRO ambiente: las
+      // de sandbox no sirven en produccion y viceversa.
+      const hint = /invalid_client|401/.test(detail)
+        ? ` — OJO: las llaves son POR AMBIENTE. Para "${input.mode === 'production' ? 'Producción' : 'Sandbox'}" deben ser generadas en ${input.mode === 'production' ? 'pro.skydropx.com' : 'sb-pro.skydropx.com'} (Conexiones → API).`
+        : '';
+      throw new BadRequestException(`Skydropx no aceptó las credenciales: ${detail.slice(0, 260)}${hint}`);
     }
     const [encryptedApiKey, encryptedApiSecret] = await Promise.all([
       this.envelope.encryptField(tenantId, input.apiKey),
