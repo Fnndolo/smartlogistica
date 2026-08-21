@@ -132,9 +132,9 @@ export function SkydropxConnectionCard({ initial }: { initial?: SkydropxConnecti
 
         {!formOpen ? (
           connection ? (
-            {/* MISMO patron de las demas tarjetas: Editar + basurita.
-                Editar = re-conectar (las llaves guardadas jamas se muestran;
-                para cambiar de modo o de llaves se pegan las nuevas). */}
+            // MISMO patron de las demas tarjetas: Editar + basurita. Editar =
+            // re-conectar (las llaves guardadas jamas se muestran; para
+            // cambiar de modo o de llaves se pegan las nuevas).
             <div className="flex shrink-0 items-center gap-1.5">
               <Button variant="outline" size="sm" onClick={() => setFormOpen(true)}>
                 <Pencil className="h-3.5 w-3.5" />
