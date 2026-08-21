@@ -15,6 +15,9 @@ import type {
   CreateInvoiceInput,
   CoordinadoraCity,
   CreateGuideInput,
+  CreateSkydropxGuideInput,
+  SkydropxQuoteInput,
+  SkydropxQuoteResponse,
   CreateManualOrderInput,
   CreateOrderMessageInput,
   DevicePhotoKind,
@@ -58,6 +61,7 @@ import { CoordinadoraService } from '../marketplaces/coordinadora/coordinadora.s
 import type { RastreoResult } from '../marketplaces/coordinadora/coordinadora-client.service';
 import { MktDocumentService } from '../marketplaces/vtex/mkt-document.service';
 import { VtexClient } from '../marketplaces/vtex/vtex-client.service';
+import { SkydropxService } from '../marketplaces/skydropx/skydropx.service';
 import { WaUpsellService } from '../whatsapp/wa-upsell.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { WarehousesService } from '../warehouses/warehouses.service';
@@ -148,6 +152,7 @@ export class OrdersService {
     private readonly control: ControlPlaneService,
     private readonly whatsapp: WhatsappService,
     private readonly upsell: WaUpsellService,
+    private readonly skydropx: SkydropxService,
   ) {}
 
   async list(query: ListOrdersQuery, auth: AuthContext): Promise<ListOrdersResponse> {
@@ -2004,6 +2009,8 @@ export class OrdersService {
       where: {
         warehouseId,
         guideNumber: { not: null },
+        // Las guias de SKYDROPX van por su propio rastreo (abajo).
+        AND: [{ OR: [{ shippingProvider: null }, { shippingProvider: { not: 'skydropx' } }] }],
         // Todo lo que NO esta entregado (los entregados ya no cambian). Incluye
         // shippingState null: en Prisma `NOT: {x:'entregado'}` excluiria los null
         // (NULL <> 'entregado' no es true en SQL), y esos justamente son los que
@@ -2012,9 +2019,41 @@ export class OrdersService {
       },
       select: { id: true, guideNumber: true, shippingState: true, shippingStatus: true },
     });
-    if (pending.length === 0) return { updated: 0 };
 
     let updated = 0;
+
+    // SKYDROPX: rastreo por shipment id, secuencial (su API limita 2 req/s).
+    const skyPending = await prisma.order.findMany({
+      where: {
+        warehouseId,
+        skydropxShipmentId: { not: null },
+        OR: [{ shippingState: null }, { shippingState: { not: 'entregado' } }],
+      },
+      select: { id: true, skydropxShipmentId: true, shippingState: true, shippingStatus: true },
+    });
+    for (const o of skyPending) {
+      const t = await this.skydropx.tracking(o.skydropxShipmentId as string);
+      if (!t) continue;
+      const statusText = t.carrier ? `${t.carrier} · ${t.statusText}` : t.statusText;
+      if (t.state !== o.shippingState || statusText !== o.shippingStatus) {
+        await prisma.order.update({
+          where: { id: o.id },
+          data: { shippingState: t.state, shippingStatus: statusText, shippingUpdatedAt: new Date() },
+        });
+        updated++;
+        // TRANSICION a ENTREGADO: toque 3 del flujo del respaldo, igual que
+        // con Coordinadora.
+        if (t.state === 'entregado' && o.shippingState !== 'entregado') {
+          this.upsell.triggerDelivered(tenantId, prisma, o.id);
+        }
+      }
+      await new Promise((r) => setTimeout(r, 600));
+    }
+
+    if (pending.length === 0) {
+      if (updated > 0) await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+      return { updated };
+    }
     for (let i = 0; i < pending.length; i += SHIPPING_BATCH) {
       const chunk = pending.slice(i, i + SHIPPING_BATCH);
       const codigos = chunk.map((o) => o.guideNumber as string);
@@ -2050,13 +2089,244 @@ export class OrdersService {
     return { updated };
   }
 
-  /** Seguimiento detallado del pedido (rastreo de su guia en Coordinadora). null si no tiene guia. */
+  /** Seguimiento detallado del pedido (Coordinadora o Skydropx). null si no tiene guia. */
   async orderTracking(orderId: string, auth: AuthContext): Promise<GuideTracking | null> {
     const order = await this.loadAccessibleOrder(orderId, auth);
     if (!order.warehouseId) return null;
     const guide = await this.existingGuide(orderId);
     if (!guide) return null;
+    // Guia hecha por SKYDROPX: el rastreo va por su API e indica la
+    // TRANSPORTADORA real por la que salio el envio.
+    if (order.shippingProvider === 'skydropx' && order.skydropxShipmentId) {
+      const t = await this.skydropx.tracking(order.skydropxShipmentId);
+      const events = (t?.events ?? []).map((e, i) => ({
+        codigo: i,
+        descripcion: [e.description, e.location].filter(Boolean).join(' · '),
+        fecha: e.date.slice(0, 10),
+        hora: e.date.slice(11, 16),
+      }));
+      return {
+        guideNumber: guide.number,
+        carrier: t?.carrier ?? order.shippingStatus ?? 'Skydropx',
+        codigoEstado: 0,
+        descripcionEstado: t?.statusText ?? order.shippingStatus ?? 'Sin movimientos',
+        fechaRecogida: '',
+        fechaEntrega: t?.state === 'entregado' ? (events[0]?.fecha ?? '') : '',
+        horaEntrega: '',
+        nombreOrigen: '',
+        nombreDestino: order.customerName ?? '',
+        trackingUrl: '',
+        estados: events,
+        novedades: [],
+      };
+    }
     return this.coordinadora.trackGuide(order.warehouseId, guide.number, auth);
+  }
+
+  // === SKYDROPX: segunda transportadora (Coordinadora sigue de default) ===
+
+  /** Departamento por ciudad de origen (las sedes del negocio). */
+  private static readonly DEPT_BY_CITY: Record<string, string> = {
+    medellin: 'Antioquia',
+    pasto: 'Nariño',
+    bogota: 'Bogotá D.C.',
+    cali: 'Valle del Cauca',
+  };
+
+  private deptOf(cityName: string | null): string {
+    const key = (cityName ?? '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/\p{Diacritic}/gu, '')
+      .trim();
+    return OrdersService.DEPT_BY_CITY[key] ?? '';
+  }
+
+  /** Cotiza el envio del pedido en TODAS las transportadoras de Skydropx. */
+  async skydropxQuote(
+    orderId: string,
+    input: SkydropxQuoteInput,
+    auth: AuthContext,
+  ): Promise<SkydropxQuoteResponse> {
+    await this.ensureNotExternallyInvoiced(orderId);
+    const order = await this.loadAccessibleOrder(orderId, auth);
+    if (!order.warehouseId) throw new BadRequestException('Asigna el pedido a una sede para cotizar.');
+    const sender = await this.coordinadora.senderFor(order.warehouseId);
+    if (!sender.postalCode) {
+      throw new BadRequestException(
+        'La sede no tiene código postal de origen configurado (Conexiones → Coordinadora).',
+      );
+    }
+    const client = extractInvoiceClient(order);
+    const cpTo = (input.postalCodeTo ?? client.address?.zipCode ?? '').trim();
+    if (!cpTo) {
+      throw new BadRequestException('El pedido no trae código postal de destino: escríbelo para cotizar.');
+    }
+    const { quotationId, rates } = await this.skydropx.quote({
+      from: {
+        country_code: 'CO',
+        postal_code: sender.postalCode,
+        area_level1: this.deptOf(sender.cityName),
+        area_level2: sender.cityName ?? '',
+        area_level3: '',
+      },
+      to: {
+        country_code: 'CO',
+        postal_code: cpTo,
+        area_level1: client.address?.department ?? '',
+        area_level2: client.address?.city ?? '',
+        area_level3: '',
+      },
+      parcel: {
+        length: input.package.length,
+        width: input.package.width,
+        height: input.package.height,
+        weight: input.package.weight,
+        declared_amount: input.package.declaredValue,
+      },
+    });
+    return { quotationId, postalCodeTo: cpTo, rates };
+  }
+
+  /** Genera la guia por SKYDROPX con la tarifa elegida (mismo pipeline). */
+  async generateGuideSkydropx(
+    orderId: string,
+    input: CreateSkydropxGuideInput,
+    auth: AuthContext,
+  ): Promise<Guide> {
+    this.acquireLock(`${orderId}:guide`, 'Ya hay una guía en curso para este pedido.');
+    try {
+      return await this.generateGuideSkydropxLocked(orderId, input, auth);
+    } finally {
+      this.opLocks.delete(`${orderId}:guide`);
+    }
+  }
+
+  private async generateGuideSkydropxLocked(
+    orderId: string,
+    input: CreateSkydropxGuideInput,
+    auth: AuthContext,
+  ): Promise<Guide> {
+    await this.ensureNotExternallyInvoiced(orderId);
+    const order = await this.loadAccessibleOrder(orderId, auth);
+    if (!order.warehouseId) {
+      throw new BadRequestException('Asigna el pedido a una sede para generar guia.');
+    }
+    const already = await this.existingGuide(orderId);
+    if (already) {
+      throw new ConflictException(
+        `Este pedido ya tiene guia (${already.number}). Anulala antes de generar otra.`,
+      );
+    }
+    const { tenantId, prisma } = getTenantContext();
+    const sender = await this.coordinadora.senderFor(order.warehouseId);
+    if (!sender.postalCode) {
+      throw new BadRequestException('La sede no tiene código postal de origen configurado.');
+    }
+    const client = extractInvoiceClient(order);
+
+    const ship = await this.skydropx.createShipment({
+      rateId: input.rateId,
+      from: {
+        country_code: 'CO',
+        postal_code: sender.postalCode,
+        area_level1: this.deptOf(sender.cityName),
+        area_level2: sender.cityName ?? '',
+        area_level3: '',
+        street1: sender.address,
+        name: sender.name,
+        company: sender.name,
+        phone: sender.phone,
+      },
+      to: {
+        country_code: 'CO',
+        postal_code: input.postalCodeTo,
+        area_level1: client.address?.department ?? '',
+        area_level2: client.address?.city ?? '',
+        area_level3: '',
+        street1: input.recipient.address,
+        name: input.recipient.name,
+        phone: input.recipient.phone,
+        ...(input.recipient.email ? { email: input.recipient.email } : {}),
+      },
+      parcel: {
+        length: input.package.length,
+        width: input.package.width,
+        height: input.package.height,
+        weight: input.package.weight,
+        declared_amount: input.package.declaredValue,
+      },
+      packageContent: input.packageContent,
+    });
+    const carrier = ship.carrier || input.carrier || 'Skydropx';
+
+    // Pipeline identico al de Coordinadora: aviso + evento + denormalizado.
+    await Promise.all([
+      prisma.orderMessage.create({
+        data: {
+          orderId,
+          authorId: auth.userId,
+          authorName: displayName(auth),
+          kind: 'system',
+          body: `Guia ${ship.trackingNumber} generada via Skydropx (${carrier}).`,
+          imeis: [],
+        },
+      }),
+      prisma.orderEvent.create({
+        data: {
+          orderId,
+          type: 'guide_generated',
+          actorId: auth.userId,
+          actorName: displayName(auth),
+          data: {
+            number: ship.trackingNumber,
+            id: ship.shipmentId,
+            url: ship.labelUrl,
+            cod: null,
+            via: 'skydropx',
+            carrier,
+          } as Prisma.InputJsonValue,
+        },
+      }),
+      prisma.order.update({
+        where: { id: orderId },
+        data: {
+          guideNumber: ship.trackingNumber,
+          shippingState: 'sin_movimientos',
+          shippingStatus: `${carrier} · Guia creada`,
+          shippingUpdatedAt: new Date(),
+          shippingProvider: 'skydropx',
+          skydropxShipmentId: ship.shipmentId || null,
+        },
+      }),
+    ]);
+
+    // Etiqueta -> chat interno + WhatsApp; cierre segun el origen. Best-effort.
+    const label = ship.labelUrl ? await this.skydropx.downloadLabel(ship.labelUrl) : null;
+    const [rotuloKey] = await Promise.all([
+      this.attachRotulo(orderId, order, { number: ship.trackingNumber }, label, auth),
+      order.provider === 'manual'
+        ? this.finalizeManual(order, auth).catch(() => null)
+        : this.finalizeVtex(order, auth).catch(() => null),
+    ]);
+    if (label) {
+      void this.whatsapp
+        .sendGuideByWhatsApp(
+          tenantId,
+          prisma,
+          { id: orderId, customerPhone: order.customerPhone, customerName: order.customerName },
+          label,
+          rotuloKey,
+        )
+        .catch(() => null);
+    }
+    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+    return {
+      id: ship.shipmentId || ship.trackingNumber,
+      number: ship.trackingNumber,
+      url: ship.labelUrl ?? '',
+      createdAt: new Date().toISOString(),
+    };
   }
 
   /** Busca ciudades (selector de destino) via la conexion de la sede del pedido. */

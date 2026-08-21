@@ -16,9 +16,12 @@ import { toast } from 'sonner';
 import {
   coordinadoraRotuloOptions,
   type CoordinadoraCity,
+  type CreateSkydropxGuideInput,
   type Guide,
   type GuidePreview,
   type GuideTracking,
+  type SkydropxQuoteResponse,
+  type SkydropxRate,
 } from '@smartlogistica/shared';
 
 import { CityPicker } from '@/components/city-picker';
@@ -26,6 +29,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, api } from '@/lib/api-client';
+import { cn } from '@/lib/utils';
 
 import { clearDraft, getDraft, setDraft } from './panel-drafts';
 
@@ -48,6 +52,9 @@ interface Pkg {
   observations: string;
 }
 
+/** Transportadora del panel: Coordinadora (directa) o Skydropx (agregador). */
+type Courier = 'coordinadora' | 'skydropx';
+
 interface GuideDraft {
   recipient: Recipient;
   pkg: Pkg;
@@ -55,6 +62,9 @@ interface GuideDraft {
   // Recaudo contraentrega (solo pedidos montados a mano).
   codOn?: boolean;
   codValue?: string;
+  // Modo Skydropx: transportadora elegida y CP destino (sobreviven al cerrar).
+  courier?: Courier;
+  postalCodeTo?: string;
 }
 
 export function GuidePanel({
@@ -78,6 +88,17 @@ export function GuidePanel({
   const [codOn, setCodOn] = useState<boolean>(draft?.codOn ?? false);
   const [codValue, setCodValue] = useState<string>(draft?.codValue ?? orderTotal ?? '');
   const [result, setResult] = useState<Guide | null>(null);
+
+  // === Skydropx ===
+  const [courier, setCourier] = useState<Courier>(draft?.courier ?? 'coordinadora');
+  const [postalCodeTo, setPostalCodeTo] = useState<string>(draft?.postalCodeTo ?? '');
+  // La cotizacion vive solo en memoria: las tarifas caducan rapido y siempre
+  // conviene re-cotizar al volver (el CP resuelto SI persiste en el borrador).
+  const [quote, setQuote] = useState<SkydropxQuoteResponse | null>(null);
+  const [selectedRateId, setSelectedRateId] = useState<string | null>(null);
+  // Nombre visible de la transportadora con la que salio la guia (para la
+  // tarjeta de exito; tras remontar lo repone el endpoint de rastreo).
+  const [emittedCarrier, setEmittedCarrier] = useState<string | null>(null);
 
   const {
     data: preview,
@@ -116,9 +137,17 @@ export function GuidePanel({
   // Persistir el borrador con cada edicion (sobrevive cierre del drawer).
   useEffect(() => {
     if (recipient && pkg) {
-      setDraft<GuideDraft>(`guide:${orderId}`, { recipient, pkg, rotuloId, codOn, codValue });
+      setDraft<GuideDraft>(`guide:${orderId}`, {
+        recipient,
+        pkg,
+        rotuloId,
+        codOn,
+        codValue,
+        courier,
+        postalCodeTo,
+      });
     }
-  }, [recipient, pkg, rotuloId, codOn, codValue, orderId]);
+  }, [recipient, pkg, rotuloId, codOn, codValue, courier, postalCodeTo, orderId]);
 
   const generate = useMutation({
     // Con clave: si cierran el drawer con la guia EN CURSO, al volver el boton
@@ -162,6 +191,70 @@ export function GuidePanel({
     onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo generar la guia'),
   });
 
+  // Paquete en el shape que pide Skydropx (cotizar y generar usan el MISMO:
+  // asi la tarifa elegida corresponde a lo que de verdad se envia).
+  const sdxPackage = () => ({
+    weight: Number(pkg!.weight),
+    length: Number(pkg!.length),
+    width: Number(pkg!.width),
+    height: Number(pkg!.height),
+    declaredValue: Number(pkg!.declaredValue) || 0,
+  });
+
+  const quoteMutation = useMutation({
+    mutationFn: () =>
+      api.post<SkydropxQuoteResponse>(`/v1/orders/${orderId}/skydropx-quote`, {
+        package: sdxPackage(),
+        // Vacio = que el server lo resuelva con la direccion del pedido.
+        ...(postalCodeTo.trim() ? { postalCodeTo: postalCodeTo.trim() } : {}),
+      }),
+    onSuccess: (q) => {
+      setQuote(q);
+      // La tarifa elegida pertenece a la cotizacion anterior -> se re-elige.
+      setSelectedRateId(null);
+      // CP resuelto por el server: se muestra para poder corregirlo.
+      setPostalCodeTo(q.postalCodeTo);
+    },
+    onError: (err) =>
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo cotizar con Skydropx'),
+  });
+
+  const selectedRate = quote?.rates.find((r) => r.id === selectedRateId) ?? null;
+
+  const generateSkydropx = useMutation({
+    // MISMA clave que la guia de Coordinadora: una sola guia en vuelo por
+    // pedido, sin importar por cual transportadora salga.
+    mutationKey: ['op-guide', orderId],
+    mutationFn: () => {
+      const body: CreateSkydropxGuideInput = {
+        rateId: selectedRate!.id,
+        carrier: selectedRate!.carrier,
+        package: sdxPackage(),
+        postalCodeTo: postalCodeTo.trim(),
+        recipient: {
+          name: recipient!.name.trim(),
+          address: recipient!.address.trim(),
+          phone: recipient!.phone.trim(),
+        },
+        packageContent: pkg!.content.trim() || 'CELULAR',
+      };
+      return api.post<Guide>(`/v1/orders/${orderId}/guide-skydropx`, body);
+    },
+    onSuccess: (g) => {
+      // El server ya hizo TODO el cierre (chat, WhatsApp, VTEX): aqui solo se
+      // replica el onSuccess de la guia de Coordinadora.
+      setEmittedCarrier(selectedRate?.carrier ?? null);
+      setResult(g);
+      clearDraft(`guide:${orderId}`);
+      toast.success(`Guia ${g.number} generada`);
+      qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
+      qc.invalidateQueries({ queryKey: ['order-events', orderId] });
+      qc.invalidateQueries({ queryKey: ['guide-preview', orderId] });
+      if (manual) qc.invalidateQueries({ queryKey: ['orders'] });
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo generar la guia'),
+  });
+
   // Pendiente GLOBAL: cuenta la mutacion en vuelo aunque este panel se haya
   // remontado. "Hacer todo" (op-all) tambien genera guia -> tambien bloquea.
   const guideInFlight = useIsMutating({ mutationKey: ['op-guide', orderId] });
@@ -199,8 +292,10 @@ export function GuidePanel({
   }
 
   const emitted = result ?? preview?.guide ?? null;
-  if (emitted) return <GuideDoneView orderId={orderId} guide={emitted} />;
+  if (emitted) return <GuideDoneView orderId={orderId} guide={emitted} carrierName={emittedCarrier} />;
   if (!recipient || !pkg || !preview) return null;
+
+  const sdx = courier === 'skydropx';
 
   const canGenerate =
     recipient.name.trim().length >= 2 &&
@@ -212,11 +307,52 @@ export function GuidePanel({
     pkg.content.trim().length >= 1 &&
     (!codOn || Number(codValue) > 0);
 
+  // Cotizar solo exige el paquete completo; el CP puede resolverlo el server.
+  const canQuote =
+    Number(pkg.weight) > 0 &&
+    Number(pkg.height) > 0 &&
+    Number(pkg.width) > 0 &&
+    Number(pkg.length) > 0;
+
+  const canGenerateSdx =
+    selectedRate !== null &&
+    recipient.name.trim().length >= 2 &&
+    recipient.address.trim().length >= 3 &&
+    recipient.phone.trim().length >= 5 &&
+    postalCodeTo.trim().length >= 4 &&
+    Number(pkg.weight) > 0;
+
   const patchR = (p: Partial<Recipient>) => setRecipient((r) => (r ? { ...r, ...p } : r));
   const patchP = (p: Partial<Pkg>) => setPkg((v) => (v ? { ...v, ...p } : v));
 
   return (
     <div className="space-y-5 p-5">
+      {/* Transportadora: Coordinadora (flujo directo, por defecto) o Skydropx
+          (agregador: cotiza varias transportadoras y genera con la elegida). */}
+      <section className="space-y-3">
+        <SectionTitle>Transportadora</SectionTitle>
+        <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5">
+          <button
+            type="button"
+            onClick={() => setCourier('coordinadora')}
+            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+              !sdx ? 'bg-card text-foreground shadow-card' : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            Coordinadora
+          </button>
+          <button
+            type="button"
+            onClick={() => setCourier('skydropx')}
+            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+              sdx ? 'bg-card text-foreground shadow-card' : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            Skydropx
+          </button>
+        </div>
+      </section>
+
       {/* Remitente (de la sede) */}
       <section className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
         <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Remitente (origen)</p>
@@ -234,33 +370,60 @@ export function GuidePanel({
           <Field label="Nombre">
             <Input value={recipient.name} onChange={(e) => patchR({ name: e.target.value })} />
           </Field>
-          <Field label="Documento (cedula/NIT)">
-            <Input value={recipient.document} onChange={(e) => patchR({ document: e.target.value })} />
-          </Field>
+          {sdx ? (
+            <Field label="Telefono">
+              <Input value={recipient.phone} onChange={(e) => patchR({ phone: e.target.value })} />
+            </Field>
+          ) : (
+            <Field label="Documento (cedula/NIT)">
+              <Input value={recipient.document} onChange={(e) => patchR({ document: e.target.value })} />
+            </Field>
+          )}
           <div className="sm:col-span-2">
             <Field label="Direccion">
               <Input value={recipient.address} onChange={(e) => patchR({ address: e.target.value })} />
             </Field>
           </div>
-          <Field label="Ciudad de destino">
-            <CityPicker
-              value={recipient.cityName || recipient.cityCode}
-              onPick={(c: CoordinadoraCity) =>
-                patchR({ cityCode: c.code, cityName: `${c.name} — ${c.department}` })
-              }
-              search={(q) =>
-                api.get<CoordinadoraCity[]>(
-                  `/v1/orders/${orderId}/guide-cities?q=${encodeURIComponent(q)}`,
-                )
-              }
-              queryKey={`dest-${orderId}`}
-            />
-          </Field>
-          <Field label="Telefono">
-            <Input value={recipient.phone} onChange={(e) => patchR({ phone: e.target.value })} />
-          </Field>
+          {sdx ? (
+            // Skydropx enruta por CP, no por codigo DANE. Vacio: el server lo
+            // resuelve con la ciudad del pedido y aqui queda prellenado.
+            <Field label="Codigo postal destino">
+              <Input
+                inputMode="numeric"
+                placeholder="Ej: 110111"
+                maxLength={10}
+                className="w-32 tabular-nums"
+                value={postalCodeTo}
+                onChange={(e) => setPostalCodeTo(e.target.value.replace(/\D/g, ''))}
+              />
+            </Field>
+          ) : (
+            <>
+              <Field label="Ciudad de destino">
+                <CityPicker
+                  value={recipient.cityName || recipient.cityCode}
+                  onPick={(c: CoordinadoraCity) =>
+                    patchR({ cityCode: c.code, cityName: `${c.name} — ${c.department}` })
+                  }
+                  search={(q) =>
+                    api.get<CoordinadoraCity[]>(
+                      `/v1/orders/${orderId}/guide-cities?q=${encodeURIComponent(q)}`,
+                    )
+                  }
+                  queryKey={`dest-${orderId}`}
+                />
+              </Field>
+              <Field label="Telefono">
+                <Input value={recipient.phone} onChange={(e) => patchR({ phone: e.target.value })} />
+              </Field>
+            </>
+          )}
         </div>
-        {!recipient.cityCode ? (
+        {sdx ? (
+          <p className="text-[11px] text-muted-foreground">
+            Si no conoces el código postal, cotiza: el sistema intenta resolverlo con la ciudad del pedido.
+          </p>
+        ) : !recipient.cityCode ? (
           <p className="text-[11px] text-amber-600 dark:text-amber-400">
             No se reconocio la ciudad de VTEX — selecciona la ciudad de destino.
           </p>
@@ -310,14 +473,16 @@ export function GuidePanel({
             />
           </Field>
         </div>
-        <Field label="Observaciones (opcional)">
-          <Input
-            value={pkg.observations}
-            placeholder="Aparece en la guía de Coordinadora; vacío = sin observaciones"
-            maxLength={300}
-            onChange={(e) => patchP({ observations: e.target.value })}
-          />
-        </Field>
+        {!sdx ? (
+          <Field label="Observaciones (opcional)">
+            <Input
+              value={pkg.observations}
+              placeholder="Aparece en la guía de Coordinadora; vacío = sin observaciones"
+              maxLength={300}
+              onChange={(e) => patchP({ observations: e.target.value })}
+            />
+          </Field>
+        ) : null}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <Field label="Peso (kg)">
             <Input inputMode="decimal" value={pkg.weight} onChange={(e) => patchP({ weight: e.target.value.replace(/[^\d.]/g, '') })} />
@@ -332,31 +497,75 @@ export function GuidePanel({
             <Input inputMode="decimal" value={pkg.length} onChange={(e) => patchP({ length: e.target.value.replace(/[^\d.]/g, '') })} />
           </Field>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="w-24">
-            <Field label="Unidades">
-              <Input inputMode="numeric" value={pkg.units} onChange={(e) => patchP({ units: e.target.value.replace(/\D/g, '') })} />
+        {!sdx ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="w-24">
+              <Field label="Unidades">
+                <Input inputMode="numeric" value={pkg.units} onChange={(e) => patchP({ units: e.target.value.replace(/\D/g, '') })} />
+              </Field>
+            </div>
+            <Field label="Formato de rotulo">
+              <select
+                value={rotuloId ?? ''}
+                onChange={(e) => setRotuloId(Number(e.target.value))}
+                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {coordinadoraRotuloOptions.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
             </Field>
           </div>
-          <Field label="Formato de rotulo">
-            <select
-              value={rotuloId ?? ''}
-              onChange={(e) => setRotuloId(Number(e.target.value))}
-              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {coordinadoraRotuloOptions.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-        </div>
+        ) : null}
       </section>
 
-      {/* Recaudo contraentrega: para TODOS los pedidos (manuales y de
-          marketplace). Coordinadora cobra el valor al entregar. */}
-      <section className="space-y-3">
+      {sdx ? (
+        /* Cotizacion Skydropx: todas las transportadoras disponibles para la
+           ruta, como tarjetas seleccionables (ya vienen ordenadas por precio). */
+        <section className="space-y-3">
+          <SectionTitle>Tarifas</SectionTitle>
+          <Button
+            variant="outline"
+            onClick={() => quoteMutation.mutate()}
+            loading={quoteMutation.isPending}
+            disabled={!canQuote || quoteMutation.isPending}
+          >
+            Cotizar transportadoras
+          </Button>
+          {quote ? (
+            quote.rates.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-border bg-muted/20 px-4 py-8 text-center">
+                <Truck className="mx-auto h-5 w-5 text-muted-foreground" />
+                <p className="mt-2 text-sm font-medium">Ninguna transportadora disponible para esta ruta</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  Revisa el código postal de destino o ajusta las medidas del paquete.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {quote.rates.map((r) => (
+                  <RateCard
+                    key={r.id}
+                    rate={r}
+                    selected={r.id === selectedRateId}
+                    onSelect={() => setSelectedRateId(r.id)}
+                  />
+                ))}
+              </div>
+            )
+          ) : (
+            <p className="text-[11px] text-muted-foreground">
+              Cotiza para ver las transportadoras disponibles con precio y tiempo de entrega.
+            </p>
+          )}
+        </section>
+      ) : (
+        /* Recaudo contraentrega: para TODOS los pedidos (manuales y de
+           marketplace). Coordinadora cobra el valor al entregar. NO aplica en
+           modo Skydropx. */
+        <section className="space-y-3">
           <SectionTitle>Cobro del envio</SectionTitle>
           <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5">
             <button
@@ -394,12 +603,28 @@ export function GuidePanel({
             </div>
           ) : null}
         </section>
+      )}
 
       <div className="flex items-center justify-between border-t border-border pt-3">
         <p className="text-[11px] text-muted-foreground">
-          El rotulo se adjunta al chat al generar la guia.
+          {sdx ? (
+            selectedRate ? (
+              <>
+                Saldrá por <b className="text-foreground/80">{selectedRate.carrier}</b> ·{' '}
+                {formatCOP(selectedRate.total)}
+              </>
+            ) : (
+              'Cotiza y elige una tarifa para generar la guía.'
+            )
+          ) : (
+            'El rotulo se adjunta al chat al generar la guia.'
+          )}
         </p>
-        <Button onClick={() => generate.mutate()} loading={generating} disabled={!canGenerate || generating}>
+        <Button
+          onClick={() => (sdx ? generateSkydropx.mutate() : generate.mutate())}
+          loading={generating}
+          disabled={(sdx ? !canGenerateSdx : !canGenerate) || generating}
+        >
           <Truck className="h-4 w-4" />
           Generar guia
         </Button>
@@ -408,7 +633,90 @@ export function GuidePanel({
   );
 }
 
-function GuideDoneView({ orderId, guide }: { orderId: string; guide: Guide }) {
+/**
+ * Colores de marca por transportadora (cuadrito con la inicial, como en la UI
+ * de Skydropx). Slugs desconocidos caen al gris neutro.
+ */
+const CARRIER_BRAND_COLORS: Record<string, string> = {
+  coordinadora: '#1d4ed8',
+  servientrega: '#16a34a',
+  interrapidisimo: '#111827',
+  envia: '#dc2626',
+  '99minutes': '#7c3aed',
+};
+
+/** Tarjeta de tarifa Skydropx, seleccionable como una radio card. */
+function RateCard({
+  rate,
+  selected,
+  onSelect,
+}: {
+  rate: SkydropxRate;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  const brand = CARRIER_BRAND_COLORS[rate.carrierCode.toLowerCase()] ?? '#64748b';
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={selected}
+      className={cn(
+        'w-full rounded-xl border bg-card p-3 text-left transition-colors',
+        selected ? 'border-accent ring-1 ring-accent' : 'border-border hover:border-accent/40',
+      )}
+    >
+      <div className="flex items-center gap-3">
+        <span
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-base font-bold text-white"
+          style={{ backgroundColor: brand }}
+          aria-hidden
+        >
+          {(rate.carrier.trim().charAt(0) || '?').toUpperCase()}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm">
+            <span className="font-semibold">{rate.carrier}</span>
+            {rate.service ? <span className="text-muted-foreground"> · {rate.service}</span> : null}
+          </p>
+          {rate.days !== null ? (
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              Tiempo estimado · {rate.days} {rate.days === 1 ? 'día hábil' : 'días hábiles'}
+            </p>
+          ) : null}
+        </div>
+        <p className="shrink-0 text-base font-semibold tabular-nums">{formatCOP(rate.total)}</p>
+      </div>
+    </button>
+  );
+}
+
+/**
+ * Rastreo del pedido. Hook compartido entre la tarjeta de exito y el timeline:
+ * misma queryKey -> una sola peticion (React Query dedup) y ambos ven la
+ * transportadora real aunque el panel se haya remontado.
+ */
+function useOrderTracking(orderId: string) {
+  return useQuery({
+    queryKey: ['order-tracking', orderId],
+    queryFn: () => api.get<GuideTracking | null>(`/v1/orders/${orderId}/tracking`),
+    staleTime: 60_000,
+  });
+}
+
+function GuideDoneView({
+  orderId,
+  guide,
+  carrierName,
+}: {
+  orderId: string;
+  guide: Guide;
+  /** Transportadora recien emitida (Skydropx); null = Coordinadora o remonte. */
+  carrierName?: string | null;
+}) {
+  const { data: tracking } = useOrderTracking(orderId);
+  const carrier = tracking?.carrier ?? carrierName ?? 'Coordinadora';
+  const isCoordinadora = carrier.toLowerCase().includes('coordinadora');
   return (
     <div className="space-y-4 p-5">
       <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-center">
@@ -416,26 +724,24 @@ function GuideDoneView({ orderId, guide }: { orderId: string; guide: Guide }) {
         <h3 className="mt-2 text-base font-semibold">Guia {guide.number} generada</h3>
         <p className="mt-0.5 flex items-center justify-center gap-1.5 text-sm text-muted-foreground">
           <Package className="h-3.5 w-3.5" />
-          Coordinadora
+          {carrier}
         </p>
       </div>
 
       <TrackingTimeline orderId={orderId} />
 
       <p className="text-center text-[11px] text-muted-foreground">
-        El rotulo esta en la conversacion. Para generar otra guia, anulala primero en Coordinadora.
+        {isCoordinadora
+          ? 'El rotulo esta en la conversacion. Para generar otra guia, anulala primero en Coordinadora.'
+          : `La guía está en la conversación. Para generar otra, anúlala primero en ${carrier}.`}
       </p>
     </div>
   );
 }
 
-/** Seguimiento detallado del envio (rastreo Coordinadora): estado, novedades y timeline. */
+/** Seguimiento detallado del envio (rastreo): estado, novedades y timeline. */
 function TrackingTimeline({ orderId }: { orderId: string }) {
-  const { data, isLoading, isFetching, refetch, error } = useQuery({
-    queryKey: ['order-tracking', orderId],
-    queryFn: () => api.get<GuideTracking | null>(`/v1/orders/${orderId}/tracking`),
-    staleTime: 60_000,
-  });
+  const { data, isLoading, isFetching, refetch, error } = useOrderTracking(orderId);
 
   const delivered = Boolean(data?.fechaEntrega?.trim());
   const hasMovements = (data?.estados.length ?? 0) > 0;
@@ -456,7 +762,7 @@ function TrackingTimeline({ orderId }: { orderId: string }) {
               className="flex items-center gap-1 text-[11px] text-sky-600 hover:underline dark:text-sky-400"
             >
               <ExternalLink className="h-3 w-3" />
-              Coordinadora
+              {data.carrier ?? 'Coordinadora'}
             </a>
           ) : null}
           <button
@@ -482,6 +788,15 @@ function TrackingTimeline({ orderId }: { orderId: string }) {
           <p className="text-sm text-muted-foreground">Este pedido aun no tiene guia para rastrear.</p>
         ) : (
           <>
+            {/* Con Skydropx el envio puede salir por CUALQUIER transportadora:
+                dejarla siempre visible junto al estado. */}
+            {data.carrier ? (
+              <p className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-[11px] font-medium">
+                <Truck className="h-3 w-3 text-muted-foreground" />
+                Enviado por <span className="font-semibold">{data.carrier}</span>
+              </p>
+            ) : null}
+
             {delivered ? (
               <div className="mb-3 flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700 dark:text-emerald-400">
                 <CheckCircle2 className="h-4 w-4 shrink-0" />
@@ -535,7 +850,7 @@ function TrackingTimeline({ orderId }: { orderId: string }) {
               </ol>
             ) : (
               <p className="text-sm text-muted-foreground">
-                Aun sin movimientos registrados. Coordinadora los actualiza al recoger y mover el paquete.
+                Aun sin movimientos registrados. La transportadora los actualiza al recoger y mover el paquete.
               </p>
             )}
           </>
@@ -543,6 +858,19 @@ function TrackingTimeline({ orderId }: { orderId: string }) {
       </div>
     </div>
   );
+}
+
+function formatCOP(value: number): string {
+  if (Number.isNaN(value)) return '$0';
+  try {
+    return new Intl.NumberFormat('es-CO', {
+      style: 'currency',
+      currency: 'COP',
+      maximumFractionDigits: 0,
+    }).format(value);
+  } catch {
+    return `$${value.toLocaleString('es-CO')}`;
+  }
 }
 
 function SectionTitle({ children }: { children: React.ReactNode }) {

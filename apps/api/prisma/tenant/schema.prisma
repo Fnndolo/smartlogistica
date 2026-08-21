@@ -68,6 +68,8 @@ model CoordinadoraConnection {
   senderAddress  String
   senderCityCode String // codigo DANE de 8 digitos
   senderCityName String?
+  // CP del ORIGEN de la sede (Skydropx cotiza por codigo postal).
+  senderPostalCode String?
 
   status    String   @default("connected")
   lastError String?
@@ -264,6 +266,19 @@ model WaChatRead {
   @@id([userId, phone])
 }
 
+// Conexion a SKYDROPX (agregador multi-transportadora; segunda opcion de guia
+// junto a Coordinadora). UNA por tenant; OAuth client_credentials cifrado.
+model SkydropxConnection {
+  id                 String   @id @default(cuid())
+  encryptedApiKey    Bytes
+  encryptedApiSecret Bytes
+  mode               String   @default("sandbox") // sandbox | production
+  status             String   @default("connected")
+  lastError          String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @default(now()) @updatedAt
+}
+
 model AiConnection {
   id              String   @id @default(cuid())
   provider        String // openai | gemini | anthropic
@@ -339,8 +354,12 @@ model Order {
   // guideNumber se copia del evento 'guide_generated'; el resto lo refresca el rastreo.
   guideNumber          String?
   shippingState        String? // sin_movimientos | en_transito | novedad | entregado
-  shippingStatus       String? // descripcion cruda de Coordinadora
+  shippingStatus       String? // descripcion cruda de la transportadora
   shippingUpdatedAt    DateTime?
+  // Transportadora de la guia: 'coordinadora' (null = legado) | 'skydropx'.
+  shippingProvider     String?
+  // Id del shipment en Skydropx (para el rastreo por API).
+  skydropxShipmentId   String?
 
   // Confirmacion de direccion por WhatsApp: el cliente confirma o
   // modifica su direccion desde el mensaje de confirmacion del pedido.

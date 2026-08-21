@@ -28,6 +28,11 @@ import {
   listOrdersQuerySchema,
   orderReactionInputSchema,
   processAllSchema,
+  skydropxQuoteInputSchema,
+  createSkydropxGuideSchema,
+  type CreateSkydropxGuideInput,
+  type SkydropxQuoteInput,
+  type SkydropxQuoteResponse,
   type AlegraItem,
   type AlegraPaymentAccount,
   type AssignOrdersInput,
@@ -492,6 +497,28 @@ export class OrdersController {
     @CurrentUser() user: AuthContext,
   ): Promise<Guide> {
     return this.orders.generateGuide(id, body, user);
+  }
+
+  /** SKYDROPX: cotiza el envio en TODAS las transportadoras disponibles. */
+  @Post(':id/skydropx-quote')
+  @HttpCode(200)
+  async skydropxQuote(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(skydropxQuoteInputSchema)) body: SkydropxQuoteInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<SkydropxQuoteResponse> {
+    return this.orders.skydropxQuote(id, body, user);
+  }
+
+  /** SKYDROPX: genera la guia con la tarifa elegida (mismo pipeline de cierre). */
+  @Post(':id/guide-skydropx')
+  @HttpCode(201)
+  async guideSkydropx(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(createSkydropxGuideSchema)) body: CreateSkydropxGuideInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<Guide> {
+    return this.orders.generateGuideSkydropx(id, body, user);
   }
 
   /**

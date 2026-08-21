@@ -41,6 +41,7 @@ interface ConnectionRow {
   senderAddress: string;
   senderCityCode: string;
   senderCityName: string | null;
+  senderPostalCode: string | null;
   rotuloId: number;
   status: string;
   lastError: string | null;
@@ -173,6 +174,8 @@ export class CoordinadoraService {
     cityName: string | null;
     phone: string;
     rotuloId: number;
+    /** CP del origen (Skydropx cotiza por codigo postal). */
+    postalCode: string | null;
   }> {
     const conn = await this.requireConnection(warehouseId);
     return {
@@ -182,6 +185,7 @@ export class CoordinadoraService {
       cityName: conn.senderCityName,
       phone: conn.senderPhone,
       rotuloId: conn.rotuloId,
+      postalCode: conn.senderPostalCode ?? null,
     };
   }
 
@@ -281,6 +285,7 @@ export class CoordinadoraService {
       const t = await this.client.rastrear(creds, guideNumber);
       return {
         guideNumber,
+        carrier: 'Coordinadora',
         trackingUrl: `https://coordinadora.com/rastreo/rastreo-de-guia/?guia=${encodeURIComponent(guideNumber)}`,
         ...t,
       };

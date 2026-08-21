@@ -185,6 +185,8 @@ export type TrackingEvent = z.infer<typeof trackingEventSchema>;
 /** Seguimiento detallado de una guia (rastreoExtendido de Coordinadora). */
 export const guideTrackingSchema = z.object({
   guideNumber: z.string(),
+  /** Transportadora del envio (Coordinadora, o la elegida en Skydropx). */
+  carrier: z.string().nullable().default(null),
   codigoEstado: z.number().int(),
   descripcionEstado: z.string(),
   fechaRecogida: z.string(),
