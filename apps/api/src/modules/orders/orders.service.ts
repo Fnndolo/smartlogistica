@@ -57,7 +57,7 @@ import { AiConnectionService } from '../ai/ai-connection.service';
 import { type ImageMime } from '../ai/ai-vision-client.service';
 import { AlegraService, type InvoiceClient } from '../marketplaces/alegra/alegra.service';
 import { WarrantyService } from '../marketplaces/alegra/warranty.service';
-import { CoordinadoraService } from '../marketplaces/coordinadora/coordinadora.service';
+import { CoordinadoraService, postalCodeByCity } from '../marketplaces/coordinadora/coordinadora.service';
 import type { RastreoResult } from '../marketplaces/coordinadora/coordinadora-client.service';
 import { MktDocumentService } from '../marketplaces/vtex/mkt-document.service';
 import { VtexClient } from '../marketplaces/vtex/vtex-client.service';
@@ -2152,7 +2152,9 @@ export class OrdersService {
     const order = await this.loadAccessibleOrder(orderId, auth);
     if (!order.warehouseId) throw new BadRequestException('Asigna el pedido a una sede para cotizar.');
     const sender = await this.coordinadora.senderFor(order.warehouseId);
-    if (!sender.postalCode) {
+    // CP del origen: el guardado o DERIVADO de la ciudad de la sede al vuelo.
+    const cpFrom = sender.postalCode ?? postalCodeByCity(sender.cityName);
+    if (!cpFrom) {
       throw new BadRequestException(
         'La sede no tiene código postal de origen configurado (Conexiones → Coordinadora).',
       );
@@ -2165,7 +2167,7 @@ export class OrdersService {
     const { quotationId, rates } = await this.skydropx.quote({
       from: {
         country_code: 'CO',
-        postal_code: sender.postalCode,
+        postal_code: cpFrom,
         area_level1: this.deptOf(sender.cityName),
         area_level2: sender.cityName ?? '',
         area_level3: '',
@@ -2220,7 +2222,8 @@ export class OrdersService {
     }
     const { tenantId, prisma } = getTenantContext();
     const sender = await this.coordinadora.senderFor(order.warehouseId);
-    if (!sender.postalCode) {
+    const cpFrom = sender.postalCode ?? postalCodeByCity(sender.cityName);
+    if (!cpFrom) {
       throw new BadRequestException('La sede no tiene código postal de origen configurado.');
     }
     const client = extractInvoiceClient(order);
@@ -2229,7 +2232,7 @@ export class OrdersService {
       rateId: input.rateId,
       from: {
         country_code: 'CO',
-        postal_code: sender.postalCode,
+        postal_code: cpFrom,
         area_level1: this.deptOf(sender.cityName),
         area_level2: sender.cityName ?? '',
         area_level3: '',

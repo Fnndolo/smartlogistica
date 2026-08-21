@@ -113,13 +113,26 @@ export class SkydropxService {
 
   // === Cotizacion / envio / rastreo ===
 
+  /** Errores de Skydropx SIEMPRE como 400 con el detalle real (jamas un 500 mudo). */
+  private asBadRequest(err: unknown, fallback: string): BadRequestException {
+    if (err instanceof BadRequestException) return err;
+    const detail = err instanceof Error ? err.message : String(err);
+    this.logger.warn(`${fallback}: ${detail}`);
+    return new BadRequestException(`Skydropx: ${detail.slice(0, 300)}`);
+  }
+
   /** Cotiza y devuelve SOLO las tarifas DISPONIBLES (como el panel de ellos). */
   async quote(input: { from: SkydropxAddress; to: SkydropxAddress; parcel: SkydropxParcel }): Promise<{
     quotationId: string;
     rates: SkydropxRateDto[];
   }> {
     const creds = await this.requireCreds();
-    const quotation = await this.client.quote(creds, input);
+    let quotation;
+    try {
+      quotation = await this.client.quote(creds, input);
+    } catch (err) {
+      throw this.asBadRequest(err, 'Cotizacion Skydropx fallo');
+    }
     const rates = (quotation.rates ?? [])
       .filter((r) => r.success && r.total != null)
       .map((r) => this.toRateDto(r))
@@ -150,7 +163,12 @@ export class SkydropxService {
     packageContent: string;
   }): Promise<{ shipmentId: string; trackingNumber: string; labelUrl: string | null; carrier: string | null; raw: Record<string, unknown> }> {
     const creds = await this.requireCreds();
-    const raw = await this.client.createShipment(creds, input);
+    let raw: Record<string, unknown>;
+    try {
+      raw = await this.client.createShipment(creds, input);
+    } catch (err) {
+      throw this.asBadRequest(err, 'Creacion de envio Skydropx fallo');
+    }
     const dig = (obj: unknown, keys: string[]): unknown => {
       if (!obj || typeof obj !== 'object') return undefined;
       const o = obj as Record<string, unknown>;

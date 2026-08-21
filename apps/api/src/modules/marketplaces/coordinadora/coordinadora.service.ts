@@ -52,14 +52,18 @@ const CP_BY_CITY: Record<string, string> = {
   monteria: '230001',
 };
 
-function postalCodeByCity(cityName: string | null | undefined): string | null {
-  const key = (cityName ?? '')
+export function postalCodeByCity(cityName: string | null | undefined): string | null {
+  const norm = (cityName ?? '')
     .toLowerCase()
     .normalize('NFD')
     .replace(/\p{Diacritic}/gu, '')
-    .replace(/\s*\(.*\)\s*/g, '')
     .trim();
-  return CP_BY_CITY[key] ?? null;
+  if (CP_BY_CITY[norm]) return CP_BY_CITY[norm];
+  // Formatos tipo "MEDELLIN (ANT) — Antioquia": basta que CONTENGA la ciudad.
+  for (const [city, cp] of Object.entries(CP_BY_CITY)) {
+    if (norm.includes(city)) return cp;
+  }
+  return null;
 }
 
 interface ConnectionRow {
