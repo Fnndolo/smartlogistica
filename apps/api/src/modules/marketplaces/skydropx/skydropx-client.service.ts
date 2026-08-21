@@ -153,6 +153,8 @@ export class SkydropxClient {
     creds: { apiKey: string; apiSecret: string; mode: SkydropxMode },
     input: {
       rateId: string;
+      quotationId?: string;
+      carrierName?: string;
       from: SkydropxAddress;
       to: SkydropxAddress;
       parcel: SkydropxParcel;
@@ -162,6 +164,10 @@ export class SkydropxClient {
     return this.call<Record<string, unknown>>(creds, 'POST', '/api/v1/shipments', {
       shipment: {
         rate_id: input.rateId,
+        // La doc oficial (pro.skydropx.com/api-docs) exige ademas el id de la
+        // cotizacion y el slug de la transportadora de la tarifa elegida.
+        ...(input.quotationId ? { quotation_id: input.quotationId } : {}),
+        ...(input.carrierName ? { carrier_name: input.carrierName } : {}),
         address_from: input.from,
         address_to: input.to,
         parcel: { ...input.parcel, package_type: 'box', package_content: input.packageContent },

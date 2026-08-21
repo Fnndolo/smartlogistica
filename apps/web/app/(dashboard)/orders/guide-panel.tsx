@@ -261,7 +261,10 @@ export function GuidePanel({
     mutationFn: () => {
       const body: CreateSkydropxGuideInput = {
         rateId: selectedRate!.id,
+        // La doc de Skydropx exige tambien la cotizacion y el slug del carrier.
+        ...(quote ? { quotationId: quote.quotationId } : {}),
         carrier: selectedRate!.carrier,
+        carrierCode: selectedRate!.carrierCode,
         package: sdxPackage(),
         // Puede ir vacio si hay ciudad (Skydropx acepta ciudad+depto sin CP).
         postalCodeTo: postalCodeTo.trim(),

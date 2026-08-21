@@ -74,8 +74,12 @@ export type SkydropxQuoteInput = z.infer<typeof skydropxQuoteInputSchema>;
 /** Generar la guia con la tarifa elegida. */
 export const createSkydropxGuideSchema = z.object({
   rateId: z.string().min(6),
+  /** Cotizacion de la que salio la tarifa (la doc de Skydropx lo exige). */
+  quotationId: z.string().optional(),
   /** La transportadora elegida (para el registro; el server re-verifica). */
   carrier: z.string().min(2).max(60),
+  /** Slug interno de la transportadora (carrier_name del envio). */
+  carrierCode: z.string().max(60).optional(),
   package: skydropxQuoteInputSchema.shape.package,
   /** Puede ir vacio si hay ciudad (Skydropx acepta ciudad+depto sin CP). */
   postalCodeTo: z.string().trim().max(10).default(''),

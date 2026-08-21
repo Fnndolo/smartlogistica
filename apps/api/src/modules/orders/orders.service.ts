@@ -2265,6 +2265,8 @@ export class OrdersService {
 
     const ship = await this.skydropx.createShipment({
       rateId: input.rateId,
+      quotationId: input.quotationId,
+      carrierName: input.carrierCode,
       from: {
         country_code: 'CO',
         postal_code: cpFrom,
