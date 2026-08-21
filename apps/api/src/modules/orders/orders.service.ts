@@ -2178,8 +2178,20 @@ export class OrdersService {
     }
     const client = extractInvoiceClient(order);
     const cpTo = (input.postalCodeTo ?? client.address?.zipCode ?? '').trim();
-    const cityTo = (input.cityTo ?? client.address?.city ?? '').trim();
-    const deptTo = (input.departmentTo ?? client.address?.department ?? '').trim() || cityTo;
+    let cityTo = (input.cityTo ?? '').trim();
+    let deptTo = (input.departmentTo ?? '').trim();
+    if (!cityTo) {
+      // Ciudad AUTOMATICA como en el modo Coordinadora: se resuelve contra su
+      // catalogo con la ciudad del pedido (trae el departamento completo).
+      const resolved = await this.coordinadora
+        .resolveCity(order.warehouseId, client.address?.city ?? null, client.address?.department ?? null)
+        .catch(() => null);
+      cityTo = resolved
+        ? resolved.name.replace(/\s*\(.*?\)\s*/g, '').trim()
+        : (client.address?.city ?? '').trim();
+      deptTo = deptTo || resolved?.department || (client.address?.department ?? '').trim();
+    }
+    deptTo = deptTo || cityTo;
     if (!cpTo && !cityTo) {
       throw new BadRequestException(
         'El pedido no trae código postal ni ciudad de destino: completa al menos uno para cotizar.',

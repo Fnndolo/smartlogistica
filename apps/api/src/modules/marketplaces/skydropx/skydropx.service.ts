@@ -117,12 +117,14 @@ export class SkydropxService {
 
   // === Cotizacion / envio / rastreo ===
 
-  /** Errores de Skydropx SIEMPRE como 400 con el detalle real (jamas un 500 mudo). */
+  /** Errores de Skydropx SIEMPRE como 400 con el detalle real (jamas un 500
+   * mudo). El recorte es GENEROSO: el "enviado: {...}" del cliente debe verse
+   * COMPLETO (el address_to truncado ya nos costo una ronda de diagnostico). */
   private asBadRequest(err: unknown, fallback: string): BadRequestException {
     if (err instanceof BadRequestException) return err;
     const detail = err instanceof Error ? err.message : String(err);
     this.logger.warn(`${fallback}: ${detail}`);
-    return new BadRequestException(`Skydropx: ${detail.slice(0, 300)}`);
+    return new BadRequestException(`Skydropx: ${detail.slice(0, 900)}`);
   }
 
   /** Cotiza y devuelve SOLO las tarifas DISPONIBLES (como el panel de ellos). */
