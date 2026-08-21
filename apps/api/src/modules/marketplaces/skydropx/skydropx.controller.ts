@@ -10,8 +10,10 @@ import { ZodValidationPipe } from '../../../common/pipes/zod-validation.pipe';
 import type { AuthContext } from '../../../common/types/authenticated-request';
 import { SkydropxService } from './skydropx.service';
 
-/** Conexion GLOBAL a Skydropx (una por negocio; el remitente sale de cada sede). */
-@Controller('connections/skydropx')
+/** Conexion GLOBAL a Skydropx (una por negocio; el remitente sale de cada sede).
+ * OJO: fuera de 'connections/...' — el ConnectionsController generico tiene un
+ * @Delete(':id') que se tragaria nuestro DELETE (id='skydropx' -> NotFound). */
+@Controller('skydropx/connection')
 export class SkydropxConnectionController {
   constructor(private readonly skydropx: SkydropxService) {}
 

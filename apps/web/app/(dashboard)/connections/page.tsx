@@ -40,7 +40,7 @@ async function initialDialog360(): Promise<Dialog360ConnectionSummary | null | u
 }
 
 async function initialSkydropx(): Promise<SkydropxConnectionSummary | null | undefined> {
-  const res = await serverFetchResult<SkydropxConnectionSummary | null>('/v1/connections/skydropx');
+  const res = await serverFetchResult<SkydropxConnectionSummary | null>('/v1/skydropx/connection');
   return res.ok ? res.data : undefined;
 }
 

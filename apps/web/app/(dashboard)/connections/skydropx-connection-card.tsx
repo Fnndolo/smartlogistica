@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatRelative } from 'date-fns/formatRelative';
 import { es } from 'date-fns/locale/es';
-import { AlertTriangle, Check, Loader2, Plug, Route, Trash2 } from 'lucide-react';
+import { AlertTriangle, Check, Loader2, Pencil, Plug, Route, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import type { SkydropxConnectionSummary, SkydropxMode } from '@smartlogistica/shared';
 
@@ -41,7 +41,7 @@ export function SkydropxConnectionCard({ initial }: { initial?: SkydropxConnecti
     error,
   } = useQuery({
     queryKey: ['skydropx-connection'],
-    queryFn: () => api.get<SkydropxConnectionSummary | null>('/v1/connections/skydropx'),
+    queryFn: () => api.get<SkydropxConnectionSummary | null>('/v1/skydropx/connection'),
     initialData: initial,
     staleTime: 15_000,
     enabled: canManage,
@@ -57,7 +57,7 @@ export function SkydropxConnectionCard({ initial }: { initial?: SkydropxConnecti
       return;
     setDisconnecting(true);
     try {
-      await api.delete('/v1/connections/skydropx');
+      await api.delete('/v1/skydropx/connection');
       toast.success('Skydropx desconectado');
       qc.invalidateQueries({ queryKey: ['skydropx-connection'] });
     } catch (err) {
@@ -132,16 +132,24 @@ export function SkydropxConnectionCard({ initial }: { initial?: SkydropxConnecti
 
         {!formOpen ? (
           connection ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={disconnect}
-              loading={disconnecting}
-              className="shrink-0 text-muted-foreground hover:text-destructive"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              Desconectar
-            </Button>
+            <div className="flex shrink-0 items-center gap-1">
+              {/* Editar = re-conectar (las credenciales guardadas jamas se
+                  muestran; para cambiar de modo o de llaves se vuelven a pegar). */}
+              <Button variant="outline" size="sm" onClick={() => setFormOpen(true)}>
+                <Pencil className="h-3.5 w-3.5" />
+                Cambiar credenciales
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={disconnect}
+                loading={disconnecting}
+                className="text-muted-foreground hover:text-destructive"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Desconectar
+              </Button>
+            </div>
           ) : (
             <Button size="sm" className="shrink-0" onClick={() => setFormOpen(true)}>
               <Plug className="h-3.5 w-3.5" />
@@ -153,6 +161,7 @@ export function SkydropxConnectionCard({ initial }: { initial?: SkydropxConnecti
 
       {formOpen ? (
         <SkydropxForm
+          initialMode={connection?.mode}
           onDone={() => {
             qc.invalidateQueries({ queryKey: ['skydropx-connection'] });
             setFormOpen(false);
@@ -164,8 +173,17 @@ export function SkydropxConnectionCard({ initial }: { initial?: SkydropxConnecti
   );
 }
 
-function SkydropxForm({ onDone, onCancel }: { onDone: () => void; onCancel: () => void }) {
-  const [mode, setMode] = useState<SkydropxMode>('sandbox');
+function SkydropxForm({
+  initialMode,
+  onDone,
+  onCancel,
+}: {
+  /** Modo actual de la conexion (al editar arranca en el que ya esta). */
+  initialMode?: SkydropxMode;
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const [mode, setMode] = useState<SkydropxMode>(initialMode ?? 'sandbox');
   const [apiKey, setApiKey] = useState('');
   const [apiSecret, setApiSecret] = useState('');
   const [saving, setSaving] = useState(false);
@@ -177,7 +195,7 @@ function SkydropxForm({ onDone, onCancel }: { onDone: () => void; onCancel: () =
     setSaving(true);
     try {
       // El server valida las credenciales contra la API real de Skydropx.
-      await api.post('/v1/connections/skydropx', {
+      await api.post('/v1/skydropx/connection', {
         apiKey: apiKey.trim(),
         apiSecret: apiSecret.trim(),
         mode,
