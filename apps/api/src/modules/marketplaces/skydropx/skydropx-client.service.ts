@@ -109,6 +109,11 @@ export class SkydropxClient {
     return JSON.parse(text) as T;
   }
 
+  /** Valida credenciales pidiendo un token (rapido: no cotiza nada). */
+  async validate(creds: { apiKey: string; apiSecret: string; mode: SkydropxMode }): Promise<void> {
+    await this.token(creds.apiKey, creds.apiSecret, creds.mode);
+  }
+
   /** Cotiza y ESPERA el resultado (poll hasta is_completed, max ~30s). */
   async quote(
     creds: { apiKey: string; apiSecret: string; mode: SkydropxMode },

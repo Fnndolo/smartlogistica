@@ -83,6 +83,12 @@ export function CoordinadoraConnectionCard({ warehouseId, warehouseName, initial
                 <span className="text-foreground">{connection.usuario}</span>
                 <span className="px-1.5 text-border">·</span>
                 Origen: {connection.senderCityName ?? connection.senderCityCode}
+                {connection.senderPostalCode ? (
+                  <>
+                    <span className="px-1.5 text-border">·</span>
+                    CP {connection.senderPostalCode}
+                  </>
+                ) : null}
                 <span className="px-1.5 text-border">·</span>
                 {connection.senderAddress}
               </p>
@@ -160,6 +166,7 @@ function CoordinadoraForm({
   const [senderNit, setSenderNit] = useState(connection?.senderNit ?? '');
   const [cityCode, setCityCode] = useState(connection?.senderCityCode ?? '');
   const [cityName, setCityName] = useState(connection?.senderCityName ?? '');
+  const [cp, setCp] = useState(connection?.senderPostalCode ?? '');
   const [rotuloId, setRotuloId] = useState(connection?.rotuloId ?? DEFAULT_ROTULO_ID);
 
   const [testing, setTesting] = useState(false);
@@ -214,6 +221,8 @@ function CoordinadoraForm({
         senderAddress: senderAddress.trim(),
         senderCityCode: cityCode.trim(),
         senderCityName: cityName.trim() || null,
+        // Vacio = el server lo deriva automaticamente de la ciudad elegida.
+        senderPostalCode: cp.trim() || null,
         rotuloId,
       });
       toast.success(editing ? 'Conexion actualizada' : 'Coordinadora conectada');
@@ -277,24 +286,36 @@ function CoordinadoraForm({
           <Field label="NIT remitente (opcional)">
             <Input value={senderNit} onChange={(e) => setSenderNit(e.target.value)} placeholder="Igual al NIT si se deja vacio" />
           </Field>
-          <div className="sm:col-span-2">
-            <Field label="Ciudad de origen">
-              <CityPicker
-                value={cityName || cityCode}
-                onPick={(c) => {
-                  setCityCode(c.code);
-                  setCityName(`${c.name} — ${c.department}`);
-                }}
-                search={searchCities}
-                queryKey={`origin-${warehouseId}`}
-                disabled={!credsReady}
+          <div className="grid gap-3 sm:col-span-2 sm:grid-cols-[1fr_11rem]">
+            <div>
+              <Field label="Ciudad de origen">
+                <CityPicker
+                  value={cityName || cityCode}
+                  onPick={(c) => {
+                    setCityCode(c.code);
+                    setCityName(`${c.name} — ${c.department}`);
+                  }}
+                  search={searchCities}
+                  queryKey={`origin-${warehouseId}`}
+                  disabled={!credsReady}
+                />
+              </Field>
+              {!credsReady ? (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  Completa las credenciales para buscar la ciudad.
+                </p>
+              ) : null}
+            </div>
+            {/* CP del remitente (Skydropx lo necesita). Vacio = lo deriva el server. */}
+            <Field label="Código postal">
+              <Input
+                value={cp}
+                onChange={(e) => setCp(e.target.value.replace(/\D/g, ''))}
+                inputMode="numeric"
+                maxLength={10}
+                placeholder="Automático según ciudad"
               />
             </Field>
-            {!credsReady ? (
-              <p className="mt-1 text-[11px] text-muted-foreground">
-                Completa las credenciales para buscar la ciudad.
-              </p>
-            ) : null}
           </div>
           <div className="sm:col-span-2">
             <Field label="Formato de rotulo (por defecto)">

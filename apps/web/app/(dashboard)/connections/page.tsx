@@ -4,6 +4,7 @@ import { Plus } from 'lucide-react';
 import type {
   AiConnectionSummary,
   Dialog360ConnectionSummary,
+  SkydropxConnectionSummary,
   VtexConnectionSummary,
 } from '@smartlogistica/shared';
 
@@ -13,6 +14,7 @@ import { serverFetchResult } from '@/lib/server-api';
 import { AiConnectionCard } from './ai-connection-card';
 import { ConnectionsList } from './connections-list';
 import { Dialog360ConnectionCard } from './dialog360-connection-card';
+import { SkydropxConnectionCard } from './skydropx-connection-card';
 
 export const metadata: Metadata = { title: 'Conexiones' };
 
@@ -37,11 +39,17 @@ async function initialDialog360(): Promise<Dialog360ConnectionSummary | null | u
   return res.ok ? res.data : undefined;
 }
 
+async function initialSkydropx(): Promise<SkydropxConnectionSummary | null | undefined> {
+  const res = await serverFetchResult<SkydropxConnectionSummary | null>('/v1/connections/skydropx');
+  return res.ok ? res.data : undefined;
+}
+
 export default async function ConnectionsPage() {
-  const [connections, aiConnection, dialog360] = await Promise.all([
+  const [connections, aiConnection, dialog360, skydropx] = await Promise.all([
     initialConnections(),
     initialAiConnection(),
     initialDialog360(),
+    initialSkydropx(),
   ]);
 
   return (
@@ -74,6 +82,7 @@ export default async function ConnectionsPage() {
         </h2>
         <AiConnectionCard initial={aiConnection} />
         <Dialog360ConnectionCard initial={dialog360} />
+        <SkydropxConnectionCard initial={skydropx} />
       </section>
     </div>
   );

@@ -45,16 +45,9 @@ export class SkydropxService {
   async connect(input: SkydropxCredentialsInput, auth: AuthContext): Promise<SkydropxConnectionSummary> {
     this.assertAdmin(auth);
     const { tenantId, prisma } = getTenantContext();
-    // Validar contra la API real ANTES de guardar (pide un token).
+    // Validar contra la API real ANTES de guardar (pide un token: rapido).
     try {
-      await this.client.quote(
-        { apiKey: input.apiKey, apiSecret: input.apiSecret, mode: input.mode },
-        {
-          from: { country_code: 'CO', postal_code: '050015', area_level1: 'Antioquia', area_level2: 'Medellín', area_level3: '' },
-          to: { country_code: 'CO', postal_code: '110111', area_level1: 'Bogotá', area_level2: 'Bogotá', area_level3: '' },
-          parcel: { length: 20, width: 20, height: 20, weight: 1, declared_amount: 100000 },
-        },
-      );
+      await this.client.validate({ apiKey: input.apiKey, apiSecret: input.apiSecret, mode: input.mode });
     } catch (err) {
       throw new BadRequestException(
         `Skydropx no acepto las credenciales: ${err instanceof Error ? err.message : 'error desconocido'}`,

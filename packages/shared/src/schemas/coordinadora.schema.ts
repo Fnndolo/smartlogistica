@@ -48,6 +48,9 @@ export const coordinadoraConnectSchema = z.object({
   senderAddress: z.string().trim().min(3, 'Direccion requerida').max(200),
   senderCityCode: z.string().trim().min(4, 'Ciudad de origen requerida').max(12),
   senderCityName: z.string().trim().max(120).nullable().optional(),
+  // CP del ORIGEN (lo usa Skydropx para cotizar). Vacio = el server lo deriva
+  // de la ciudad elegida (mapa de ciudades CO); siempre editable.
+  senderPostalCode: z.string().trim().max(10).nullable().optional(),
   rotuloId: z.coerce.number().int().min(1).max(999).default(DEFAULT_ROTULO_ID),
 });
 export type CoordinadoraConnectInput = z.infer<typeof coordinadoraConnectSchema>;
@@ -65,6 +68,7 @@ export const coordinadoraConnectionSummarySchema = z.object({
   senderAddress: z.string(),
   senderCityCode: z.string(),
   senderCityName: z.string().nullable(),
+  senderPostalCode: z.string().nullable(),
   rotuloId: z.number().int(),
   status: z.enum(['connected', 'error']),
   lastError: z.string().nullable(),

@@ -28,6 +28,40 @@ import {
   type RastreoResult,
 } from './coordinadora-client.service';
 
+/**
+ * CP base por ciudad (deriva el codigo postal del ORIGEN cuando no lo
+ * escriben — "si te da el codigo postal con la direccion, mejor"). Editable
+ * siempre; Medellin/Pasto usan los CP reales de las sedes del negocio.
+ */
+const CP_BY_CITY: Record<string, string> = {
+  medellin: '050015',
+  pasto: '520003',
+  bogota: '110111',
+  cali: '760001',
+  barranquilla: '080001',
+  cartagena: '130001',
+  bucaramanga: '680001',
+  pereira: '660001',
+  manizales: '170001',
+  cucuta: '540001',
+  ibague: '730001',
+  'santa marta': '470001',
+  villavicencio: '500001',
+  armenia: '630001',
+  neiva: '410001',
+  monteria: '230001',
+};
+
+function postalCodeByCity(cityName: string | null | undefined): string | null {
+  const key = (cityName ?? '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .replace(/\s*\(.*\)\s*/g, '')
+    .trim();
+  return CP_BY_CITY[key] ?? null;
+}
+
 interface ConnectionRow {
   warehouseId: string;
   idCliente: number;
@@ -135,6 +169,12 @@ export class CoordinadoraService {
       senderAddress: input.senderAddress,
       senderCityCode: input.senderCityCode,
       senderCityName: input.senderCityName ?? null,
+      // CP de origen: lo escrito > el guardado > derivado de la ciudad.
+      senderPostalCode:
+        input.senderPostalCode?.trim() ||
+        existing?.senderPostalCode ||
+        postalCodeByCity(input.senderCityName) ||
+        null,
       rotuloId: input.rotuloId,
       status: 'connected',
       lastError: null,
@@ -405,6 +445,7 @@ export class CoordinadoraService {
       senderAddress: row.senderAddress,
       senderCityCode: row.senderCityCode,
       senderCityName: row.senderCityName,
+      senderPostalCode: row.senderPostalCode ?? null,
       rotuloId: row.rotuloId,
       status: row.status === 'error' ? 'error' : 'connected',
       lastError: row.lastError,
