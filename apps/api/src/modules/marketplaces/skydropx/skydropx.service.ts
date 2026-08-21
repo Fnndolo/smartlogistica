@@ -182,6 +182,8 @@ export class SkydropxService {
   /** Crea el envio y extrae (con tolerancia de forma) id/rastreo/etiqueta. */
   async createShipment(input: {
     rateId: string;
+    quotationId?: string;
+    carrierName?: string;
     from: SkydropxAddress;
     to: SkydropxAddress;
     parcel: SkydropxParcel;
