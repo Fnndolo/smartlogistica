@@ -55,6 +55,14 @@ interface Pkg {
 /** Transportadora del panel: Coordinadora (directa) o Skydropx (agregador). */
 type Courier = 'coordinadora' | 'skydropx';
 
+/** Ciudad de destino en modo Skydropx: nombre limpio (sin el parentesis del
+ *  catalogo) + departamento COMPLETO tal cual ("Antioquia"). Sale del catalogo
+ *  de Coordinadora porque Skydropx no expone catalogo propio de ciudades. */
+interface SdxCity {
+  name: string;
+  department: string;
+}
+
 interface GuideDraft {
   recipient: Recipient;
   pkg: Pkg;
@@ -65,6 +73,10 @@ interface GuideDraft {
   // Modo Skydropx: transportadora elegida y CP destino (sobreviven al cerrar).
   courier?: Courier;
   postalCodeTo?: string;
+  // Modo Skydropx: ciudad de destino elegida del catalogo de Coordinadora
+  // (opcionales: los borradores viejos no los traen).
+  cityTo?: string;
+  departmentTo?: string;
 }
 
 export function GuidePanel({
@@ -92,6 +104,15 @@ export function GuidePanel({
   // === Skydropx ===
   const [courier, setCourier] = useState<Courier>(draft?.courier ?? 'coordinadora');
   const [postalCodeTo, setPostalCodeTo] = useState<string>(draft?.postalCodeTo ?? '');
+  // Ciudad de destino elegida del catalogo de Coordinadora (persiste en el
+  // borrador). Alimenta la PROXIMA cotizacion: el server la prefiere sobre la
+  // ciudad del pedido.
+  const [sdxCity, setSdxCity] = useState<SdxCity | null>(
+    draft?.cityTo ? { name: draft.cityTo, department: draft.departmentTo ?? '' } : null,
+  );
+  // Ciudad con la que salio la ULTIMA cotizacion: la guia debe llevar estos
+  // MISMOS valores (vive solo en memoria, igual que las tarifas).
+  const [quotedCity, setQuotedCity] = useState<SdxCity | null>(null);
   // La cotizacion vive solo en memoria: las tarifas caducan rapido y siempre
   // conviene re-cotizar al volver (el CP resuelto SI persiste en el borrador).
   const [quote, setQuote] = useState<SkydropxQuoteResponse | null>(null);
@@ -145,9 +166,11 @@ export function GuidePanel({
         codValue,
         courier,
         postalCodeTo,
+        // Ciudad elegida en modo Skydropx (sobrevive cierre del drawer).
+        ...(sdxCity ? { cityTo: sdxCity.name, departmentTo: sdxCity.department } : {}),
       });
     }
-  }, [recipient, pkg, rotuloId, codOn, codValue, courier, postalCodeTo, orderId]);
+  }, [recipient, pkg, rotuloId, codOn, codValue, courier, postalCodeTo, sdxCity, orderId]);
 
   const generate = useMutation({
     // Con clave: si cierran el drawer con la guia EN CURSO, al volver el boton
@@ -202,18 +225,28 @@ export function GuidePanel({
   });
 
   const quoteMutation = useMutation({
-    mutationFn: () =>
+    // La ciudad viaja como variable de la mutacion: en onSuccess se sabe con
+    // certeza cual se envio a cotizar (aunque el estado cambie mientras tanto).
+    mutationFn: (city: SdxCity | null) =>
       api.post<SkydropxQuoteResponse>(`/v1/orders/${orderId}/skydropx-quote`, {
         package: sdxPackage(),
         // Vacio = que el server lo resuelva con la direccion del pedido.
         ...(postalCodeTo.trim() ? { postalCodeTo: postalCodeTo.trim() } : {}),
+        // Ciudad elegida del catalogo: el server la prefiere sobre la del pedido.
+        ...(city ? { cityTo: city.name, departmentTo: city.department } : {}),
       }),
-    onSuccess: (q) => {
+    onSuccess: (q, city) => {
       setQuote(q);
       // La tarifa elegida pertenece a la cotizacion anterior -> se re-elige.
       setSelectedRateId(null);
       // CP resuelto por el server: se muestra para poder corregirlo.
       setPostalCodeTo(q.postalCodeTo);
+      // La ciudad elegida queda CONSUMIDA por esta cotizacion (la guia saldra
+      // con estos mismos valores y el picker muestra la ciudad resuelta); asi
+      // una eleccion vieja no pelea con ediciones posteriores del CP. Si el
+      // usuario eligio OTRA ciudad mientras cotizaba, esa nueva se respeta.
+      setQuotedCity(city);
+      setSdxCity((cur) => (cur === city ? null : cur));
     },
     onError: (err) =>
       toast.error(err instanceof ApiError ? err.message : 'No se pudo cotizar con Skydropx'),
@@ -230,7 +263,10 @@ export function GuidePanel({
         rateId: selectedRate!.id,
         carrier: selectedRate!.carrier,
         package: sdxPackage(),
+        // Puede ir vacio si hay ciudad (Skydropx acepta ciudad+depto sin CP).
         postalCodeTo: postalCodeTo.trim(),
+        // Los MISMOS valores de ciudad con los que salio la ultima cotizacion.
+        ...(quotedCity ? { cityTo: quotedCity.name, departmentTo: quotedCity.department } : {}),
         recipient: {
           name: recipient!.name.trim(),
           address: recipient!.address.trim(),
@@ -319,7 +355,8 @@ export function GuidePanel({
     recipient.name.trim().length >= 2 &&
     recipient.address.trim().length >= 3 &&
     recipient.phone.trim().length >= 5 &&
-    postalCodeTo.trim().length >= 4 &&
+    // CP *o* ciudad, no ambos: Skydropx acepta ciudad+departamento sin CP.
+    (postalCodeTo.trim().length >= 4 || quotedCity !== null) &&
     Number(pkg.weight) > 0;
 
   const patchR = (p: Partial<Recipient>) => setRecipient((r) => (r ? { ...r, ...p } : r));
@@ -370,33 +407,64 @@ export function GuidePanel({
           <Field label="Nombre">
             <Input value={recipient.name} onChange={(e) => patchR({ name: e.target.value })} />
           </Field>
-          {sdx ? (
-            <Field label="Telefono">
-              <Input value={recipient.phone} onChange={(e) => patchR({ phone: e.target.value })} />
-            </Field>
-          ) : (
-            <Field label="Documento (cedula/NIT)">
-              <Input value={recipient.document} onChange={(e) => patchR({ document: e.target.value })} />
-            </Field>
-          )}
+          {/* Documento en AMBOS modos (mismo estado). En Skydropx es solo
+              informativo/registro: NO viaja en el payload de Skydropx. */}
+          <Field label="Documento (cedula/NIT)">
+            <Input value={recipient.document} onChange={(e) => patchR({ document: e.target.value })} />
+          </Field>
           <div className="sm:col-span-2">
             <Field label="Direccion">
               <Input value={recipient.address} onChange={(e) => patchR({ address: e.target.value })} />
             </Field>
           </div>
           {sdx ? (
-            // Skydropx enruta por CP, no por codigo DANE. Vacio: el server lo
-            // resuelve con la ciudad del pedido y aqui queda prellenado.
-            <Field label="Codigo postal destino">
-              <Input
-                inputMode="numeric"
-                placeholder="Ej: 110111"
-                maxLength={10}
-                className="w-32 tabular-nums"
-                value={postalCodeTo}
-                onChange={(e) => setPostalCodeTo(e.target.value.replace(/\D/g, ''))}
-              />
-            </Field>
+            <>
+              {/* Skydropx no tiene catalogo de ciudades (verificado por probe):
+                  se reusa el de Coordinadora. Al cotizar, el server prefiere
+                  esta ciudad sobre la del pedido. */}
+              <Field label="Ciudad de destino">
+                <CityPicker
+                  value={
+                    sdxCity
+                      ? `${sdxCity.name} — ${sdxCity.department}`
+                      : quotedCity
+                        ? `${quotedCity.name} — ${quotedCity.department}`
+                        : (quote?.cityTo ?? '')
+                  }
+                  onPick={(c: CoordinadoraCity) => {
+                    // El catalogo trae "PASTO (NAR)": fuera el parentesis; el
+                    // departamento va completo tal cual ("Nariño").
+                    setSdxCity({
+                      name: c.name.replace(/\s*\(.*?\)\s*/g, '').trim(),
+                      department: c.department,
+                    });
+                    // Las tarifas cotizadas son de otro destino -> re-cotizar.
+                    setSelectedRateId(null);
+                  }}
+                  search={(q) =>
+                    api.get<CoordinadoraCity[]>(
+                      `/v1/orders/${orderId}/guide-cities?q=${encodeURIComponent(q)}`,
+                    )
+                  }
+                  queryKey={`dest-${orderId}`}
+                />
+              </Field>
+              {/* Skydropx enruta por CP, no por codigo DANE. Vacio: el server
+                  lo resuelve (o la guia sale con ciudad+departamento sin CP). */}
+              <Field label="Codigo postal destino">
+                <Input
+                  inputMode="numeric"
+                  placeholder="Ej: 110111"
+                  maxLength={10}
+                  className="w-32 tabular-nums"
+                  value={postalCodeTo}
+                  onChange={(e) => setPostalCodeTo(e.target.value.replace(/\D/g, ''))}
+                />
+              </Field>
+              <Field label="Telefono">
+                <Input value={recipient.phone} onChange={(e) => patchR({ phone: e.target.value })} />
+              </Field>
+            </>
           ) : (
             <>
               <Field label="Ciudad de destino">
@@ -421,7 +489,8 @@ export function GuidePanel({
         </div>
         {sdx ? (
           <p className="text-[11px] text-muted-foreground">
-            Si no conoces el código postal, cotiza: el sistema intenta resolverlo con la ciudad del pedido.
+            Si no conoces el código postal, elige la ciudad y cotiza: el sistema lo resuelve, y la guía
+            puede salir con ciudad + departamento sin CP.
           </p>
         ) : !recipient.cityCode ? (
           <p className="text-[11px] text-amber-600 dark:text-amber-400">
@@ -528,7 +597,7 @@ export function GuidePanel({
           <SectionTitle>Tarifas</SectionTitle>
           <Button
             variant="outline"
-            onClick={() => quoteMutation.mutate()}
+            onClick={() => quoteMutation.mutate(sdxCity)}
             loading={quoteMutation.isPending}
             disabled={!canQuote || quoteMutation.isPending}
           >

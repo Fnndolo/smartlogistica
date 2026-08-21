@@ -2133,13 +2133,30 @@ export class OrdersService {
     cali: 'Valle del Cauca',
   };
 
-  private deptOf(cityName: string | null): string {
-    const key = (cityName ?? '')
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/\p{Diacritic}/gu, '')
-      .trim();
-    return OrdersService.DEPT_BY_CITY[key] ?? '';
+  /**
+   * Parte el nombre de sede formato Coordinadora: "MEDELLIN (ANT) — Antioquia"
+   * -> { city: 'MEDELLIN', dept: 'Antioquia' }. Con respaldo del mapa por
+   * ciudad (contiene, no igualdad) — un departamento VACIO es 4xx en Skydropx.
+   */
+  private parseCityDept(cityName: string | null): { city: string; dept: string } {
+    const raw = (cityName ?? '').trim();
+    const [cityPart, deptPart] = raw.split('—');
+    const city = (cityPart ?? '').replace(/\(.*?\)/g, '').trim() || raw;
+    let dept = (deptPart ?? '').trim();
+    if (!dept) {
+      const norm = city
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/\p{Diacritic}/gu, '')
+        .trim();
+      for (const [key, d] of Object.entries(OrdersService.DEPT_BY_CITY)) {
+        if (norm.includes(key)) {
+          dept = d;
+          break;
+        }
+      }
+    }
+    return { city, dept: dept || city };
   }
 
   /** Cotiza el envio del pedido en TODAS las transportadoras de Skydropx. */
@@ -2161,22 +2178,27 @@ export class OrdersService {
     }
     const client = extractInvoiceClient(order);
     const cpTo = (input.postalCodeTo ?? client.address?.zipCode ?? '').trim();
-    if (!cpTo) {
-      throw new BadRequestException('El pedido no trae código postal de destino: escríbelo para cotizar.');
+    const cityTo = (input.cityTo ?? client.address?.city ?? '').trim();
+    const deptTo = (input.departmentTo ?? client.address?.department ?? '').trim() || cityTo;
+    if (!cpTo && !cityTo) {
+      throw new BadRequestException(
+        'El pedido no trae código postal ni ciudad de destino: completa al menos uno para cotizar.',
+      );
     }
+    const senderCity = this.parseCityDept(sender.cityName);
     const { quotationId, rates } = await this.skydropx.quote({
       from: {
         country_code: 'CO',
         postal_code: cpFrom,
-        area_level1: this.deptOf(sender.cityName),
-        area_level2: sender.cityName ?? '',
+        area_level1: senderCity.dept,
+        area_level2: senderCity.city,
         area_level3: '',
       },
       to: {
         country_code: 'CO',
         postal_code: cpTo,
-        area_level1: client.address?.department ?? '',
-        area_level2: client.address?.city ?? '',
+        area_level1: deptTo,
+        area_level2: cityTo,
         area_level3: '',
       },
       parcel: {
@@ -2187,7 +2209,7 @@ export class OrdersService {
         declared_amount: input.package.declaredValue,
       },
     });
-    return { quotationId, postalCodeTo: cpTo, rates };
+    return { quotationId, postalCodeTo: cpTo, cityTo, rates };
   }
 
   /** Genera la guia por SKYDROPX con la tarifa elegida (mismo pipeline). */
@@ -2227,14 +2249,15 @@ export class OrdersService {
       throw new BadRequestException('La sede no tiene código postal de origen configurado.');
     }
     const client = extractInvoiceClient(order);
+    const senderCity = this.parseCityDept(sender.cityName);
 
     const ship = await this.skydropx.createShipment({
       rateId: input.rateId,
       from: {
         country_code: 'CO',
         postal_code: cpFrom,
-        area_level1: this.deptOf(sender.cityName),
-        area_level2: sender.cityName ?? '',
+        area_level1: senderCity.dept,
+        area_level2: senderCity.city,
         area_level3: '',
         street1: sender.address,
         name: sender.name,
@@ -2244,8 +2267,10 @@ export class OrdersService {
       to: {
         country_code: 'CO',
         postal_code: input.postalCodeTo,
-        area_level1: client.address?.department ?? '',
-        area_level2: client.address?.city ?? '',
+        area_level1:
+          (input.departmentTo ?? client.address?.department ?? '').trim() ||
+          (input.cityTo ?? client.address?.city ?? '').trim(),
+        area_level2: (input.cityTo ?? client.address?.city ?? '').trim(),
         area_level3: '',
         street1: input.recipient.address,
         name: input.recipient.name,

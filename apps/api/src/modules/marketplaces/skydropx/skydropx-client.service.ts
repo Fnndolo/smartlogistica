@@ -104,7 +104,10 @@ export class SkydropxClient {
     });
     const text = await res.text();
     if (!res.ok) {
-      throw new Error(`Skydropx ${method} ${path} HTTP ${res.status}: ${text.slice(0, 400)}`);
+      // El cuerpo ENVIADO va en el error: los 400 genericos de Skydropx no
+      // dicen que estuvo mal — asi el propio toast/log lo delata.
+      const sent = body !== undefined ? ` | enviado: ${JSON.stringify(body).slice(0, 260)}` : '';
+      throw new Error(`Skydropx ${method} ${path} HTTP ${res.status}: ${text.slice(0, 300)}${sent}`);
     }
     return JSON.parse(text) as T;
   }

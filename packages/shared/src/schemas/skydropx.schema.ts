@@ -46,8 +46,9 @@ export type SkydropxRate = z.infer<typeof skydropxRateSchema>;
 
 export const skydropxQuoteResponseSchema = z.object({
   quotationId: z.string(),
-  /** CP de destino RESUELTO (del pedido o del override del panel). */
+  /** CP y ciudad de destino RESUELTOS (del pedido o del override del panel). */
   postalCodeTo: z.string(),
+  cityTo: z.string().default(''),
   rates: z.array(skydropxRateSchema),
 });
 export type SkydropxQuoteResponse = z.infer<typeof skydropxQuoteResponseSchema>;
@@ -63,6 +64,10 @@ export const skydropxQuoteInputSchema = z.object({
   }),
   /** Override del CP destino (si el pedido no trae o esta malo). */
   postalCodeTo: z.string().trim().min(4).max(10).optional(),
+  /** Override de ciudad/departamento destino (catalogo de Coordinadora como
+   *  respaldo: Skydropx no expone catalogo propio de ciudades). */
+  cityTo: z.string().trim().max(120).optional(),
+  departmentTo: z.string().trim().max(120).optional(),
 });
 export type SkydropxQuoteInput = z.infer<typeof skydropxQuoteInputSchema>;
 
@@ -72,7 +77,10 @@ export const createSkydropxGuideSchema = z.object({
   /** La transportadora elegida (para el registro; el server re-verifica). */
   carrier: z.string().min(2).max(60),
   package: skydropxQuoteInputSchema.shape.package,
-  postalCodeTo: z.string().trim().min(4).max(10),
+  /** Puede ir vacio si hay ciudad (Skydropx acepta ciudad+depto sin CP). */
+  postalCodeTo: z.string().trim().max(10).default(''),
+  cityTo: z.string().trim().max(120).optional(),
+  departmentTo: z.string().trim().max(120).optional(),
   recipient: z.object({
     name: z.string().trim().min(2).max(120),
     address: z.string().trim().min(3).max(200),
