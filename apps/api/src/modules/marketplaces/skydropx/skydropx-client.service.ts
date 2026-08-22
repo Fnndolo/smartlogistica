@@ -66,8 +66,16 @@ export class SkydropxClient {
   /** Token OAuth cacheado por credencial (expira 2h; renovamos a los 100min). */
   private readonly tokenCache = new Map<string, { token: string; at: number }>();
 
+  /**
+   * OJO — los DOS ambientes hablan contratos DISTINTOS (verificado contra el
+   * OpenAPI oficial api-pro.skydropx.com/api-docs.json y por probes):
+   * - sandbox (sb-pro): API v1 "interna" — wrapper {quotation}, parcel objeto,
+   *   declared_amount. Es la que responde 201 alla.
+   * - produccion (api-pro): API v2 oficial — SIN wrapper, parcels[] con
+   *   declared_value, area_level3 obligatorio.
+   */
   baseUrl(mode: SkydropxMode): string {
-    return mode === 'production' ? 'https://pro.skydropx.com' : 'https://sb-pro.skydropx.com';
+    return mode === 'production' ? 'https://api-pro.skydropx.com' : 'https://sb-pro.skydropx.com';
   }
 
   private async token(apiKey: string, apiSecret: string, mode: SkydropxMode): Promise<string> {
@@ -121,23 +129,54 @@ export class SkydropxClient {
     await this.token(creds.apiKey, creds.apiSecret, creds.mode);
   }
 
+  /** Desenvuelve la forma JSON:API (data.attributes) si viene asi. */
+  private unwrapQuotation(raw: unknown): SkydropxQuotation {
+    const o = (raw ?? {}) as Record<string, unknown>;
+    const data = (o.data ?? o) as Record<string, unknown>;
+    const attrs = ((data.attributes as Record<string, unknown> | undefined) ?? data) as Record<string, unknown>;
+    return {
+      id: String(data.id ?? o.id ?? attrs.id ?? ''),
+      is_completed: Boolean(attrs.is_completed ?? o.is_completed),
+      rates: (attrs.rates ?? o.rates ?? []) as SkydropxQuotation['rates'],
+    };
+  }
+
   /** Cotiza y ESPERA el resultado (poll hasta is_completed, max ~30s). */
   async quote(
     creds: { apiKey: string; apiSecret: string; mode: SkydropxMode },
     input: { from: SkydropxAddress; to: SkydropxAddress; parcel: SkydropxParcel },
   ): Promise<SkydropxQuotation> {
-    const created = await this.call<SkydropxQuotation>(creds, 'POST', '/api/v1/quotations', {
-      quotation: {
-        address_from: input.from,
-        address_to: input.to,
-        parcel: input.parcel,
-        declared_amount: input.parcel.declared_amount,
-      },
-    });
+    const prod = creds.mode === 'production';
+    const path = prod ? '/api/v2/quotations' : '/api/v1/quotations';
+    // area_level3 (barrio) es OBLIGATORIO en el contrato v2 — 'Centro' de respaldo.
+    const lvl3 = (a: SkydropxAddress) => ({ ...a, area_level3: a.area_level3?.trim() || 'Centro' });
+    const body = prod
+      ? {
+          address_from: lvl3(input.from),
+          address_to: lvl3(input.to),
+          parcels: [
+            {
+              length: input.parcel.length,
+              width: input.parcel.width,
+              height: input.parcel.height,
+              weight: input.parcel.weight,
+              declared_value: input.parcel.declared_amount,
+            },
+          ],
+        }
+      : {
+          quotation: {
+            address_from: input.from,
+            address_to: input.to,
+            parcel: input.parcel,
+            declared_amount: input.parcel.declared_amount,
+          },
+        };
+    const created = this.unwrapQuotation(await this.call<unknown>(creds, 'POST', path, body));
     if (created.is_completed) return created;
     for (let i = 0; i < 12; i++) {
       await new Promise((r) => setTimeout(r, 2500));
-      const poll = await this.call<SkydropxQuotation>(creds, 'GET', `/api/v1/quotations/${created.id}`);
+      const poll = this.unwrapQuotation(await this.call<unknown>(creds, 'GET', `${path}/${created.id}`));
       if (poll.is_completed) return poll;
     }
     this.logger.warn(`Cotizacion Skydropx ${created.id} no completo a tiempo; se devuelve parcial`);
@@ -161,11 +200,21 @@ export class SkydropxClient {
       packageContent: string;
     },
   ): Promise<Record<string, unknown>> {
+    if (creds.mode === 'production') {
+      // Contrato v2 OFICIAL: las direcciones ya viven en la cotizacion de la
+      // rate elegida; unique_shipment evita duplicados en reintentos.
+      return this.call<Record<string, unknown>>(creds, 'POST', '/api/v2/shipments', {
+        shipment: {
+          rate_id: input.rateId,
+          ...(input.quotationId ? { quotation_id: input.quotationId } : {}),
+          unique_shipment: true,
+          printing_format: 'thermal',
+        },
+      });
+    }
     return this.call<Record<string, unknown>>(creds, 'POST', '/api/v1/shipments', {
       shipment: {
         rate_id: input.rateId,
-        // La doc oficial (pro.skydropx.com/api-docs) exige ademas el id de la
-        // cotizacion y el slug de la transportadora de la tarifa elegida.
         ...(input.quotationId ? { quotation_id: input.quotationId } : {}),
         ...(input.carrierName ? { carrier_name: input.carrierName } : {}),
         address_from: input.from,
