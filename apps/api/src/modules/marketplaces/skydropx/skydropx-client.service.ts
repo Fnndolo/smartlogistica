@@ -186,13 +186,23 @@ export class SkydropxClient {
       packageContent: string;
     },
   ): Promise<Record<string, unknown>> {
+    // El envio EXIGE reference no vacio en ambas direcciones (verificado 422).
+    const withRef = (a: SkydropxAddress): SkydropxAddress => ({
+      ...a,
+      reference: a.reference?.trim() || a.area_level3?.trim() || a.area_level2 || 'N/A',
+    });
     return this.call<Record<string, unknown>>(creds, 'POST', '/api/v1/shipments', {
       shipment: {
         rate_id: input.rateId,
         ...(input.quotationId ? { quotation_id: input.quotationId } : {}),
         ...(input.carrierName ? { carrier_name: input.carrierName } : {}),
-        address_from: input.from,
-        address_to: input.to,
+        // Solo SANDBOX: simula la progresion del tracking (created ->
+        // picked_up -> in_transit -> delivered, un estado por minuto) — para
+        // probar la pastilla de la bandeja y el toque 3 del respaldo.
+        ...(creds.mode === 'sandbox' ? { auto_advance: true } : {}),
+        printing_format: 'thermal',
+        address_from: withRef(input.from),
+        address_to: withRef(input.to),
         parcel: { ...input.parcel, package_type: 'box', package_content: input.packageContent },
         parcels: [{ ...input.parcel, package_type: 'box', package_content: input.packageContent }],
         package_type: 'box',
