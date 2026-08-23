@@ -860,8 +860,9 @@ const CARRIER_BRAND_COLORS: Record<string, string> = {
   '99minutes': '#7c3aed',
 };
 
-/** Transportadoras con logo real en /public/carriers/<code>.webp (chip
- *  blanco); las demas caen a la inicial con color de marca. */
+/** Transportadoras con logo real en /public/carriers/<code>.webp (cuadrado
+ *  256x256 con el fondo PROPIO del logo horneado: cubre el 100% del chip);
+ *  las demas caen a la inicial con color de marca. */
 const CARRIER_LOGOS = new Set(['coordinadora', 'servientrega', 'interrapidisimo', 'envia']);
 
 /** Chip de transportadora: logo real si lo hay, inicial de color si no. */
@@ -869,15 +870,9 @@ function CarrierChip({ code, name, size = 'h-10 w-10' }: { code: string; name: s
   const slug = code.trim().toLowerCase();
   if (CARRIER_LOGOS.has(slug)) {
     return (
-      <span
-        className={cn(
-          'flex shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border/60 bg-white',
-          size,
-        )}
-        aria-hidden
-      >
+      <span className={cn('block shrink-0 overflow-hidden rounded-lg', size)} aria-hidden>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={`/carriers/${slug}.webp`} alt="" className="h-full w-full object-contain p-0.5" />
+        <img src={`/carriers/${slug}.webp`} alt="" className="h-full w-full object-cover" />
       </span>
     );
   }
