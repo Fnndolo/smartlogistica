@@ -21,8 +21,8 @@ import {
   type GuidePreview,
   type GuideTracking,
   type SkydropxPackaging,
-  type PackagePreset,
   type SkydropxCity,
+  type SkydropxPackagePreset,
   type SkydropxQuoteResponse,
   type SkydropxRate,
 } from '@smartlogistica/shared';
@@ -168,10 +168,10 @@ export function GuidePanel({
 
   // Paquetes guardados PROPIOS del modo Skydropx (los gestiona /settings; los
   // "Mis paquetes" del panel de Skydropx no los expone su API). Elegir uno
-  // llena medidas y peso, igual que los presets de Coordinadora en su modo.
+  // llena medidas, peso y, si el preset los trae, contenido y embalaje.
   const { data: sdxPresets = [] } = useQuery({
     queryKey: ['skydropx-package-presets'],
-    queryFn: () => api.get<PackagePreset[]>('/v1/skydropx/package-presets'),
+    queryFn: () => api.get<SkydropxPackagePreset[]>('/v1/skydropx/package-presets'),
     staleTime: 60_000,
     retry: false,
     enabled: courier === 'skydropx',
@@ -580,7 +580,8 @@ export function GuidePanel({
         {sdx && sdxPresets.length > 0 ? (
           <Field label="Paquete guardado (Skydropx)">
             {/* Los paquetes PROPIOS del modo Skydropx (se gestionan en Ajustes >
-                Paquetes Skydropx): elegirlo llena peso y medidas de un clic. */}
+                Paquetes Skydropx): elegirlo llena medidas, peso y — si el
+                preset los trae del panel de Skydropx — contenido y embalaje. */}
             <select
               defaultValue=""
               onChange={(e) => {
@@ -591,7 +592,9 @@ export function GuidePanel({
                     height: String(p.height),
                     width: String(p.width),
                     length: String(p.length),
+                    ...(p.content ? { content: p.content } : {}),
                   });
+                  if (p.packagingCode) setPackagingCode(p.packagingCode);
                 }
               }}
               className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"

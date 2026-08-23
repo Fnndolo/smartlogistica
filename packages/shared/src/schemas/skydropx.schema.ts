@@ -1,10 +1,26 @@
 import { z } from 'zod';
 
+import { packagePresetSchema } from './coordinadora.schema';
+
 /**
  * SKYDROPX: agregador multi-transportadora (segunda opcion de guia; la
  * predeterminada sigue siendo Coordinadora). Cotiza TODAS las transportadoras
  * y crea la guia sobre la tarifa elegida.
  */
+
+/**
+ * Paquete guardado PROPIO del modo Skydropx (espejo de los "Mis paquetes"
+ * del panel, que su API no expone). Ademas de medidas y peso, replica el
+ * embalaje (codigo del catalogo, ej. '5H4') y el contenido: elegirlo llena
+ * TODO el bloque Paquete de un clic.
+ */
+export const skydropxPackagePresetSchema = packagePresetSchema.extend({
+  content: z.string().trim().max(60).optional(),
+  packagingCode: z.string().trim().max(10).optional(),
+});
+export type SkydropxPackagePreset = z.infer<typeof skydropxPackagePresetSchema>;
+
+export const saveSkydropxPackagePresetsSchema = z.array(skydropxPackagePresetSchema).max(30);
 
 export const skydropxModeSchema = z.enum(['sandbox', 'production']);
 export type SkydropxMode = z.infer<typeof skydropxModeSchema>;

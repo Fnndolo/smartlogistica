@@ -1,18 +1,18 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
-import type {
-  PackagePreset,
-  SkydropxAddressTemplate as SkydropxAddressTemplateDto,
-  SkydropxConnectionSummary,
-  SkydropxCredentialsInput,
-  SkydropxRate as SkydropxRateDto,
-  SkydropxSedeConfig as SkydropxSedeConfigDto,
+import {
+  saveSkydropxPackagePresetsSchema,
+  type SkydropxAddressTemplate as SkydropxAddressTemplateDto,
+  type SkydropxConnectionSummary,
+  type SkydropxCredentialsInput,
+  type SkydropxPackagePreset,
+  type SkydropxRate as SkydropxRateDto,
+  type SkydropxSedeConfig as SkydropxSedeConfigDto,
 } from '@smartlogistica/shared';
 import type { Prisma } from '.prisma/tenant-client';
 
 import type { AuthContext } from '../../../common/types/authenticated-request';
 import { EnvelopeService } from '../../../infrastructure/crypto/envelope.service';
 import { getTenantContext } from '../../../infrastructure/tenant-context';
-import { parsePackagePresets } from '../../warehouses/warehouses.service';
 import {
   SkydropxClient,
   type SkydropxAddress,
@@ -209,14 +209,19 @@ export class SkydropxService {
   // El panel de Skydropx tiene "Mis paquetes" pero su API NO los expone
   // (probado endpoint por endpoint): se gestionan aca, GLOBALES, aparte de
   // los paquetes de guia de Coordinadora. AppSetting 'skydropxPackagePresets'.
+  // A diferencia de los de Coordinadora, tambien replican embalaje+contenido.
 
-  async packagePresets(): Promise<PackagePreset[]> {
+  async packagePresets(): Promise<SkydropxPackagePreset[]> {
     const { prisma } = getTenantContext();
     const row = await prisma.appSetting.findUnique({ where: { key: 'skydropxPackagePresets' } });
-    return parsePackagePresets(row?.value);
+    const parsed = saveSkydropxPackagePresetsSchema.safeParse(row?.value ?? []);
+    return parsed.success ? parsed.data : [];
   }
 
-  async savePackagePresets(presets: PackagePreset[], auth: AuthContext): Promise<PackagePreset[]> {
+  async savePackagePresets(
+    presets: SkydropxPackagePreset[],
+    auth: AuthContext,
+  ): Promise<SkydropxPackagePreset[]> {
     this.assertAdmin(auth);
     const { prisma } = getTenantContext();
     await prisma.appSetting.upsert({

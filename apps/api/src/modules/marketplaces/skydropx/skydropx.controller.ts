@@ -1,14 +1,14 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query } from '@nestjs/common';
 import {
-  savePackagePresetsSchema,
+  saveSkydropxPackagePresetsSchema,
   setSkydropxSedeConfigSchema,
   skydropxCredentialsSchema,
-  type PackagePreset,
   type SetSkydropxSedeConfigInput,
   type SkydropxAddressTemplate,
   type SkydropxCity,
   type SkydropxConnectionSummary,
   type SkydropxCredentialsInput,
+  type SkydropxPackagePreset,
   type SkydropxPackaging,
   type SkydropxSedeConfig,
 } from '@smartlogistica/shared';
@@ -76,15 +76,15 @@ export class SkydropxResourcesController {
    *  panel de Skydropx no los expone su API): globales, aparte de los de
    *  Coordinadora. */
   @Get('package-presets')
-  async packagePresets(): Promise<PackagePreset[]> {
+  async packagePresets(): Promise<SkydropxPackagePreset[]> {
     return this.skydropx.packagePresets();
   }
 
   @Put('package-presets')
   async savePackagePresets(
-    @Body(new ZodValidationPipe(savePackagePresetsSchema)) body: PackagePreset[],
+    @Body(new ZodValidationPipe(saveSkydropxPackagePresetsSchema)) body: SkydropxPackagePreset[],
     @CurrentUser() user: AuthContext,
-  ): Promise<PackagePreset[]> {
+  ): Promise<SkydropxPackagePreset[]> {
     return this.skydropx.savePackagePresets(body, user);
   }
 

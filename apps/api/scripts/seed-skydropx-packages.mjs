@@ -23,6 +23,8 @@ const list = Array.isArray(raw) ? raw : (raw.data ?? raw.package_templates ?? ra
 const presets = list
   .map((it) => {
     const a = it.attributes ?? it;
+    const content = String(a.content ?? a.package_content ?? a.contenido ?? '').trim().slice(0, 60);
+    const packagingCode = String(a.packagingCode ?? a.package_type ?? '').trim().slice(0, 10);
     return {
       name: String(a.name ?? a.alias ?? a.nickname ?? '').trim().slice(0, 60),
       length: num(a.length ?? a.largo ?? a.depth),
@@ -30,6 +32,8 @@ const presets = list
       height: num(a.height ?? a.alto),
       // El panel a veces guarda paquetes sin peso: 1 kg de respaldo.
       weight: num(a.weight ?? a.peso) ?? 1,
+      ...(content ? { content } : {}),
+      ...(packagingCode ? { packagingCode } : {}),
     };
   })
   .filter((p) => p.name && p.length && p.width && p.height);

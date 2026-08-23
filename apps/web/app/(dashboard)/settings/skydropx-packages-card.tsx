@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Boxes, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
-import type { PackagePreset } from '@smartlogistica/shared';
+import type { SkydropxPackagePreset } from '@smartlogistica/shared';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -16,17 +16,23 @@ interface Row {
   height: string;
   width: string;
   length: string;
+  content: string;
+  // Codigo de embalaje del catalogo de Skydropx (ej. '5H4'). Viene del panel
+  // de Skydropx via seed; aca solo se CONSERVA (se cambia en la guia).
+  packagingCode?: string;
 }
 
-const toRow = (p: PackagePreset): Row => ({
+const toRow = (p: SkydropxPackagePreset): Row => ({
   name: p.name,
   weight: String(p.weight),
   height: String(p.height),
   width: String(p.width),
   length: String(p.length),
+  content: p.content ?? '',
+  packagingCode: p.packagingCode,
 });
 
-const EMPTY_ROW: Row = { name: '', weight: '', height: '', width: '', length: '' };
+const EMPTY_ROW: Row = { name: '', weight: '', height: '', width: '', length: '', content: '' };
 
 /**
  * Paquetes guardados PROPIOS del modo Skydropx — GLOBALES. Equivalen a los
@@ -36,7 +42,7 @@ const EMPTY_ROW: Row = { name: '', weight: '', height: '', width: '', length: ''
  * suyo"). initial null = la lectura SSR fallo: no se permite guardar (el PUT
  * es reemplazo total y pisaria lo configurado).
  */
-export function SkydropxPackagesCard({ initial }: { initial: PackagePreset[] | null }) {
+export function SkydropxPackagesCard({ initial }: { initial: SkydropxPackagePreset[] | null }) {
   const [rows, setRows] = useState<Row[]>((initial ?? []).map(toRow));
   const [dirty, setDirty] = useState(false);
 
@@ -64,7 +70,7 @@ export function SkydropxPackagesCard({ initial }: { initial: PackagePreset[] | n
 
   const save = useMutation({
     mutationFn: () =>
-      api.put<PackagePreset[]>(
+      api.put<SkydropxPackagePreset[]>(
         `/v1/skydropx/package-presets`,
         rows.map((r) => ({
           name: r.name.trim(),
@@ -72,6 +78,8 @@ export function SkydropxPackagesCard({ initial }: { initial: PackagePreset[] | n
           height: Number(r.height),
           width: Number(r.width),
           length: Number(r.length),
+          ...(r.content.trim() ? { content: r.content.trim() } : {}),
+          ...(r.packagingCode ? { packagingCode: r.packagingCode } : {}),
         })),
       ),
     onSuccess: () => {
@@ -121,52 +129,61 @@ export function SkydropxPackagesCard({ initial }: { initial: PackagePreset[] | n
             )}
 
             {rows.map((r, i) => (
-              <div
-                key={i}
-                className="grid grid-cols-2 gap-2 rounded-lg border border-border p-2 sm:grid-cols-[minmax(0,1fr)_4.5rem_4.5rem_4.5rem_4.5rem_2rem] sm:border-0 sm:p-0"
-              >
+              <div key={i} className="space-y-2 rounded-lg border border-border p-2 sm:border-0 sm:p-0">
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-[minmax(0,1fr)_4.5rem_4.5rem_4.5rem_4.5rem_2rem]">
+                  <Input
+                    value={r.name}
+                    placeholder="Nombre (ej. TECNOLOGIA)"
+                    onChange={(e) => patch(i, { name: e.target.value })}
+                    className="col-span-2 sm:col-span-1"
+                  />
+                  <Input
+                    inputMode="decimal"
+                    value={r.height}
+                    placeholder="Alto"
+                    aria-label="Alto (cm)"
+                    onChange={(e) => patch(i, { height: e.target.value.replace(/[^\d.]/g, '') })}
+                  />
+                  <Input
+                    inputMode="decimal"
+                    value={r.width}
+                    placeholder="Ancho"
+                    aria-label="Ancho (cm)"
+                    onChange={(e) => patch(i, { width: e.target.value.replace(/[^\d.]/g, '') })}
+                  />
+                  <Input
+                    inputMode="decimal"
+                    value={r.length}
+                    placeholder="Largo"
+                    aria-label="Largo (cm)"
+                    onChange={(e) => patch(i, { length: e.target.value.replace(/[^\d.]/g, '') })}
+                  />
+                  <Input
+                    inputMode="decimal"
+                    value={r.weight}
+                    placeholder="Peso"
+                    aria-label="Peso (kg)"
+                    onChange={(e) => patch(i, { weight: e.target.value.replace(/[^\d.]/g, '') })}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => remove(i)}
+                    className="flex h-9 w-8 items-center justify-center justify-self-end rounded-md text-muted-foreground hover:bg-muted hover:text-destructive"
+                    aria-label={`Eliminar ${r.name || 'paquete'}`}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+                {/* Contenido (opcional): al elegir el paquete en la guia, llena
+                    tambien el campo Contenido. El embalaje del panel de
+                    Skydropx (si vino en la importacion) se conserva solo. */}
                 <Input
-                  value={r.name}
-                  placeholder="Nombre (ej. TECNOLOGIA)"
-                  onChange={(e) => patch(i, { name: e.target.value })}
-                  className="col-span-2 sm:col-span-1"
+                  value={r.content}
+                  placeholder="Contenido (opcional, ej. Celular nuevo)"
+                  aria-label="Contenido del paquete"
+                  onChange={(e) => patch(i, { content: e.target.value })}
+                  className="sm:mr-10"
                 />
-                <Input
-                  inputMode="decimal"
-                  value={r.height}
-                  placeholder="Alto"
-                  aria-label="Alto (cm)"
-                  onChange={(e) => patch(i, { height: e.target.value.replace(/[^\d.]/g, '') })}
-                />
-                <Input
-                  inputMode="decimal"
-                  value={r.width}
-                  placeholder="Ancho"
-                  aria-label="Ancho (cm)"
-                  onChange={(e) => patch(i, { width: e.target.value.replace(/[^\d.]/g, '') })}
-                />
-                <Input
-                  inputMode="decimal"
-                  value={r.length}
-                  placeholder="Largo"
-                  aria-label="Largo (cm)"
-                  onChange={(e) => patch(i, { length: e.target.value.replace(/[^\d.]/g, '') })}
-                />
-                <Input
-                  inputMode="decimal"
-                  value={r.weight}
-                  placeholder="Peso"
-                  aria-label="Peso (kg)"
-                  onChange={(e) => patch(i, { weight: e.target.value.replace(/[^\d.]/g, '') })}
-                />
-                <button
-                  type="button"
-                  onClick={() => remove(i)}
-                  className="flex h-9 w-8 items-center justify-center justify-self-end rounded-md text-muted-foreground hover:bg-muted hover:text-destructive"
-                  aria-label={`Eliminar ${r.name || 'paquete'}`}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
               </div>
             ))}
           </div>
