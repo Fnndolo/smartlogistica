@@ -141,37 +141,23 @@ export class SkydropxClient {
     };
   }
 
-  /** Cotiza y ESPERA el resultado (poll hasta is_completed, max ~30s). */
+  /** Cotiza y ESPERA el resultado (poll hasta is_completed, max ~30s).
+   * VERIFICADO EN VIVO: los DOS ambientes hablan el contrato v1 (wrapper
+   * quotation + parcel + declared_amount); en produccion solo cambia el host
+   * (api-pro). El v2 del OpenAPI responde 400 incluso con su propio ejemplo. */
   async quote(
     creds: { apiKey: string; apiSecret: string; mode: SkydropxMode },
     input: { from: SkydropxAddress; to: SkydropxAddress; parcel: SkydropxParcel },
   ): Promise<SkydropxQuotation> {
-    const prod = creds.mode === 'production';
-    const path = prod ? '/api/v2/quotations' : '/api/v1/quotations';
-    // area_level3 (barrio) es OBLIGATORIO en el contrato v2 — 'Centro' de respaldo.
-    const lvl3 = (a: SkydropxAddress) => ({ ...a, area_level3: a.area_level3?.trim() || 'Centro' });
-    const body = prod
-      ? {
-          address_from: lvl3(input.from),
-          address_to: lvl3(input.to),
-          parcels: [
-            {
-              length: input.parcel.length,
-              width: input.parcel.width,
-              height: input.parcel.height,
-              weight: input.parcel.weight,
-              declared_value: input.parcel.declared_amount,
-            },
-          ],
-        }
-      : {
-          quotation: {
-            address_from: input.from,
-            address_to: input.to,
-            parcel: input.parcel,
-            declared_amount: input.parcel.declared_amount,
-          },
-        };
+    const path = '/api/v1/quotations';
+    const body = {
+      quotation: {
+        address_from: input.from,
+        address_to: input.to,
+        parcel: input.parcel,
+        declared_amount: input.parcel.declared_amount,
+      },
+    };
     const created = this.unwrapQuotation(await this.call<unknown>(creds, 'POST', path, body));
     if (created.is_completed) return created;
     for (let i = 0; i < 12; i++) {
@@ -200,18 +186,6 @@ export class SkydropxClient {
       packageContent: string;
     },
   ): Promise<Record<string, unknown>> {
-    if (creds.mode === 'production') {
-      // Contrato v2 OFICIAL: las direcciones ya viven en la cotizacion de la
-      // rate elegida; unique_shipment evita duplicados en reintentos.
-      return this.call<Record<string, unknown>>(creds, 'POST', '/api/v2/shipments', {
-        shipment: {
-          rate_id: input.rateId,
-          ...(input.quotationId ? { quotation_id: input.quotationId } : {}),
-          unique_shipment: true,
-          printing_format: 'thermal',
-        },
-      });
-    }
     return this.call<Record<string, unknown>>(creds, 'POST', '/api/v1/shipments', {
       shipment: {
         rate_id: input.rateId,

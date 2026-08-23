@@ -158,8 +158,10 @@ export class SkydropxService {
       }
       throw this.asBadRequest(err, 'Cotizacion Skydropx fallo');
     }
+    // Disponible = success O precio encontrado (el panel de ellos lista las
+    // price_found aunque success venga false por avisos menores del carrier).
     const rates = (quotation.rates ?? [])
-      .filter((r) => r.success && r.total != null)
+      .filter((r) => (r.success || /price_found/.test(r.status ?? '')) && r.total != null)
       .map((r) => this.toRateDto(r))
       .sort((a, b) => a.total - b.total);
     return { quotationId: quotation.id, rates };
