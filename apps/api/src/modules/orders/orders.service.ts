@@ -1965,6 +1965,16 @@ export class OrdersService {
             : (client.address?.street ?? extractShippingAddress(order.rawPayload) ?? ''),
         cityCode: city?.code ?? null,
         cityName: city?.name ?? client.address?.city ?? null,
+        // CP YA resuelto (DANE exacto > nombre > zip del pedido): el campo de
+        // CP del modo Skydropx arranca lleno, sin esperar a cotizar.
+        postalCode:
+          postalCodeForDane(city?.code) ||
+          postalCodeForCity(
+            (city?.name ?? client.address?.city ?? '').replace(/\s*\(.*?\)\s*/g, ''),
+            city?.department ?? client.address?.department ?? '',
+          ) ||
+          (client.address?.zipCode ?? '').trim() ||
+          null,
         phone: client.phone,
       },
       sender: senderData,

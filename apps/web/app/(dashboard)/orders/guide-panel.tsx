@@ -187,6 +187,11 @@ export function GuidePanel({
         cityName: preview.recipient.cityName ?? '',
         phone: preview.recipient.phone ?? '',
       });
+      // El CP llega YA resuelto en el preview: el campo arranca lleno (solo
+      // si no hay uno en el borrador — lo tecleado o elegido manda).
+      if (preview.recipient.postalCode) {
+        setPostalCodeTo((cur) => cur || preview.recipient.postalCode || '');
+      }
       setPkg({
         weight: String(preview.package.weight),
         height: String(preview.package.height),
@@ -523,13 +528,13 @@ export function GuidePanel({
                   queryKey={`sdx-dest-${orderId}`}
                 />
               </Field>
-              {/* Skydropx enruta por CP: se asigna SOLO segun la ciudad (al
-                  elegirla o al cotizar, del catalogo postal nacional). Queda
-                  editable por si hay que corregirlo. */}
+              {/* Skydropx enruta por CP: llega YA resuelto en el preview (la
+                  ciudad del pedido) y se actualiza al elegir otra ciudad.
+                  Editable por si hay que corregirlo. */}
               <Field label="Codigo postal destino">
                 <Input
                   inputMode="numeric"
-                  placeholder="Automático"
+                  placeholder="Ej: 110111"
                   maxLength={10}
                   className="w-32 tabular-nums"
                   value={postalCodeTo}

@@ -158,6 +158,9 @@ export const guidePreviewSchema = z.object({
     address: z.string(),
     cityCode: z.string().nullable(), // resuelto desde la ciudad de VTEX (editable)
     cityName: z.string().nullable(),
+    /** CP resuelto de la ciudad (catalogo postal nacional): el campo de CP en
+     *  modo Skydropx arranca YA lleno con este. */
+    postalCode: z.string().nullable(),
     phone: z.string().nullable(),
   }),
   sender: z.object({
