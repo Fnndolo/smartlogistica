@@ -1,9 +1,10 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query } from '@nestjs/common';
 import {
   setSkydropxSedeConfigSchema,
   skydropxCredentialsSchema,
   type SetSkydropxSedeConfigInput,
   type SkydropxAddressTemplate,
+  type SkydropxCity,
   type SkydropxConnectionSummary,
   type SkydropxCredentialsInput,
   type SkydropxPackaging,
@@ -13,6 +14,7 @@ import {
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
 import { ZodValidationPipe } from '../../../common/pipes/zod-validation.pipe';
 import type { AuthContext } from '../../../common/types/authenticated-request';
+import { searchCoCities } from './co-postal';
 import { SkydropxService } from './skydropx.service';
 
 /** Conexion GLOBAL a Skydropx (una por negocio; el remitente sale de cada sede).
@@ -59,6 +61,13 @@ export class SkydropxResourcesController {
   @Get('packagings')
   async packagings(@CurrentUser() user: AuthContext): Promise<SkydropxPackaging[]> {
     return this.skydropx.packagings(user);
+  }
+
+  /** Ciudades del catalogo postal nacional (embebido, con CP): la fuente del
+   *  selector de ciudad en modo Skydropx — independiente de Coordinadora. */
+  @Get('cities')
+  cities(@Query('q') q?: string): SkydropxCity[] {
+    return searchCoCities(q ?? '');
   }
 
   /** Remitente Skydropx fijado en una sede (null = sin fijar). */

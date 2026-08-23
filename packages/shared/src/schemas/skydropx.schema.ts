@@ -46,12 +46,26 @@ export type SkydropxRate = z.infer<typeof skydropxRateSchema>;
 
 export const skydropxQuoteResponseSchema = z.object({
   quotationId: z.string(),
-  /** CP y ciudad de destino RESUELTOS (del pedido o del override del panel). */
+  /** CP, ciudad y departamento de destino RESUELTOS (del pedido o del
+   *  override del panel) — el CP sale SOLO del catalogo postal nacional. */
   postalCodeTo: z.string(),
   cityTo: z.string().default(''),
+  departmentTo: z.string().default(''),
   rates: z.array(skydropxRateSchema),
 });
 export type SkydropxQuoteResponse = z.infer<typeof skydropxQuoteResponseSchema>;
+
+/** Ciudad del catalogo postal nacional (XLSX 4-72 embebido): la fuente del
+ *  selector de ciudad en modo Skydropx (formato de ellos: ciudad +
+ *  departamento completo) y del CP automatico. */
+export const skydropxCitySchema = z.object({
+  city: z.string(),
+  department: z.string(),
+  postalCode: z.string(),
+  /** Codigo DANE 8 digitos (cruza exacto con el catalogo de Coordinadora). */
+  dane: z.string(),
+});
+export type SkydropxCity = z.infer<typeof skydropxCitySchema>;
 
 /** Cotizar desde el panel de guia (dims/valor editables, CP corregible). */
 export const skydropxQuoteInputSchema = z.object({

@@ -21,6 +21,7 @@ import {
   type GuidePreview,
   type GuideTracking,
   type SkydropxPackaging,
+  type SkydropxCity,
   type SkydropxQuoteResponse,
   type SkydropxRate,
 } from '@smartlogistica/shared';
@@ -115,12 +116,19 @@ export function GuidePanel({
   const [packagingCode, setPackagingCode] = useState<string>(
     draft?.packagingCode ?? DEFAULT_PACKAGING_CODE,
   );
-  // Ciudad de destino elegida del catalogo de Coordinadora (persiste en el
+  // Ciudad de destino elegida del catalogo postal nacional (persiste en el
   // borrador). Alimenta la PROXIMA cotizacion: el server la prefiere sobre la
   // ciudad del pedido.
   const [sdxCity, setSdxCity] = useState<SdxCity | null>(
     draft?.cityTo ? { name: draft.cityTo, department: draft.departmentTo ?? '' } : null,
   );
+  // Espejo para leer la eleccion VIGENTE dentro del onSuccess de cotizar (si
+  // el usuario eligio otra ciudad mientras la cotizacion volaba, la respuesta
+  // vieja se descarta en vez de pisarle el CP y las tarifas).
+  const sdxCityRef = useRef<SdxCity | null>(sdxCity);
+  useEffect(() => {
+    sdxCityRef.current = sdxCity;
+  }, [sdxCity]);
   // Ciudad con la que salio la ULTIMA cotizacion: la guia debe llevar estos
   // MISMOS valores (vive solo en memoria, igual que las tarifas).
   const [quotedCity, setQuotedCity] = useState<SdxCity | null>(null);
@@ -264,17 +272,27 @@ export function GuidePanel({
         ...(city ? { cityTo: city.name, departmentTo: city.department } : {}),
       }),
     onSuccess: (q, city) => {
+      // Si el usuario eligio OTRA ciudad mientras esta cotizacion volaba, la
+      // respuesta es de un destino viejo: se descarta ENTERA (tarifas y CP
+      // incluidos) — aplicarla dejaria el picker en la ciudad nueva con el
+      // CP y las tarifas de la anterior.
+      if (sdxCityRef.current !== null && sdxCityRef.current !== city) {
+        toast.info('Cambiaste la ciudad: vuelve a cotizar.');
+        return;
+      }
       setQuote(q);
       // La tarifa elegida pertenece a la cotizacion anterior -> se re-elige.
       setSelectedRateId(null);
       // CP resuelto por el server: se muestra para poder corregirlo.
       setPostalCodeTo(q.postalCodeTo);
       // La ciudad elegida queda CONSUMIDA por esta cotizacion (la guia saldra
-      // con estos mismos valores y el picker muestra la ciudad resuelta); asi
-      // una eleccion vieja no pelea con ediciones posteriores del CP. Si el
-      // usuario eligio OTRA ciudad mientras cotizaba, esa nueva se respeta.
-      setQuotedCity(city);
-      setSdxCity((cur) => (cur === city ? null : cur));
+      // con estos mismos valores y el picker muestra la ciudad resuelta).
+      // Si fue automatica, el server devuelve ciudad + departamento resueltos
+      // (formato Skydropx) y el picker los muestra tal cual.
+      setQuotedCity(
+        city ?? (q.cityTo ? { name: q.cityTo, department: q.departmentTo || q.cityTo } : null),
+      );
+      setSdxCity(null);
     },
     onError: (err) =>
       toast.error(err instanceof ApiError ? err.message : 'No se pudo cotizar con Skydropx'),
@@ -452,9 +470,10 @@ export function GuidePanel({
           </div>
           {sdx ? (
             <>
-              {/* Skydropx no tiene catalogo de ciudades (verificado por probe):
-                  se reusa el de Coordinadora. Al cotizar, el server prefiere
-                  esta ciudad sobre la del pedido. */}
+              {/* Ciudades del catalogo POSTAL nacional embebido, en el formato
+                  que Skydropx pide (ciudad + departamento completo) —
+                  independiente del catalogo de Coordinadora. Elegir una fija
+                  tambien su codigo postal automaticamente. */}
               <Field label="Ciudad de destino">
                 <CityPicker
                   value={
@@ -468,29 +487,37 @@ export function GuidePanel({
                           (recipient?.cityName ?? '').replace(/\s*\(.*?\)\s*/g, '').trim()
                   }
                   onPick={(c: CoordinadoraCity) => {
-                    // El catalogo trae "PASTO (NAR)": fuera el parentesis; el
-                    // departamento va completo tal cual ("Nariño").
-                    setSdxCity({
-                      name: c.name.replace(/\s*\(.*?\)\s*/g, '').trim(),
-                      department: c.department,
-                    });
+                    setSdxCity({ name: c.name, department: c.department });
+                    // CP automatico de la ciudad elegida (viene colado en el
+                    // shape adaptado del catalogo postal).
+                    const cp = (c as CoordinadoraCity & { postalCode?: string }).postalCode;
+                    if (cp) setPostalCodeTo(cp);
                     // Las tarifas cotizadas son de otro destino -> re-cotizar.
                     setSelectedRateId(null);
                   }}
                   search={(q) =>
-                    api.get<CoordinadoraCity[]>(
-                      `/v1/orders/${orderId}/guide-cities?q=${encodeURIComponent(q)}`,
-                    )
+                    api
+                      .get<SkydropxCity[]>(`/v1/skydropx/cities?q=${encodeURIComponent(q)}`)
+                      // Al shape del picker; el DANE hace de key.
+                      .then((rows) =>
+                        rows.map((r) => ({
+                          code: r.dane,
+                          name: r.city,
+                          department: r.department,
+                          postalCode: r.postalCode,
+                        })),
+                      )
                   }
-                  queryKey={`dest-${orderId}`}
+                  queryKey={`sdx-dest-${orderId}`}
                 />
               </Field>
-              {/* Skydropx enruta por CP, no por codigo DANE. Vacio: el server
-                  lo resuelve (o la guia sale con ciudad+departamento sin CP). */}
+              {/* Skydropx enruta por CP: se asigna SOLO segun la ciudad (al
+                  elegirla o al cotizar, del catalogo postal nacional). Queda
+                  editable por si hay que corregirlo. */}
               <Field label="Codigo postal destino">
                 <Input
                   inputMode="numeric"
-                  placeholder="Ej: 110111"
+                  placeholder="Automático"
                   maxLength={10}
                   className="w-32 tabular-nums"
                   value={postalCodeTo}
@@ -525,8 +552,8 @@ export function GuidePanel({
         </div>
         {sdx ? (
           <p className="text-[11px] text-muted-foreground">
-            Si no conoces el código postal, elige la ciudad y cotiza: el sistema lo resuelve, y la guía
-            puede salir con ciudad + departamento sin CP.
+            El código postal se pone solo según la ciudad del pedido (catálogo postal nacional); si
+            eliges otra ciudad, se actualiza con ella.
           </p>
         ) : !recipient.cityCode ? (
           <p className="text-[11px] text-amber-600 dark:text-amber-400">

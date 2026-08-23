@@ -58,6 +58,7 @@ import { type ImageMime } from '../ai/ai-vision-client.service';
 import { AlegraService, type InvoiceClient } from '../marketplaces/alegra/alegra.service';
 import { WarrantyService } from '../marketplaces/alegra/warranty.service';
 import { CoordinadoraService, postalCodeByCity } from '../marketplaces/coordinadora/coordinadora.service';
+import { postalCodeForCity, postalCodeForDane } from '../marketplaces/skydropx/co-postal';
 import type { RastreoResult } from '../marketplaces/coordinadora/coordinadora-client.service';
 import { MktDocumentService } from '../marketplaces/vtex/mkt-document.service';
 import { VtexClient } from '../marketplaces/vtex/vtex-client.service';
@@ -2183,12 +2184,15 @@ export class OrdersService {
       );
     }
     const client = extractInvoiceClient(order);
-    const cpTo = (input.postalCodeTo ?? client.address?.zipCode ?? '').trim();
+    let cpTo = (input.postalCodeTo ?? '').trim();
     let cityTo = (input.cityTo ?? '').trim();
     let deptTo = (input.departmentTo ?? '').trim();
+    let daneTo: string | null = null;
     if (!cityTo) {
-      // Ciudad AUTOMATICA como en el modo Coordinadora: se resuelve contra su
-      // catalogo con la ciudad del pedido (trae el departamento completo).
+      // Ciudad AUTOMATICA: se resuelve contra el catalogo de Coordinadora
+      // (unico con matching por sede) SOLO para obtener nombre canonico y
+      // DANE; el formato final (depto completo) y el CP salen del catalogo
+      // postal nacional embebido.
       const resolved = await this.coordinadora
         .resolveCity(order.warehouseId, client.address?.city ?? null, client.address?.department ?? null)
         .catch(() => null);
@@ -2196,8 +2200,15 @@ export class OrdersService {
         ? resolved.name.replace(/\s*\(.*?\)\s*/g, '').trim()
         : (client.address?.city ?? '').trim();
       deptTo = deptTo || resolved?.department || (client.address?.department ?? '').trim();
+      daneTo = resolved?.code ?? null;
     }
     deptTo = deptTo || cityTo;
+    // CP SIEMPRE automatico: DANE exacto > nombre de ciudad > zip del pedido.
+    cpTo =
+      cpTo ||
+      postalCodeForDane(daneTo) ||
+      postalCodeForCity(cityTo, deptTo) ||
+      (client.address?.zipCode ?? '').trim();
     if (!cpTo && !cityTo) {
       throw new BadRequestException(
         'El pedido no trae código postal ni ciudad de destino: completa al menos uno para cotizar.',
@@ -2229,7 +2240,7 @@ export class OrdersService {
         declared_amount: input.package.declaredValue,
       },
     });
-    return { quotationId, postalCodeTo: cpTo, cityTo, rates };
+    return { quotationId, postalCodeTo: cpTo, cityTo, departmentTo: deptTo, rates };
   }
 
   /** Genera la guia por SKYDROPX con la tarifa elegida (mismo pipeline). */
@@ -2281,6 +2292,29 @@ export class OrdersService {
     // remitente es el correo de envios del negocio (fijo para TODAS las
     // sedes); el del destinatario, el real del pedido o el mismo de respaldo.
     const senderEmail = process.env.SKYDROPX_SENDER_EMAIL ?? 'smartg.envios@gmail.com';
+    // Destino: MISMA cadena de resolucion que la cotizacion (ciudad canonica
+    // + DANE exacto > nombre > zip del pedido) — si divergen, el rotulo
+    // saldria para un destino distinto al de la tarifa elegida.
+    const cityIn = (input.cityTo ?? '').trim();
+    let toCity = cityIn || (client.address?.city ?? '').trim();
+    let toDept = (input.departmentTo ?? '').trim() || (client.address?.department ?? '').trim();
+    let daneTo: string | null = null;
+    if (!cityIn) {
+      const resolved = await this.coordinadora
+        .resolveCity(order.warehouseId, client.address?.city ?? null, client.address?.department ?? null)
+        .catch(() => null);
+      if (resolved) {
+        toCity = resolved.name.replace(/\s*\(.*?\)\s*/g, '').trim();
+        toDept = toDept || resolved.department;
+        daneTo = resolved.code;
+      }
+    }
+    toDept = toDept || toCity;
+    const cpTo =
+      (input.postalCodeTo ?? '').trim() ||
+      postalCodeForDane(daneTo) ||
+      postalCodeForCity(toCity, toDept) ||
+      (client.address?.zipCode ?? '').trim();
     const ship = await this.skydropx.createShipment({
       rateId: input.rateId,
       quotationId: input.quotationId,
@@ -2302,11 +2336,9 @@ export class OrdersService {
           },
       to: {
         country_code: 'CO',
-        postal_code: input.postalCodeTo,
-        area_level1:
-          (input.departmentTo ?? client.address?.department ?? '').trim() ||
-          (input.cityTo ?? client.address?.city ?? '').trim(),
-        area_level2: (input.cityTo ?? client.address?.city ?? '').trim(),
+        postal_code: cpTo,
+        area_level1: toDept,
+        area_level2: toCity,
         area_level3: '',
         street1: input.recipient.address,
         name: input.recipient.name,
