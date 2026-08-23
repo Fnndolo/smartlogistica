@@ -2263,6 +2263,10 @@ export class OrdersService {
     const client = extractInvoiceClient(order);
     const senderCity = this.parseCityDept(sender.cityName);
 
+    // Skydropx EXIGE email en ambas direcciones (422 verificado): el del
+    // remitente es el correo de envios del negocio (fijo para TODAS las
+    // sedes); el del destinatario, el real del pedido o el mismo de respaldo.
+    const senderEmail = process.env.SKYDROPX_SENDER_EMAIL ?? 'smartg.envios@gmail.com';
     const ship = await this.skydropx.createShipment({
       rateId: input.rateId,
       quotationId: input.quotationId,
@@ -2277,6 +2281,7 @@ export class OrdersService {
         name: sender.name,
         company: sender.name,
         phone: sender.phone,
+        email: senderEmail,
       },
       to: {
         country_code: 'CO',
@@ -2289,7 +2294,7 @@ export class OrdersService {
         street1: input.recipient.address,
         name: input.recipient.name,
         phone: input.recipient.phone,
-        ...(input.recipient.email ? { email: input.recipient.email } : {}),
+        email: input.recipient.email?.trim() || client.email?.trim() || senderEmail,
       },
       parcel: {
         length: input.package.length,
