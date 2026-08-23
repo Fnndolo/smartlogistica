@@ -1,7 +1,9 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query } from '@nestjs/common';
 import {
+  savePackagePresetsSchema,
   setSkydropxSedeConfigSchema,
   skydropxCredentialsSchema,
+  type PackagePreset,
   type SetSkydropxSedeConfigInput,
   type SkydropxAddressTemplate,
   type SkydropxCity,
@@ -68,6 +70,22 @@ export class SkydropxResourcesController {
   @Get('cities')
   cities(@Query('q') q?: string): SkydropxCity[] {
     return searchCoCities(q ?? '');
+  }
+
+  /** Paquetes guardados PROPIOS del modo Skydropx (los "Mis paquetes" del
+   *  panel de Skydropx no los expone su API): globales, aparte de los de
+   *  Coordinadora. */
+  @Get('package-presets')
+  async packagePresets(): Promise<PackagePreset[]> {
+    return this.skydropx.packagePresets();
+  }
+
+  @Put('package-presets')
+  async savePackagePresets(
+    @Body(new ZodValidationPipe(savePackagePresetsSchema)) body: PackagePreset[],
+    @CurrentUser() user: AuthContext,
+  ): Promise<PackagePreset[]> {
+    return this.skydropx.savePackagePresets(body, user);
   }
 
   /** Remitente Skydropx fijado en una sede (null = sin fijar). */

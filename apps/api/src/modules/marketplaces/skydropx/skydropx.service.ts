@@ -1,15 +1,18 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import type {
+  PackagePreset,
   SkydropxAddressTemplate as SkydropxAddressTemplateDto,
   SkydropxConnectionSummary,
   SkydropxCredentialsInput,
   SkydropxRate as SkydropxRateDto,
   SkydropxSedeConfig as SkydropxSedeConfigDto,
 } from '@smartlogistica/shared';
+import type { Prisma } from '.prisma/tenant-client';
 
 import type { AuthContext } from '../../../common/types/authenticated-request';
 import { EnvelopeService } from '../../../infrastructure/crypto/envelope.service';
 import { getTenantContext } from '../../../infrastructure/tenant-context';
+import { parsePackagePresets } from '../../warehouses/warehouses.service';
 import {
   SkydropxClient,
   type SkydropxAddress,
@@ -200,6 +203,31 @@ export class SkydropxService {
       city: row.city,
       postalCode: row.postalCode,
     };
+  }
+
+  // === Paquetes guardados (presets PROPIOS para el modo Skydropx) ===
+  // El panel de Skydropx tiene "Mis paquetes" pero su API NO los expone
+  // (probado endpoint por endpoint): se gestionan aca, GLOBALES, aparte de
+  // los paquetes de guia de Coordinadora. AppSetting 'skydropxPackagePresets'.
+
+  async packagePresets(): Promise<PackagePreset[]> {
+    const { prisma } = getTenantContext();
+    const row = await prisma.appSetting.findUnique({ where: { key: 'skydropxPackagePresets' } });
+    return parsePackagePresets(row?.value);
+  }
+
+  async savePackagePresets(presets: PackagePreset[], auth: AuthContext): Promise<PackagePreset[]> {
+    this.assertAdmin(auth);
+    const { prisma } = getTenantContext();
+    await prisma.appSetting.upsert({
+      where: { key: 'skydropxPackagePresets' },
+      create: {
+        key: 'skydropxPackagePresets',
+        value: presets as unknown as Prisma.InputJsonValue,
+      },
+      update: { value: presets as unknown as Prisma.InputJsonValue },
+    });
+    return presets;
   }
 
   // === Cotizacion / envio / rastreo ===

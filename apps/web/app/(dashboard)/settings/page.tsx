@@ -10,6 +10,7 @@ import { ChangePasswordCard } from './change-password-card';
 import { ConfirmationLogCard } from './confirmation-log-card';
 import { PackagePresetsCard } from './package-presets-card';
 import { PlatformsCard } from './platforms-card';
+import { SkydropxPackagesCard } from './skydropx-packages-card';
 import { VtexFeesCard } from './vtex-fees-card';
 
 export const metadata: Metadata = { title: 'Ajustes' };
@@ -35,6 +36,10 @@ export default async function SettingsPage() {
   const packagePresets = isOwner
     ? ((await serverFetch<PackagePreset[]>('/v1/warehouses/package-presets')) ?? [])
     : [];
+  // null = lectura fallida: la card bloquea el guardado (PUT de reemplazo total).
+  const skydropxPackages = isOwner
+    ? await serverFetch<PackagePreset[]>('/v1/skydropx/package-presets')
+    : null;
   // null = la lectura fallo (API caida/reiniciando). NUNCA se cae a defaults:
   // las cards guardan con PUT de reemplazo total y unos defaults sembrados a
   // ciegas pisarian la configuracion personalizada al primer "Guardar".
@@ -131,6 +136,7 @@ export default async function SettingsPage() {
             Envíos
           </h2>
           <PackagePresetsCard initial={packagePresets} />
+          <SkydropxPackagesCard initial={skydropxPackages} />
         </section>
       ) : null}
 

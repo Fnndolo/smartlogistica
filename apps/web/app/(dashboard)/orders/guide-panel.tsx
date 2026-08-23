@@ -21,6 +21,7 @@ import {
   type GuidePreview,
   type GuideTracking,
   type SkydropxPackaging,
+  type PackagePreset,
   type SkydropxCity,
   type SkydropxQuoteResponse,
   type SkydropxRate,
@@ -161,6 +162,17 @@ export function GuidePanel({
     queryKey: ['skydropx-packagings'],
     queryFn: () => api.get<SkydropxPackaging[]>('/v1/skydropx/packagings'),
     staleTime: 24 * 60 * 60 * 1000,
+    retry: false,
+    enabled: courier === 'skydropx',
+  });
+
+  // Paquetes guardados PROPIOS del modo Skydropx (los gestiona /settings; los
+  // "Mis paquetes" del panel de Skydropx no los expone su API). Elegir uno
+  // llena medidas y peso, igual que los presets de Coordinadora en su modo.
+  const { data: sdxPresets = [] } = useQuery({
+    queryKey: ['skydropx-package-presets'],
+    queryFn: () => api.get<PackagePreset[]>('/v1/skydropx/package-presets'),
+    staleTime: 60_000,
     retry: false,
     enabled: courier === 'skydropx',
   });
@@ -565,10 +577,37 @@ export function GuidePanel({
       {/* Paquete */}
       <section className="space-y-3">
         <SectionTitle>Paquete</SectionTitle>
+        {sdx && sdxPresets.length > 0 ? (
+          <Field label="Paquete guardado (Skydropx)">
+            {/* Los paquetes PROPIOS del modo Skydropx (se gestionan en Ajustes >
+                Paquetes Skydropx): elegirlo llena peso y medidas de un clic. */}
+            <select
+              defaultValue=""
+              onChange={(e) => {
+                const p = sdxPresets.find((x) => x.name === e.target.value);
+                if (p) {
+                  patchP({
+                    weight: String(p.weight),
+                    height: String(p.height),
+                    width: String(p.width),
+                    length: String(p.length),
+                  });
+                }
+              }}
+              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <option value="">— Personalizado —</option>
+              {sdxPresets.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name} · {p.height}x{p.width}x{p.length} cm · {p.weight} kg
+                </option>
+              ))}
+            </select>
+          </Field>
+        ) : null}
         {sdx ? (
           /* Embalaje del catalogo de Skydropx (los presets generales de paquete
-             son de Coordinadora y en este modo NO aplican; peso/medidas/valor
-             se siguen llenando a mano abajo). */
+             son de Coordinadora y en este modo NO aplican). */
           <Field label="Embalaje (Skydropx)">
             {packagingsError ? (
               <p className="text-xs text-muted-foreground">
