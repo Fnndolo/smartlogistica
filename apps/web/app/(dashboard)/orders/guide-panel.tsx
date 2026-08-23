@@ -860,6 +860,41 @@ const CARRIER_BRAND_COLORS: Record<string, string> = {
   '99minutes': '#7c3aed',
 };
 
+/** Transportadoras con logo real en /public/carriers/<code>.webp (chip
+ *  blanco); las demas caen a la inicial con color de marca. */
+const CARRIER_LOGOS = new Set(['coordinadora', 'servientrega', 'interrapidisimo', 'envia']);
+
+/** Chip de transportadora: logo real si lo hay, inicial de color si no. */
+function CarrierChip({ code, name, size = 'h-10 w-10' }: { code: string; name: string; size?: string }) {
+  const slug = code.trim().toLowerCase();
+  if (CARRIER_LOGOS.has(slug)) {
+    return (
+      <span
+        className={cn(
+          'flex shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border/60 bg-white',
+          size,
+        )}
+        aria-hidden
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={`/carriers/${slug}.webp`} alt="" className="h-full w-full object-contain p-0.5" />
+      </span>
+    );
+  }
+  return (
+    <span
+      className={cn(
+        'flex shrink-0 items-center justify-center rounded-lg text-base font-bold text-white',
+        size,
+      )}
+      style={{ backgroundColor: CARRIER_BRAND_COLORS[slug] ?? '#64748b' }}
+      aria-hidden
+    >
+      {(name.trim().charAt(0) || '?').toUpperCase()}
+    </span>
+  );
+}
+
 /** Tarjeta de tarifa Skydropx, seleccionable como una radio card. */
 function RateCard({
   rate,
@@ -870,7 +905,6 @@ function RateCard({
   selected: boolean;
   onSelect: () => void;
 }) {
-  const brand = CARRIER_BRAND_COLORS[rate.carrierCode.toLowerCase()] ?? '#64748b';
   return (
     <button
       type="button"
@@ -882,13 +916,7 @@ function RateCard({
       )}
     >
       <div className="flex items-center gap-3">
-        <span
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-base font-bold text-white"
-          style={{ backgroundColor: brand }}
-          aria-hidden
-        >
-          {(rate.carrier.trim().charAt(0) || '?').toUpperCase()}
-        </span>
+        <CarrierChip code={rate.carrierCode} name={rate.carrier} />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm">
             <span className="font-semibold">{rate.carrier}</span>
@@ -1004,10 +1032,19 @@ function TrackingTimeline({ orderId }: { orderId: string }) {
         ) : (
           <>
             {/* Con Skydropx el envio puede salir por CUALQUIER transportadora:
-                dejarla siempre visible junto al estado. */}
+                dejarla siempre visible junto al estado, con su logo. El
+                rastreo trae el NOMBRE ("Interrapidísimo") -> normalizar a slug. */}
             {data.carrier ? (
               <p className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-[11px] font-medium">
-                <Truck className="h-3 w-3 text-muted-foreground" />
+                <CarrierChip
+                  code={data.carrier
+                    .toLowerCase()
+                    .normalize('NFD')
+                    .replace(/\p{Diacritic}/gu, '')
+                    .replace(/[^a-z0-9]/g, '')}
+                  name={data.carrier}
+                  size="h-4 w-4 rounded text-[9px]"
+                />
                 Enviado por <span className="font-semibold">{data.carrier}</span>
               </p>
             ) : null}
