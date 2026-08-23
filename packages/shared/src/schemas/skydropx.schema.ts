@@ -71,6 +71,40 @@ export const skydropxQuoteInputSchema = z.object({
 });
 export type SkydropxQuoteInput = z.infer<typeof skydropxQuoteInputSchema>;
 
+/** Direccion de ORIGEN guardada en el panel de Skydropx (las verificadas
+ *  permiten paqueterias que exigen origen verificado, ej. Inter). */
+export const skydropxAddressTemplateSchema = z.object({
+  id: z.string(),
+  alias: z.string(),
+  name: z.string().nullable(),
+  city: z.string().nullable(),
+  postalCode: z.string().nullable(),
+  /** 'from' | 'to' (solo las from sirven de remitente). */
+  addressType: z.string(),
+  /** Paqueterias con esta direccion VERIFICADA (slugs). */
+  verifiedCarriers: z.array(z.string()).default([]),
+});
+export type SkydropxAddressTemplate = z.infer<typeof skydropxAddressTemplateSchema>;
+
+/** Tipo de embalaje del catalogo de Skydropx (codigo ONU + nombre). */
+export const skydropxPackagingSchema = z.object({ code: z.string(), name: z.string() });
+export type SkydropxPackaging = z.infer<typeof skydropxPackagingSchema>;
+
+/** Remitente Skydropx FIJADO en una sede (null = sin fijar). */
+export const skydropxSedeConfigSchema = z.object({
+  warehouseId: z.string(),
+  addressTemplateId: z.string(),
+  alias: z.string().nullable(),
+  city: z.string().nullable(),
+  postalCode: z.string().nullable(),
+});
+export type SkydropxSedeConfig = z.infer<typeof skydropxSedeConfigSchema>;
+
+export const setSkydropxSedeConfigSchema = z.object({
+  addressTemplateId: z.string().min(6),
+});
+export type SetSkydropxSedeConfigInput = z.infer<typeof setSkydropxSedeConfigSchema>;
+
 /** Generar la guia con la tarifa elegida. */
 export const createSkydropxGuideSchema = z.object({
   rateId: z.string().min(6),
@@ -92,5 +126,7 @@ export const createSkydropxGuideSchema = z.object({
     email: z.string().trim().email().optional(),
   }),
   packageContent: z.string().trim().min(2).max(60).default('CELULAR'),
+  /** Tipo de embalaje del catalogo de Skydropx (codigo, ej. '4G' caja). */
+  packagingCode: z.string().trim().max(10).optional(),
 });
 export type CreateSkydropxGuideInput = z.infer<typeof createSkydropxGuideSchema>;

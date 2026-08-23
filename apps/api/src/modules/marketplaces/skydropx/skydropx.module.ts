@@ -1,11 +1,11 @@
 import { Module } from '@nestjs/common';
 
 import { SkydropxClient } from './skydropx-client.service';
-import { SkydropxConnectionController } from './skydropx.controller';
+import { SkydropxConnectionController, SkydropxResourcesController } from './skydropx.controller';
 import { SkydropxService } from './skydropx.service';
 
 @Module({
-  controllers: [SkydropxConnectionController],
+  controllers: [SkydropxConnectionController, SkydropxResourcesController],
   providers: [SkydropxClient, SkydropxService],
   exports: [SkydropxService],
 })

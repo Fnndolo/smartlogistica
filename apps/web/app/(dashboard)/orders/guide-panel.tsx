@@ -20,6 +20,7 @@ import {
   type Guide,
   type GuidePreview,
   type GuideTracking,
+  type SkydropxPackaging,
   type SkydropxQuoteResponse,
   type SkydropxRate,
 } from '@smartlogistica/shared';
@@ -55,6 +56,9 @@ interface Pkg {
 /** Transportadora del panel: Coordinadora (directa) o Skydropx (agregador). */
 type Courier = 'coordinadora' | 'skydropx';
 
+/** Embalaje por defecto del catalogo de Skydropx: '4G' = Caja de carton. */
+const DEFAULT_PACKAGING_CODE = '4G';
+
 /** Ciudad de destino en modo Skydropx: nombre limpio (sin el parentesis del
  *  catalogo) + departamento COMPLETO tal cual ("Antioquia"). Sale del catalogo
  *  de Coordinadora porque Skydropx no expone catalogo propio de ciudades. */
@@ -77,6 +81,9 @@ interface GuideDraft {
   // (opcionales: los borradores viejos no los traen).
   cityTo?: string;
   departmentTo?: string;
+  // Modo Skydropx: embalaje elegido del catalogo (opcional: los borradores
+  // viejos no lo traen -> cae al default '4G').
+  packagingCode?: string;
 }
 
 export function GuidePanel({
@@ -104,6 +111,10 @@ export function GuidePanel({
   // === Skydropx ===
   const [courier, setCourier] = useState<Courier>(draft?.courier ?? 'coordinadora');
   const [postalCodeTo, setPostalCodeTo] = useState<string>(draft?.postalCodeTo ?? '');
+  // Embalaje del catalogo de Skydropx (persiste en el borrador).
+  const [packagingCode, setPackagingCode] = useState<string>(
+    draft?.packagingCode ?? DEFAULT_PACKAGING_CODE,
+  );
   // Ciudad de destino elegida del catalogo de Coordinadora (persiste en el
   // borrador). Alimenta la PROXIMA cotizacion: el server la prefiere sobre la
   // ciudad del pedido.
@@ -129,6 +140,21 @@ export function GuidePanel({
     queryKey: ['guide-preview', orderId],
     queryFn: () => api.get<GuidePreview>(`/v1/orders/${orderId}/guide-preview`),
     retry: false,
+  });
+
+  // Catalogo de EMBALAJES de Skydropx (Caja de carton 4G, Saco bolsa 5H4...).
+  // Es un catalogo fijo -> staleTime largo; solo se consulta en modo Skydropx.
+  // Los presets generales de paquete son de Coordinadora y aqui no aplican.
+  const {
+    data: packagings,
+    error: packagingsError,
+    isPending: packagingsPending,
+  } = useQuery({
+    queryKey: ['skydropx-packagings'],
+    queryFn: () => api.get<SkydropxPackaging[]>('/v1/skydropx/packagings'),
+    staleTime: 24 * 60 * 60 * 1000,
+    retry: false,
+    enabled: courier === 'skydropx',
   });
 
   useEffect(() => {
@@ -166,11 +192,13 @@ export function GuidePanel({
         codValue,
         courier,
         postalCodeTo,
+        // Embalaje elegido en modo Skydropx (sobrevive cierre del drawer).
+        packagingCode,
         // Ciudad elegida en modo Skydropx (sobrevive cierre del drawer).
         ...(sdxCity ? { cityTo: sdxCity.name, departmentTo: sdxCity.department } : {}),
       });
     }
-  }, [recipient, pkg, rotuloId, codOn, codValue, courier, postalCodeTo, sdxCity, orderId]);
+  }, [recipient, pkg, rotuloId, codOn, codValue, courier, postalCodeTo, packagingCode, sdxCity, orderId]);
 
   const generate = useMutation({
     // Con clave: si cierran el drawer con la guia EN CURSO, al volver el boton
@@ -276,6 +304,8 @@ export function GuidePanel({
           phone: recipient!.phone.trim(),
         },
         packageContent: pkg!.content.trim() || 'CELULAR',
+        // Embalaje del catalogo de Skydropx (codigo, ej. '4G' caja de carton).
+        ...(packagingCode ? { packagingCode } : {}),
       };
       return api.post<Guide>(`/v1/orders/${orderId}/guide-skydropx`, body);
     },
@@ -508,7 +538,43 @@ export function GuidePanel({
       {/* Paquete */}
       <section className="space-y-3">
         <SectionTitle>Paquete</SectionTitle>
-        {preview.packagePresets.length > 0 ? (
+        {sdx ? (
+          /* Embalaje del catalogo de Skydropx (los presets generales de paquete
+             son de Coordinadora y en este modo NO aplican; peso/medidas/valor
+             se siguen llenando a mano abajo). */
+          <Field label="Embalaje (Skydropx)">
+            {packagingsError ? (
+              <p className="text-xs text-muted-foreground">
+                {packagingsError instanceof ApiError
+                  ? packagingsError.message
+                  : 'No se pudo cargar el catálogo de embalajes de Skydropx.'}
+              </p>
+            ) : (
+              <select
+                value={packagingCode}
+                onChange={(e) => setPackagingCode(e.target.value)}
+                disabled={packagingsPending}
+                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {packagingsPending ? (
+                  <option value={packagingCode}>Cargando embalajes…</option>
+                ) : (
+                  <>
+                    {/* Borrador viejo con un codigo que ya no esta en el catalogo. */}
+                    {!(packagings ?? []).some((p) => p.code === packagingCode) ? (
+                      <option value={packagingCode}>{packagingCode}</option>
+                    ) : null}
+                    {(packagings ?? []).map((p) => (
+                      <option key={p.code} value={p.code}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </>
+                )}
+              </select>
+            )}
+          </Field>
+        ) : preview.packagePresets.length > 0 ? (
           <Field label="Paquete guardado">
             {/* Igual que los "empaques" del portal de Coordinadora: elegirlo llena
                 peso y medidas (despues se pueden ajustar a mano). */}

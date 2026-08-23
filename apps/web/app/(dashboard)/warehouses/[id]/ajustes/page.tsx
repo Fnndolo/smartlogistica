@@ -1,6 +1,7 @@
 import type {
   AlegraConnectionSummary,
   CoordinadoraConnectionSummary,
+  SkydropxSedeConfig,
 } from '@smartlogistica/shared';
 
 import { getWarehouses, serverFetch } from '@/lib/server-api';
@@ -8,15 +9,17 @@ import { AlegraConnectionCard } from '../alegra-connection-card';
 import { AlegraSellerCard } from '../alegra-seller-card';
 import { CertificateCard } from '../certificate-card';
 import { CoordinadoraConnectionCard } from '../coordinadora-connection-card';
+import { SkydropxSedeCard } from '../skydropx-sede-card';
 
 /** Ajustes de la sede: conexiones (Alegra/Coordinadora) + Certificado. */
 export default async function WarehouseSettingsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const warehouse = (await getWarehouses()).find((w) => w.id === id);
   const name = warehouse?.name ?? '';
-  const [alegra, coordinadora] = await Promise.all([
+  const [alegra, coordinadora, skydropxSede] = await Promise.all([
     serverFetch<AlegraConnectionSummary | null>(`/v1/warehouses/${id}/alegra`),
     serverFetch<CoordinadoraConnectionSummary | null>(`/v1/warehouses/${id}/coordinadora`),
+    serverFetch<SkydropxSedeConfig | null>(`/v1/skydropx/sede-config/${id}`),
   ]);
 
   return (
@@ -36,6 +39,8 @@ export default async function WarehouseSettingsPage({ params }: { params: Promis
       <div className="grid gap-4 lg:grid-cols-2">
         <AlegraConnectionCard warehouseId={id} warehouseName={name} initial={alegra ?? null} />
         <CoordinadoraConnectionCard warehouseId={id} warehouseName={name} initial={coordinadora ?? null} />
+        {/* Remitente Skydropx: gestion SEPARADA de Coordinadora. */}
+        <SkydropxSedeCard warehouseId={id} initial={skydropxSede ?? null} />
       </div>
       <AlegraSellerCard warehouseId={id} />
       <CertificateCard warehouseId={id} warehouseName={name} />

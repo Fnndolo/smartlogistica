@@ -1,8 +1,13 @@
-import { Body, Controller, Delete, Get, HttpCode, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put } from '@nestjs/common';
 import {
+  setSkydropxSedeConfigSchema,
   skydropxCredentialsSchema,
+  type SetSkydropxSedeConfigInput,
+  type SkydropxAddressTemplate,
   type SkydropxConnectionSummary,
   type SkydropxCredentialsInput,
+  type SkydropxPackaging,
+  type SkydropxSedeConfig,
 } from '@smartlogistica/shared';
 
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
@@ -35,5 +40,43 @@ export class SkydropxConnectionController {
   @HttpCode(204)
   async disconnect(@CurrentUser() user: AuthContext): Promise<void> {
     await this.skydropx.disconnect(user);
+  }
+}
+
+/** Recursos de Skydropx: direcciones guardadas, embalajes y remitente por sede. */
+@Controller('skydropx')
+export class SkydropxResourcesController {
+  constructor(private readonly skydropx: SkydropxService) {}
+
+  /** Direcciones guardadas en el panel de Skydropx (las 'from' verificadas
+   *  son las que sirven de remitente). */
+  @Get('address-templates')
+  async addressTemplates(@CurrentUser() user: AuthContext): Promise<SkydropxAddressTemplate[]> {
+    return this.skydropx.addressTemplates(user);
+  }
+
+  /** Catalogo de tipos de embalaje de Skydropx. */
+  @Get('packagings')
+  async packagings(@CurrentUser() user: AuthContext): Promise<SkydropxPackaging[]> {
+    return this.skydropx.packagings(user);
+  }
+
+  /** Remitente Skydropx fijado en una sede (null = sin fijar). */
+  @Get('sede-config/:warehouseId')
+  async sedeConfig(
+    @Param('warehouseId') warehouseId: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<SkydropxSedeConfig | null> {
+    return this.skydropx.sedeConfig(warehouseId, user);
+  }
+
+  /** Fija el remitente Skydropx de la sede. */
+  @Put('sede-config/:warehouseId')
+  async setSedeConfig(
+    @Param('warehouseId') warehouseId: string,
+    @Body(new ZodValidationPipe(setSkydropxSedeConfigSchema)) body: SetSkydropxSedeConfigInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<SkydropxSedeConfig> {
+    return this.skydropx.setSedeConfig(warehouseId, body.addressTemplateId, user);
   }
 }

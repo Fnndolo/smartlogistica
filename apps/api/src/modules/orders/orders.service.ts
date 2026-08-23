@@ -2168,12 +2168,18 @@ export class OrdersService {
     await this.ensureNotExternallyInvoiced(orderId);
     const order = await this.loadAccessibleOrder(orderId, auth);
     if (!order.warehouseId) throw new BadRequestException('Asigna el pedido a una sede para cotizar.');
+    // Remitente: la PLANTILLA Skydropx fijada en la sede manda (verificada:
+    // habilita paqueterias que exigen origen verificado, ej. Inter); sin
+    // plantilla, direccion cruda de la conexion Coordinadora.
+    const { prisma: db } = getTenantContext();
+    const sedeCfg = await db.skydropxSedeConfig
+      .findUnique({ where: { warehouseId: order.warehouseId } })
+      .catch(() => null);
     const sender = await this.coordinadora.senderFor(order.warehouseId);
-    // CP del origen: el guardado o DERIVADO de la ciudad de la sede al vuelo.
     const cpFrom = sender.postalCode ?? postalCodeByCity(sender.cityName);
-    if (!cpFrom) {
+    if (!sedeCfg && !cpFrom) {
       throw new BadRequestException(
-        'La sede no tiene código postal de origen configurado (Conexiones → Coordinadora).',
+        'La sede no tiene remitente Skydropx fijado ni código postal de origen (Ajustes de la sede).',
       );
     }
     const client = extractInvoiceClient(order);
@@ -2199,13 +2205,15 @@ export class OrdersService {
     }
     const senderCity = this.parseCityDept(sender.cityName);
     const { quotationId, rates } = await this.skydropx.quote({
-      from: {
-        country_code: 'CO',
-        postal_code: cpFrom,
-        area_level1: senderCity.dept,
-        area_level2: senderCity.city,
-        area_level3: '',
-      },
+      from: sedeCfg
+        ? { address_template_id: sedeCfg.addressTemplateId }
+        : {
+            country_code: 'CO',
+            postal_code: cpFrom as string,
+            area_level1: senderCity.dept,
+            area_level2: senderCity.city,
+            area_level3: '',
+          },
       to: {
         country_code: 'CO',
         postal_code: cpTo,
@@ -2255,10 +2263,16 @@ export class OrdersService {
       );
     }
     const { tenantId, prisma } = getTenantContext();
+    // La plantilla Skydropx fijada en la sede MANDA (origen verificado).
+    const sedeCfg = await prisma.skydropxSedeConfig
+      .findUnique({ where: { warehouseId: order.warehouseId } })
+      .catch(() => null);
     const sender = await this.coordinadora.senderFor(order.warehouseId);
     const cpFrom = sender.postalCode ?? postalCodeByCity(sender.cityName);
-    if (!cpFrom) {
-      throw new BadRequestException('La sede no tiene código postal de origen configurado.');
+    if (!sedeCfg && !cpFrom) {
+      throw new BadRequestException(
+        'La sede no tiene remitente Skydropx fijado ni código postal de origen (Ajustes de la sede).',
+      );
     }
     const client = extractInvoiceClient(order);
     const senderCity = this.parseCityDept(sender.cityName);
@@ -2271,18 +2285,21 @@ export class OrdersService {
       rateId: input.rateId,
       quotationId: input.quotationId,
       carrierName: input.carrierCode,
-      from: {
-        country_code: 'CO',
-        postal_code: cpFrom,
-        area_level1: senderCity.dept,
-        area_level2: senderCity.city,
-        area_level3: '',
-        street1: sender.address,
-        name: sender.name,
-        company: sender.name,
-        phone: sender.phone,
-        email: senderEmail,
-      },
+      packagingCode: input.packagingCode,
+      from: sedeCfg
+        ? { address_template_id: sedeCfg.addressTemplateId }
+        : {
+            country_code: 'CO',
+            postal_code: cpFrom as string,
+            area_level1: senderCity.dept,
+            area_level2: senderCity.city,
+            area_level3: '',
+            street1: sender.address,
+            name: sender.name,
+            company: sender.name,
+            phone: sender.phone,
+            email: senderEmail,
+          },
       to: {
         country_code: 'CO',
         postal_code: input.postalCodeTo,

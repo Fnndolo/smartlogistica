@@ -266,6 +266,19 @@ model WaChatRead {
   @@id([userId, phone])
 }
 
+// Remitente SKYDROPX por sede (separado de Coordinadora): cada sede fija UNA
+// direccion de origen guardada/VERIFICADA del panel de Skydropx — las
+// paqueterias como Inter exigen origen verificado (address_template_id).
+model SkydropxSedeConfig {
+  warehouseId       String   @id
+  addressTemplateId String
+  // Snapshot para pintar sin llamar a Skydropx (alias/ciudad/CP de la plantilla).
+  alias             String?
+  city              String?
+  postalCode        String?
+  updatedAt         DateTime @default(now()) @updatedAt
+}
+
 // Conexion a SKYDROPX (agregador multi-transportadora; segunda opcion de guia
 // junto a Coordinadora). UNA por tenant; OAuth client_credentials cifrado.
 model SkydropxConnection {

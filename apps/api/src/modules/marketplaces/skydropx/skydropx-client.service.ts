@@ -29,6 +29,11 @@ export interface SkydropxAddress {
   reference?: string;
 }
 
+/** Origen: direccion cruda O una plantilla guardada/verificada del panel
+ *  (address_template_id — Skydropx rellena el resto; las paqueterias que
+ *  exigen origen VERIFICADO solo aceptan la plantilla). */
+export type SkydropxOrigin = SkydropxAddress | { address_template_id: string };
+
 export interface SkydropxParcel {
   length: number;
   width: number;
@@ -147,7 +152,7 @@ export class SkydropxClient {
    * (api-pro). El v2 del OpenAPI responde 400 incluso con su propio ejemplo. */
   async quote(
     creds: { apiKey: string; apiSecret: string; mode: SkydropxMode },
-    input: { from: SkydropxAddress; to: SkydropxAddress; parcel: SkydropxParcel },
+    input: { from: SkydropxOrigin; to: SkydropxAddress; parcel: SkydropxParcel },
   ): Promise<SkydropxQuotation> {
     const path = '/api/v1/quotations';
     const body = {
@@ -180,17 +185,24 @@ export class SkydropxClient {
       rateId: string;
       quotationId?: string;
       carrierName?: string;
-      from: SkydropxAddress;
+      from: SkydropxOrigin;
       to: SkydropxAddress;
       parcel: SkydropxParcel;
       packageContent: string;
+      /** Codigo del catalogo de embalajes ('4G' caja, '5H4' bolsa...). */
+      packagingCode?: string;
     },
   ): Promise<Record<string, unknown>> {
     // El envio EXIGE reference no vacio en ambas direcciones (verificado 422).
-    const withRef = (a: SkydropxAddress): SkydropxAddress => ({
-      ...a,
-      reference: a.reference?.trim() || a.area_level3?.trim() || a.area_level2 || 'N/A',
-    });
+    // Las plantillas (address_template_id) van tal cual: Skydropx rellena.
+    const withRef = (a: SkydropxOrigin): SkydropxOrigin =>
+      'address_template_id' in a
+        ? a
+        : {
+            ...a,
+            reference: a.reference?.trim() || a.area_level3?.trim() || a.area_level2 || 'N/A',
+          };
+    const pkgType = input.packagingCode?.trim() || 'box';
     return this.call<Record<string, unknown>>(creds, 'POST', '/api/v1/shipments', {
       shipment: {
         rate_id: input.rateId,
@@ -202,13 +214,39 @@ export class SkydropxClient {
         ...(creds.mode === 'sandbox' ? { auto_advance: true } : {}),
         printing_format: 'thermal',
         address_from: withRef(input.from),
-        address_to: withRef(input.to),
-        parcel: { ...input.parcel, package_type: 'box', package_content: input.packageContent },
-        parcels: [{ ...input.parcel, package_type: 'box', package_content: input.packageContent }],
-        package_type: 'box',
+        address_to: withRef(input.to) as SkydropxAddress,
+        parcel: { ...input.parcel, package_type: pkgType, package_content: input.packageContent },
+        parcels: [{ ...input.parcel, package_type: pkgType, package_content: input.packageContent }],
+        package_type: pkgType,
         package_content: input.packageContent,
       },
     });
+  }
+
+  /** Direcciones guardadas en el panel de Skydropx (address templates). */
+  async listAddressTemplates(
+    creds: { apiKey: string; apiSecret: string; mode: SkydropxMode },
+  ): Promise<Array<Record<string, unknown>>> {
+    const res = await this.call<{ data?: Array<Record<string, unknown>> }>(
+      creds,
+      'GET',
+      '/api/v1/address_templates?per_page=100',
+    );
+    return res.data ?? [];
+  }
+
+  /** Catalogo de TIPOS de embalaje (codigo ONU + nombre). */
+  async listPackagings(
+    creds: { apiKey: string; apiSecret: string; mode: SkydropxMode },
+  ): Promise<Array<{ code: string; name: string }>> {
+    const res = await this.call<{ data?: Array<{ code?: unknown; name?: unknown }> }>(
+      creds,
+      'GET',
+      '/api/v1/shipments/packagings',
+    );
+    return (res.data ?? [])
+      .filter((p) => p.code && p.name)
+      .map((p) => ({ code: String(p.code), name: String(p.name) }));
   }
 
   /** Estado/eventos de un envio (para el rastreo). */

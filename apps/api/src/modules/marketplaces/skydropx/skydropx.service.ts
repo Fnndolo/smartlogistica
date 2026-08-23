@@ -1,8 +1,10 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import type {
+  SkydropxAddressTemplate as SkydropxAddressTemplateDto,
   SkydropxConnectionSummary,
   SkydropxCredentialsInput,
   SkydropxRate as SkydropxRateDto,
+  SkydropxSedeConfig as SkydropxSedeConfigDto,
 } from '@smartlogistica/shared';
 
 import type { AuthContext } from '../../../common/types/authenticated-request';
@@ -11,6 +13,7 @@ import { getTenantContext } from '../../../infrastructure/tenant-context';
 import {
   SkydropxClient,
   type SkydropxAddress,
+  type SkydropxOrigin,
   type SkydropxMode,
   type SkydropxParcel,
   type SkydropxRate,
@@ -115,6 +118,90 @@ export class SkydropxService {
     return creds;
   }
 
+  // === Direcciones guardadas / embalajes / remitente por sede ===
+
+  /** Direcciones guardadas en el panel de Skydropx, mapeadas (cache 60s). */
+  private tplsCache: { at: number; list: SkydropxAddressTemplateDto[] } | null = null;
+
+  async addressTemplates(auth: AuthContext): Promise<SkydropxAddressTemplateDto[]> {
+    this.assertAdmin(auth);
+    if (this.tplsCache && Date.now() - this.tplsCache.at < 60_000) return this.tplsCache.list;
+    const creds = await this.requireCreds();
+    const raw = await this.client.listAddressTemplates(creds);
+    const list = raw.map((t) => {
+      const addr = (t.address ?? {}) as Record<string, unknown>;
+      const verified = Array.isArray(t.verified_carriers)
+        ? (t.verified_carriers as Array<{ carrier_name?: unknown; status?: unknown }>)
+            .filter((v) => String(v.status) === 'verified')
+            .map((v) => String(v.carrier_name))
+        : [];
+      return {
+        id: String(t.id),
+        alias: String(t.alias_name ?? ''),
+        name: (addr.name as string | undefined) ?? null,
+        city: (addr.area_level2 as string | undefined) ?? null,
+        postalCode: (addr.postal_code as string | undefined) ?? null,
+        addressType: String(t.address_type ?? ''),
+        verifiedCarriers: verified,
+      };
+    });
+    this.tplsCache = { at: Date.now(), list };
+    return list;
+  }
+
+  /** Catalogo de tipos de embalaje (cache 10min: casi nunca cambia). */
+  private pkgCache: { at: number; list: Array<{ code: string; name: string }> } | null = null;
+
+  async packagings(auth: AuthContext): Promise<Array<{ code: string; name: string }>> {
+    this.assertAdmin(auth);
+    if (this.pkgCache && Date.now() - this.pkgCache.at < 600_000) return this.pkgCache.list;
+    const creds = await this.requireCreds();
+    const list = await this.client.listPackagings(creds);
+    this.pkgCache = { at: Date.now(), list };
+    return list;
+  }
+
+  /** Remitente Skydropx fijado en la sede (null = sin fijar). */
+  async sedeConfig(warehouseId: string, auth: AuthContext): Promise<SkydropxSedeConfigDto | null> {
+    this.assertAdmin(auth);
+    const { prisma } = getTenantContext();
+    const row = await prisma.skydropxSedeConfig.findUnique({ where: { warehouseId } });
+    if (!row) return null;
+    return {
+      warehouseId: row.warehouseId,
+      addressTemplateId: row.addressTemplateId,
+      alias: row.alias,
+      city: row.city,
+      postalCode: row.postalCode,
+    };
+  }
+
+  /** Fija el remitente de la sede (guarda snapshot alias/ciudad/CP). */
+  async setSedeConfig(
+    warehouseId: string,
+    addressTemplateId: string,
+    auth: AuthContext,
+  ): Promise<SkydropxSedeConfigDto> {
+    this.assertAdmin(auth);
+    const { prisma } = getTenantContext();
+    const tpl = (await this.addressTemplates(auth)).find((t) => t.id === addressTemplateId);
+    if (!tpl || tpl.addressType !== 'from') {
+      throw new BadRequestException('Esa dirección no existe en Skydropx o no es de ORIGEN.');
+    }
+    const row = await prisma.skydropxSedeConfig.upsert({
+      where: { warehouseId },
+      create: { warehouseId, addressTemplateId, alias: tpl.alias, city: tpl.city, postalCode: tpl.postalCode },
+      update: { addressTemplateId, alias: tpl.alias, city: tpl.city, postalCode: tpl.postalCode },
+    });
+    return {
+      warehouseId: row.warehouseId,
+      addressTemplateId: row.addressTemplateId,
+      alias: row.alias,
+      city: row.city,
+      postalCode: row.postalCode,
+    };
+  }
+
   // === Cotizacion / envio / rastreo ===
 
   /** Errores de Skydropx SIEMPRE como 400 con el detalle real (jamas un 500
@@ -128,7 +215,7 @@ export class SkydropxService {
   }
 
   /** Cotiza y devuelve SOLO las tarifas DISPONIBLES (como el panel de ellos). */
-  async quote(input: { from: SkydropxAddress; to: SkydropxAddress; parcel: SkydropxParcel }): Promise<{
+  async quote(input: { from: SkydropxOrigin; to: SkydropxAddress; parcel: SkydropxParcel }): Promise<{
     quotationId: string;
     rates: SkydropxRateDto[];
   }> {
@@ -186,10 +273,11 @@ export class SkydropxService {
     rateId: string;
     quotationId?: string;
     carrierName?: string;
-    from: SkydropxAddress;
+    from: SkydropxOrigin;
     to: SkydropxAddress;
     parcel: SkydropxParcel;
     packageContent: string;
+    packagingCode?: string;
   }): Promise<{ shipmentId: string; trackingNumber: string; labelUrl: string | null; carrier: string | null; raw: Record<string, unknown> }> {
     const creds = await this.requireCreds();
     let raw: Record<string, unknown>;
