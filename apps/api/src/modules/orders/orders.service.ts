@@ -2364,6 +2364,21 @@ export class OrdersService {
         declared_amount: input.package.declaredValue,
       },
       packageContent: input.packageContent,
+    }).catch((err: unknown) => {
+      // Skydropx responde un 422 cripticio cuando la paqueteria exige origen
+      // VERIFICADO y la sede no tiene remitente fijado (va la direccion cruda
+      // de Coordinadora, que Skydropx no tiene verificada). Se traduce a algo
+      // accionable en vez de escupir el volcado del API.
+      const detail = err instanceof Error ? err.message : String(err);
+      if (/verificaci[oó]n de direcci[oó]n de origen/i.test(detail)) {
+        const sede = sender.name || 'esta sede';
+        throw new BadRequestException(
+          sedeCfg
+            ? `La transportadora ${input.carrier} exige un origen verificado y el remitente Skydropx fijado en ${sede} («${sedeCfg.alias ?? ''}») no está verificado para ella. Elige otra transportadora, o fija en los Ajustes de la sede una dirección con esa transportadora verificada.`
+            : `La sede ${sede} no tiene remitente Skydropx fijado, y ${input.carrier} exige un origen verificado. Ve a los Ajustes de la sede → «Remitente Skydropx» y fija una de tus direcciones verificadas.`,
+        );
+      }
+      throw err;
     });
     const carrier = ship.carrier || input.carrier || 'Skydropx';
 
