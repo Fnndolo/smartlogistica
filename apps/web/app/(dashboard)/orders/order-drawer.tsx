@@ -177,23 +177,57 @@ export function OrderDrawer({
   // Maximo = toda la pantalla. Se arrastra desde el borde izquierdo y el ancho
   // elegido queda guardado (localStorage) para las proximas veces.
   const asideRef = useRef<HTMLElement>(null);
-  const minWRef = useRef(560);
+  const minWRef = useRef(0);
   const [width, setWidth] = useState<number | null>(() => {
     if (typeof window === 'undefined') return null;
     const saved = Number(window.localStorage.getItem('order-drawer-width'));
     return Number.isFinite(saved) && saved > 0 ? saved : null;
   });
+  /**
+   * Ancho minimo REAL = lo que ocupan las pestañas + el padding del nav, y
+   * nada mas (el numero de pestañas cambia segun el rol y el pedido).
+   *
+   * OJO: NO sirve `nav.scrollWidth`. El nav tiene overflow-x-auto, asi que
+   * cuando las pestañas SI caben su scrollWidth es el ancho del contenedor,
+   * o sea el ancho actual del drawer: el minimo se pegaba al ancho de ese
+   * momento y ya no se podia encoger nunca mas. Se suman los hijos (que
+   * llevan shrink-0, asi que su ancho es el natural) + los gaps.
+   */
+  const measureMinWidth = (): number | null => {
+    const nav = asideRef.current?.querySelector<HTMLElement>('[data-drawer-tabs]');
+    if (!nav) return null;
+    const kids = Array.from(nav.children) as HTMLElement[];
+    if (kids.length === 0) return null;
+    const cs = window.getComputedStyle(nav);
+    const gap = parseFloat(cs.columnGap) || 0;
+    const pad = (parseFloat(cs.paddingLeft) || 0) + (parseFloat(cs.paddingRight) || 0);
+    const tabs = kids.reduce((sum, el) => sum + el.getBoundingClientRect().width, 0);
+    return Math.min(Math.ceil(tabs + gap * (kids.length - 1) + pad), window.innerWidth);
+  };
   useEffect(() => {
     if (!rendered) return;
-    // Medir despues de pintar: scrollWidth del nav de pestañas + su padding.
+    // Medir DESPUES de pintar (los hijos ya tienen su ancho definitivo).
     const raf = requestAnimationFrame(() => {
-      const nav = asideRef.current?.querySelector<HTMLElement>('[data-drawer-tabs]');
-      if (!nav) return;
-      const min = Math.min(Math.max(560, nav.scrollWidth + 26), window.innerWidth);
+      const min = measureMinWidth();
+      if (min === null) return;
       minWRef.current = min;
+      // Se respeta el ancho guardado; solo se sube si quedo por debajo del
+      // minimo, o se baja si ya no cabe en la ventana.
       setWidth((w) => Math.min(Math.max(w ?? min, min), window.innerWidth));
     });
     return () => cancelAnimationFrame(raf);
+  }, [rendered]);
+  // Si la ventana se achica, el drawer se achica con ella (nunca mas ancho
+  // que la pantalla, nunca por debajo del minimo de las pestañas).
+  useEffect(() => {
+    if (!rendered) return;
+    const onResize = () => {
+      const min = measureMinWidth() ?? minWRef.current;
+      minWRef.current = min;
+      setWidth((w) => (w === null ? null : Math.min(Math.max(w, min), window.innerWidth)));
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
   }, [rendered]);
   const onResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -877,6 +911,9 @@ function ProductThumb({ src }: { src: string | null }) {
   if (src && !broken) {
     return (
       <span className={shell}>
+        {/* <img> a proposito: la foto viene del CDN del marketplace y no hay
+            dominios remotos configurados para next/image. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={src}
           alt=""
