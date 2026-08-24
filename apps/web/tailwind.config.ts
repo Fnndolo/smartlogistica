@@ -46,7 +46,18 @@ const config: Config = {
         accent: {
           DEFAULT: 'hsl(var(--accent))',
           foreground: 'hsl(var(--accent-foreground))',
+          /* Texto sobre lavado cobalto (mockup --cobalt-ink). */
+          ink: 'hsl(var(--accent-ink))',
+          deep: 'hsl(var(--accent-deep))',
         },
+        /* Tokens "Cobalto": superficie interna, micro-etiquetas y lavado del acento. */
+        surface: 'hsl(var(--surface))',
+        hint: 'hsl(var(--hint))',
+        wash: {
+          DEFAULT: 'hsl(var(--wash))',
+          strong: 'hsl(var(--wash-strong))',
+        },
+        scrim: 'hsl(var(--scrim))',
         popover: {
           DEFAULT: 'hsl(var(--popover))',
           foreground: 'hsl(var(--popover-foreground))',

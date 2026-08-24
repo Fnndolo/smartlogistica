@@ -50,6 +50,9 @@ export const orderItemSummarySchema = z.object({
   name: z.string(),
   quantity: z.number().int(),
   unitPrice: z.string(),
+  /** Foto del producto: sale del rawPayload del marketplace (VTEX la trae en
+   *  cada item), no se persiste — asi la tienen tambien los pedidos viejos. */
+  imageUrl: z.string().nullable().default(null),
 });
 
 export type OrderItemSummary = z.infer<typeof orderItemSummarySchema>;

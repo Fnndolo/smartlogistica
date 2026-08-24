@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatRelative } from 'date-fns/formatRelative';
 import { es } from 'date-fns/locale/es';
-import { AlertTriangle, Check, Loader2, Pencil, Plug, Route, Trash2 } from 'lucide-react';
+import { AlertTriangle, Check, Loader2, Pencil, Plug, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import type { SkydropxConnectionSummary, SkydropxMode } from '@smartlogistica/shared';
 
@@ -16,8 +16,9 @@ import { Label } from '@/components/ui/label';
 import { ApiError, api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 
+/** Baldosa del logo de Skydropx (cuadrado con su fondo horneado). */
 const ICON_TILE =
-  'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-sky-500/20 bg-sky-500/10 text-sky-600 dark:text-sky-400';
+  'flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border';
 
 const MODE_LABEL: Record<SkydropxMode, string> = {
   sandbox: 'Sandbox',
@@ -72,7 +73,8 @@ export function SkydropxConnectionCard({ initial }: { initial?: SkydropxConnecti
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-3">
           <div className={ICON_TILE}>
-            <Route className="h-4 w-4" />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/carriers/skydropx.webp" alt="" className="h-full w-full object-cover" />
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">

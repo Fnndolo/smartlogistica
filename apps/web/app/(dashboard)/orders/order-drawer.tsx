@@ -19,23 +19,22 @@ import {
   Info,
   Loader2,
   Mail,
-  MapPin,
   Megaphone,
   MessageCircle,
   MessageSquare,
-  Package,
   Paperclip,
-  Phone,
   PlusCircle,
   ReceiptText,
   Reply,
   ScanBarcode,
   ScanLine,
   Send,
+  Smartphone,
   SmilePlus,
   Trash2,
   Truck,
   Undo2,
+  User,
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -53,7 +52,6 @@ import type {
 } from '@smartlogistica/shared';
 
 import { useCurrentUser } from '@/components/providers/current-user-provider';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ApiError, api } from '@/lib/api-client';
 import { cn, titleCaseName } from '@/lib/utils';
@@ -62,7 +60,7 @@ import { setActiveChat } from './active-chat';
 import { ClaimChip } from './claim-chip';
 import { GuidePanel } from './guide-panel';
 import { InvoicePanel } from './invoice-panel';
-import { platformOf, usePlatforms } from './platform-badge';
+import { BADGE_COLOR_CLASSES, platformOf, usePlatforms } from './platform-badge';
 import { useOrderActions } from './use-order-actions';
 import { WhatsappPanel } from './whatsapp-panel';
 import { compressImage } from '@/lib/compress-image';
@@ -82,6 +80,12 @@ import { orderDetailQuery, orderMessagesQuery } from './order-queries';
 import { useOrdersStream } from './use-orders-stream';
 
 type Tab = 'detalle' | 'conversacion' | 'facturar' | 'guia' | 'actividad' | 'whatsapp';
+
+/* Ids que amarran cada pestaña con su panel (role=tab / role=tabpanel): un
+   lector de pantalla anuncia "pestaña 2 de 6, seleccionada" y salta al panel
+   correcto. Solo hay UN drawer abierto a la vez, asi que no colisionan. */
+const tabId = (t: Tab) => `drawer-tab-${t}`;
+const paneId = (t: Tab) => `drawer-pane-${t}`;
 
 /** Adjunto en STAGING: elegido/pegado/arrastrado, aun sin enviar. */
 interface StagedFile {
@@ -247,7 +251,7 @@ export function OrderDrawer({
     <div className="fixed inset-0 z-40">
       <div
         className={cn(
-          'absolute inset-0 bg-[rgba(5,8,14,0.55)] backdrop-blur-[2px] transition-opacity duration-200',
+          'absolute inset-0 bg-scrim/55 backdrop-blur-[2px] transition-opacity duration-200',
           shown ? 'opacity-100' : 'opacity-0',
         )}
         onClick={onClose}
@@ -273,7 +277,9 @@ export function OrderDrawer({
           aria-label="Ajustar ancho"
           title="Arrastra para ajustar el ancho"
         >
-          <div className="mx-auto h-full w-[3px] bg-transparent transition-colors group-hover:bg-primary/35 group-active:bg-primary/55" />
+          {/* El agarre se tiñe de COBALTO (--accent), no de la tinta casi negra
+              de --primary: al arrastrar, la linea debe leerse como el acento. */}
+          <div className="mx-auto h-full w-[3px] bg-transparent transition-colors group-hover:bg-accent/35 group-active:bg-accent/55" />
         </div>
         <DrawerContent
           key={rendered.id}
@@ -307,6 +313,11 @@ function DrawerContent({
   const canManage = me?.role === 'OWNER' || me?.role === 'ADMIN';
 
   const { data: detail } = useQuery(orderDetailQuery(order.id));
+
+  // Nombre + color de la plataforma contra el CATALOGO (igual que el badge de
+  // la tabla): la pastilla de la cabecera (.pill-vtex del mockup).
+  const { data: platforms = [] } = usePlatforms();
+  const platform = platformOf(order, platforms);
 
   // Facturado POR FUERA de SmartLogistica (cerrado directo en VTEX, sin sede):
   // solo trazabilidad — sin Facturar ni Guia.
@@ -359,94 +370,154 @@ function DrawerContent({
 
   return (
     <>
-      {/* Header */}
-      <header className="flex items-start justify-between gap-3 border-b border-border px-4 pb-3 pt-3 md:px-5 md:pt-4">
-        {/* Cel: flecha de volver (equivale al boton atras del sistema). */}
-        <button
-          type="button"
-          onClick={onClose}
-          className="-ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground active:bg-muted md:hidden"
-          aria-label="Volver a los pedidos"
-        >
-          <ArrowLeft className="h-5 w-5" />
-        </button>
-        <div className="min-w-0 flex-1">
-          {/* Cel: el N° y el estado usan TODO el ancho, centrados (sin partirse
-              en dos lineas por culpa del boton). En pc, a la izquierda. */}
-          <div className="flex items-center justify-center gap-2 md:justify-start">
-            <span className="truncate whitespace-nowrap font-mono text-[12.5px] text-muted-foreground md:text-[11px]">
-              #{order.externalId}
-            </span>
-            <StatusPill status={order.status} />
-          </div>
-          {/* Cel: el boton de tomar/soltar CENTRADO verticalmente contra el
-              bloque nombre + cedula (las filas que haya). */}
-          <div className="mt-1.5 flex items-center justify-between gap-3 md:mt-1">
-            <div className="min-w-0">
-              <h2 className="truncate text-[19px] font-semibold tracking-tight md:text-[17px]">
-                {titleCaseName(order.customerName)}
-              </h2>
-              {order.customerDocument ? (
-                <p className="font-mono text-[12px] text-muted-foreground/80 md:text-[11px]">
-                  CC {order.customerDocument}
-                </p>
-              ) : null}
-            </div>
-            <span className="shrink-0 md:hidden">
-              <DrawerClaim order={detail ?? order} />
-            </span>
-          </div>
-        </div>
-        {/* Escritorio: tomar/soltar + X grande, separadas para no equivocarse. */}
-        <div className="hidden shrink-0 items-center gap-2 md:flex">
-          <DrawerClaim order={detail ?? order} />
+      {/* Cabecera COMPLETA (.dhead del mockup): identidad + pestañas viven en
+          la MISMA superficie, con un solo lavado cobalto que baja de arriba
+          (7% -> transparente al 85%) y UNA sola hairline al final. */}
+      <div className="border-b border-border bg-[linear-gradient(to_bottom,hsl(var(--accent)/0.07),transparent_85%)]">
+        {/* Header */}
+        <header className="flex items-start justify-between gap-3 px-4 pb-0 pt-3 md:px-[22px] md:pt-[18px]">
+          {/* Cel: flecha de volver (equivale al boton atras del sistema). */}
           <button
             type="button"
             onClick={onClose}
-            className="ml-1.5 flex h-9 w-9 items-center justify-center rounded-lg border border-transparent text-muted-foreground hover:border-border hover:bg-muted hover:text-foreground"
-            aria-label="Cerrar"
+            className="-ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors active:bg-wash active:text-accent-ink max-md:h-10 max-md:w-10 md:hidden"
+            aria-label="Volver a los pedidos"
           >
-            <X className="h-[18px] w-[18px]" />
+            <ArrowLeft className="h-5 w-5" />
           </button>
-        </div>
-      </header>
-
-      {/* Tabs */}
-      {/* overflow-y-hidden: NUNCA scroll vertical aqui (aparecia una barrita
-          sin sentido). El lateral (auto) solo sale si las tabs no caben. */}
-      <nav data-drawer-tabs className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-border px-3">
-        {tabs.map((t) => {
-          const active = tab === t.id;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setTab(t.id)}
-              className={cn(
-                // Inactivas grisaceas y finas; la activa en negrilla suave.
-                // En cel todo un punto mas grande (proporcional a la pantalla).
-                'relative flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 py-3 text-[14.5px] transition-colors md:px-2.5 md:py-2.5 md:text-[12.5px]',
-                active
-                  ? 'font-semibold text-foreground'
-                  : 'font-normal text-muted-foreground/75 hover:text-foreground',
-              )}
-            >
-              <t.icon className="h-4 w-4 md:h-3.5 md:w-3.5" />
-              {t.label}
-              {active ? (
-                <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-accent" />
+          <div className="min-w-0 flex-1">
+            {/* Cel: el N° y el estado usan TODO el ancho, centrados (sin partirse
+                en dos lineas por culpa del boton). En pc, a la izquierda. */}
+            <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 md:justify-start">
+              <span className="min-w-0 max-w-full truncate whitespace-nowrap text-[19px] font-extrabold tracking-[-0.02em]">
+                <span className="font-semibold text-hint">Pedido</span> {order.externalId}
+              </span>
+              {/* Pastilla de plataforma (.pill-vtex del mockup): va pegada al
+                  numero del pedido; el tinte sale del catalogo (VTEX = rosa). */}
+              <span
+                className={cn(
+                  'inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-[3px] text-[11.5px] font-bold tracking-[0.01em]',
+                  BADGE_COLOR_CLASSES[platform.color],
+                )}
+              >
+                {platform.name}
+              </span>
+              <StatusPill status={order.status} />
+              {order.addressStatus === 'confirmed' ? (
+                <span className="inline-flex shrink-0 items-center gap-[5px] whitespace-nowrap rounded-full bg-emerald-500/10 px-2.5 py-[3px] text-[11.5px] font-bold tracking-[0.01em] text-emerald-600 dark:text-emerald-400">
+                  <Check className="h-3 w-3" />
+                  Dirección confirmada
+                </span>
               ) : null}
+            </div>
+            {/* Cel: el boton de tomar/soltar CENTRADO verticalmente contra la
+                tira de datos (.dhead-sub). */}
+            <div className="mt-1.5 flex items-center justify-between gap-3">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-3.5 gap-y-1 text-[13px] text-muted-foreground">
+                <span className="min-w-0 break-words">
+                  <b className="font-bold text-foreground">{titleCaseName(order.customerName)}</b>
+                  {order.customerDocument ? (
+                    <>
+                      {' · CC '}
+                      <span className="font-mono text-[0.92em] tracking-[0.02em]">
+                        {order.customerDocument}
+                      </span>
+                    </>
+                  ) : null}
+                </span>
+                <span className="whitespace-nowrap tabular-nums">
+                  <b className="font-bold text-foreground">
+                    {formatCurrency(order.totalValue, order.currency)}
+                  </b>{' '}
+                  · {order.totalUnits} u.
+                </span>
+                {/* Creado: vivia en una casilla del Detalle; el mockup lo pone
+                    aqui, en la tira de datos de la cabecera. */}
+                <span className="whitespace-nowrap tabular-nums">
+                  Creado{' '}
+                  <b className="font-bold text-foreground">
+                    {format(new Date(order.marketplaceCreatedAt), "d MMM yyyy '·' HH:mm", {
+                      locale: es,
+                    })}
+                  </b>
+                </span>
+              </div>
+              <span className="shrink-0 md:hidden">
+                <DrawerClaim order={detail ?? order} />
+              </span>
+            </div>
+          </div>
+          {/* Escritorio: tomar/soltar + X grande, separadas para no equivocarse. */}
+          <div className="hidden shrink-0 items-center gap-2 md:flex">
+            <DrawerClaim order={detail ?? order} />
+            <button
+              type="button"
+              onClick={onClose}
+              className="ml-1.5 flex h-9 w-9 items-center justify-center rounded-[11px] border border-transparent text-muted-foreground transition-colors hover:border-input hover:bg-wash hover:text-accent-ink max-md:h-10 max-md:w-10"
+              aria-label="Cerrar"
+            >
+              <X className="h-[18px] w-[18px]" />
             </button>
-          );
-        })}
-      </nav>
+          </div>
+        </header>
+
+        {/* Tabs */}
+        {/* overflow-y-hidden: NUNCA scroll vertical aqui (aparecia una barrita
+            sin sentido). El lateral (auto) solo sale si las tabs no caben. */}
+        <nav
+          data-drawer-tabs
+          role="tablist"
+          aria-label="Secciones del pedido"
+          className="scrollbar-none flex items-center gap-1 overflow-x-auto overflow-y-hidden px-4 pb-2.5 pt-3.5 md:px-[22px]"
+        >
+          {tabs.map((t) => {
+            const active = tab === t.id;
+            const unread = t.id === 'conversacion' ? (order.unreadCount ?? 0) : 0;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                id={tabId(t.id)}
+                role="tab"
+                aria-selected={active}
+                aria-controls={paneId(t.id)}
+                onClick={() => setTab(t.id)}
+                className={cn(
+                  // Pastilla cobalto para la activa; inactivas grisaceas con
+                  // hover al lavado (texto = --cobalt-ink, la tinta profunda del
+                  // mockup). En cel todo un punto mas grande y con 40px de toque.
+                  'relative flex shrink-0 items-center gap-[7px] whitespace-nowrap rounded-[10px] px-3.5 py-2 text-[14px] font-bold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-card max-md:min-h-[40px] md:px-3.5 md:py-[7px] md:text-[13px]',
+                  active
+                    ? 'bg-accent text-accent-foreground shadow-[0_4px_14px_-4px_hsl(var(--accent)/0.35)]'
+                    : 'text-muted-foreground hover:bg-wash hover:text-accent-ink',
+                )}
+              >
+                <t.icon className="h-4 w-4 md:h-[15px] md:w-[15px]" />
+                {t.label}
+                {unread > 0 ? (
+                  <span
+                    className={cn(
+                      'rounded-full px-1.5 py-px text-[10px] font-extrabold tabular-nums',
+                      active
+                        ? 'bg-white/25 text-accent-foreground'
+                        : 'bg-destructive text-destructive-foreground',
+                    )}
+                  >
+                    {unread}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </nav>
+      </div>
 
       {/* Content: TODAS las pestañas quedan montadas (apiladas, las inactivas
           invisibles). Asi al cambiar de pestaña no se pierde nada: scroll del
           chat, items editados en Facturar, direccion/paquete en Guia, y las
           operaciones en curso siguen mostrando su estado al volver. */}
       <div className="relative min-h-0 flex-1">
-        <TabPane active={tab === 'conversacion'}>
+        <TabPane tab="conversacion" active={tab === 'conversacion'}>
           <ConversacionTab
             orderId={order.id}
             initialUnread={order.unreadCount ?? 0}
@@ -454,15 +525,15 @@ function DrawerContent({
             focusMessageId={focusMessageId}
           />
         </TabPane>
-        <TabPane active={tab === 'detalle'} scroll>
+        <TabPane tab="detalle" active={tab === 'detalle'} scroll>
           <DetalleTab order={order} detail={detail} onDeleted={onClose} />
         </TabPane>
         {canManage && !external ? (
           <>
-            <TabPane active={tab === 'facturar'} scroll>
+            <TabPane tab="facturar" active={tab === 'facturar'} scroll>
               <InvoicePanel orderId={order.id} manual={order.provider === 'manual'} />
             </TabPane>
-            <TabPane active={tab === 'guia'} scroll>
+            <TabPane tab="guia" active={tab === 'guia'} scroll>
               <GuidePanel
                 orderId={order.id}
                 manual={order.provider === 'manual'}
@@ -472,12 +543,12 @@ function DrawerContent({
           </>
         ) : null}
         {canManage ? (
-          <TabPane active={tab === 'actividad'} scroll>
+          <TabPane tab="actividad" active={tab === 'actividad'} scroll>
             <ActividadTab orderId={order.id} />
           </TabPane>
         ) : null}
         {canManage ? (
-          <TabPane active={tab === 'whatsapp'}>
+          <TabPane tab="whatsapp" active={tab === 'whatsapp'}>
             <WhatsappPanel orderId={order.id} active={tab === 'whatsapp'} />
           </TabPane>
         ) : null}
@@ -498,7 +569,7 @@ function DrawerClaim({ order }: { order: OrderSummary }) {
       <button
         type="button"
         onClick={() => claim(order.id)}
-        className="flex h-8 items-center gap-1.5 rounded-md border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground shadow-card transition-colors hover:border-accent/40 hover:text-foreground"
+        className="flex h-8 items-center gap-1.5 rounded-[11px] border border-input bg-card px-3 text-[12.5px] font-extrabold text-muted-foreground transition-colors hover:border-accent hover:text-accent max-md:h-10 max-md:px-3.5"
       >
         <Hand className="h-3.5 w-3.5" />
         Tomar pedido
@@ -506,23 +577,22 @@ function DrawerClaim({ order }: { order: OrderSummary }) {
     );
   }
   return (
-    <span className="flex items-center gap-2">
+    /* .claim del mockup: ficha + texto DENTRO de una sola pastilla. */
+    <span className="ml-auto inline-flex items-center gap-2 rounded-full border border-border bg-surface py-1 pl-1 pr-3 text-[12px] font-semibold text-muted-foreground">
       <ClaimChip userId={c.userId} name={c.name} mine={c.mine} />
       {c.mine ? (
-        <span className="flex items-center gap-1.5 whitespace-nowrap text-[11.5px] text-muted-foreground">
+        <span className="flex items-center gap-1.5 whitespace-nowrap">
           Lo tienes tú
           <button
             type="button"
             onClick={() => unclaim(order.id)}
-            className="text-[11px] underline underline-offset-2 hover:text-destructive"
+            className="inline-flex items-center text-[11px] underline underline-offset-2 hover:text-destructive max-md:min-h-[40px] max-md:px-1"
           >
             Soltar
           </button>
         </span>
       ) : (
-        <span className="max-w-[110px] truncate whitespace-nowrap text-[11.5px] text-muted-foreground">
-          {c.name} lo tiene
-        </span>
+        <span className="max-w-[110px] truncate whitespace-nowrap">{c.name} lo tiene</span>
       )}
     </span>
   );
@@ -533,17 +603,30 @@ function DrawerClaim({ order }: { order: OrderSummary }) {
  * visibility:hidden (conserva scroll y estado, no intercepta clicks).
  */
 function TabPane({
+  tab,
   active,
   scroll,
   children,
 }: {
+  /** Pestaña a la que pertenece: amarra id/aria-labelledby con su boton. */
+  tab: Tab;
   active: boolean;
   scroll?: boolean;
   children: React.ReactNode;
 }) {
   return (
+    /* .pane.on del mockup: la que pasa al frente ENTRA (sube 6px y aparece).
+       La clase solo existe mientras la pestaña esta activa, asi que al volver a
+       ella la animacion se dispara de nuevo — sin desmontar nada. */
     <div
-      className={cn('absolute inset-0', scroll && 'overflow-y-auto', !active && 'invisible')}
+      id={paneId(tab)}
+      role="tabpanel"
+      aria-labelledby={tabId(tab)}
+      className={cn(
+        'absolute inset-0',
+        scroll && 'overflow-y-auto',
+        active ? 'pane-rise' : 'invisible',
+      )}
       aria-hidden={!active}
     >
       {children}
@@ -553,32 +636,61 @@ function TabPane({
 
 // === Tab: Detalle ===
 
-/** Estado de la confirmacion de direccion por WhatsApp. */
+/**
+ * Pastilla en linea de una fila del kv (.pill del mockup, a 10.5px): el estado
+ * viaja PEGADO al dato al que pertenece (teléfono / dirección).
+ */
+function KvPill({
+  tone,
+  icon: Icon,
+  children,
+}: {
+  tone: 'ok' | 'warn' | 'muted';
+  icon?: typeof Mail;
+  children: React.ReactNode;
+}) {
+  return (
+    <span
+      className={cn(
+        'inline-flex shrink-0 items-center gap-[4px] whitespace-nowrap rounded-full px-2 py-[2px] text-[10.5px] font-extrabold tracking-[0.01em]',
+        tone === 'ok' && 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+        tone === 'warn' && 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
+        tone === 'muted' && 'bg-wash text-hint',
+      )}
+    >
+      {Icon ? <Icon className="h-[11px] w-[11px]" /> : null}
+      {children}
+    </span>
+  );
+}
+
+/**
+ * Detalle de la confirmacion de direccion por WhatsApp: la FRASE (y la
+ * dirección nueva si la modificó). El ESTADO en si lo lleva la pastilla en
+ * linea de la fila «Dirección» (mockup) — aqui no se repite.
+ */
 function AddressConfirmation({ order }: { order: OrderSummary }) {
   if (!order.addressStatus) {
     return (
-      <div className="flex items-start gap-2.5 rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-        <MessageSquare className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <p className="text-[12.5px] text-muted-foreground">
         El cliente aún no confirma su dirección (WhatsApp).
-      </div>
+      </p>
     );
   }
   if (order.addressStatus === 'confirmed') {
     return (
-      <div className="flex items-start gap-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
-        <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <p className="text-[12.5px] text-muted-foreground">
         El cliente confirmó que su dirección es correcta.
-      </div>
+      </p>
     );
   }
   return (
-    <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 px-3 py-2.5 text-xs">
-      <div className="flex items-center gap-2 font-medium text-amber-700 dark:text-amber-400">
-        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+    <div className="text-[12.5px]">
+      <p className="min-w-0 break-words text-muted-foreground">
         El cliente MODIFICÓ su dirección — verifícala antes de generar la guía.
-      </div>
+      </p>
       {order.confirmedAddress ? (
-        <p className="mt-1.5 whitespace-pre-wrap break-words text-foreground">
+        <p className="mt-1.5 whitespace-pre-wrap break-words font-semibold text-foreground">
           {order.confirmedAddress}
         </p>
       ) : null}
@@ -600,69 +712,146 @@ function DetalleTab({
   const external = !order.warehouseId && order.status !== 'ready-for-handling';
   const me = useCurrentUser();
   const isAdminRole = me?.role === 'OWNER' || me?.role === 'ADMIN';
-  // Nombre de plataforma contra el CATALOGO (igual que el badge de la tabla):
-  // si la renombran en Ajustes, aqui tambien cambia.
-  const { data: platforms = [] } = usePlatforms();
   return (
-    <div className="space-y-6 p-5">
+    <div className="space-y-5 p-[22px]">
       {external ? (
-        <div className="flex items-start gap-2.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-[12.5px] text-amber-800 dark:text-amber-400">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>
+        <div className="flex items-start gap-2.5 rounded-[12px] bg-amber-500/10 px-3.5 py-[11px] text-[12.5px] text-amber-600 dark:text-amber-400">
+          <AlertTriangle className="mt-px h-[15px] w-[15px] shrink-0" />
+          <span className="min-w-0 break-words">
             Este pedido fue facturado <b>por fuera de SmartLogística</b> (cerrado directamente en
             VTEX). Queda como trazabilidad: no permite facturar ni generar guía y no tiene
             seguimiento de envío.
           </span>
         </div>
       ) : null}
-      <section className="grid grid-cols-2 gap-3">
-        <Stat label="Unidades" value={String(order.totalUnits)} />
-        <Stat label="Total" value={formatCurrency(order.totalValue, order.currency)} />
-        <Stat
-          label="Creado"
-          value={format(new Date(order.marketplaceCreatedAt), "d MMM yyyy '·' HH:mm", { locale: es })}
-        />
-        <Stat label="Plataforma" value={platformOf(order, platforms).name} />
-      </section>
-
-      {/* Contacto */}
-      <section className="space-y-2">
-        <SectionTitle>Contacto</SectionTitle>
-        <InfoRow icon={Mail} value={detail?.customerEmail} placeholder="Sin email" />
-        <InfoRow icon={Phone} value={detail?.customerPhone} placeholder="Sin teléfono" />
-        <InfoRow icon={MapPin} value={detail?.shippingAddress} placeholder="Sin dirección de envío" />
-        <AddressConfirmation order={order} />
+      {/* Cliente (el mockup abre el Detalle DIRECTO con esta sección: unidades,
+          total, creado y plataforma viven ahora en la cabecera y en el total
+          del pedido, no en casillas). */}
+      <section className="space-y-2.5">
+        <SectionTitle icon={User} hint="de VTEX + confirmación WhatsApp">
+          Cliente
+        </SectionTitle>
+        <div className="rounded-[14px] border border-border bg-surface px-4 py-3.5">
+          {/* .kv del mockup. La columna fija de etiquetas se APILA por debajo de
+              ~400px: en un panel angosto dejaba al valor sin ancho util. */}
+          <dl className="grid grid-cols-1 text-[13.5px] [&>dd:last-of-type]:pb-0 [&>dd]:pb-2.5 min-[400px]:grid-cols-[110px_minmax(0,1fr)] min-[400px]:gap-y-[9px] min-[400px]:[&>dd]:pb-0 md:grid-cols-[130px_minmax(0,1fr)]">
+            <InfoRow label="Email" value={detail?.customerEmail} placeholder="Sin email" />
+            <InfoRow
+              label="Teléfono"
+              value={detail?.customerPhone}
+              placeholder="Sin teléfono"
+              /* «WhatsApp activo» solo cuando consta que el cliente RESPONDIÓ
+                 por ahi (hay confirmación de dirección): la pastilla afirma
+                 algo cierto, no una suposicion por tener numero. */
+              pill={
+                detail?.customerPhone && order.addressStatus ? (
+                  <KvPill tone="ok" icon={MessageCircle}>
+                    WhatsApp activo
+                  </KvPill>
+                ) : null
+              }
+            />
+            <InfoRow
+              label="Dirección"
+              value={detail?.shippingAddress}
+              placeholder="Sin dirección de envío"
+              pill={
+                order.addressStatus === 'confirmed' ? (
+                  <KvPill tone="ok" icon={Check}>
+                    Confirmada
+                  </KvPill>
+                ) : order.addressStatus === 'modified' ? (
+                  <KvPill tone="warn" icon={AlertTriangle}>
+                    Modificada
+                  </KvPill>
+                ) : (
+                  <KvPill tone="muted" icon={MessageSquare}>
+                    Sin responder
+                  </KvPill>
+                )
+              }
+            />
+          </dl>
+          <div className="mt-3 border-t border-dashed border-input pt-3">
+            <AddressConfirmation order={order} />
+          </div>
+        </div>
       </section>
 
       {/* Productos */}
-      <section className="space-y-2">
-        <SectionTitle>Productos ({items.length})</SectionTitle>
-        <div className="overflow-hidden rounded-lg border border-border">
+      <section className="space-y-2.5">
+        <SectionTitle
+          icon={Smartphone}
+          hint={items.length > 1 ? `${items.length} artículos` : undefined}
+        >
+          Productos
+        </SectionTitle>
+        <div className="rounded-[14px] border border-border bg-surface px-4 py-3.5">
           {items.map((item, idx) => (
             <div
               key={`${item.sku}-${idx}`}
               className={cn(
-                'flex items-start gap-3 px-3 py-2.5 text-sm',
-                idx > 0 && 'border-t border-border',
+                // flex-wrap: en un panel angosto el precio baja a su propia
+                // linea (alineado a la derecha) en vez de estrujar el nombre.
+                'flex flex-wrap items-center gap-x-3.5 gap-y-1.5 py-3',
+                idx > 0 && 'border-t border-dashed border-input',
               )}
             >
-              <Package className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-              <div className="min-w-0 flex-1">
-                <p className="break-words font-medium leading-snug">{item.name}</p>
-                <p className="font-mono text-[11px] text-muted-foreground">{item.sku}</p>
-              </div>
-              <div className="shrink-0 text-right">
-                <p className="tabular-nums">
-                  {item.quantity} &times; {formatCurrency(item.unitPrice, order.currency)}
+              <ProductThumb src={item.imageUrl} />
+              <div className="min-w-[min(100%,150px)] flex-1">
+                <p className="break-words text-[14px] font-extrabold leading-snug">{item.name}</p>
+                <p className="mt-0.5 flex flex-wrap gap-x-2.5 text-[12px] text-hint">
+                  <span>Cant. {item.quantity}</span>
+                  <span className="break-all font-mono text-[0.92em] tracking-[0.02em]">
+                    {item.sku}
+                  </span>
                 </p>
-                <p className="font-mono text-[11px] text-muted-foreground tabular-nums">
+              </div>
+              <div className="ml-auto shrink-0 text-right">
+                <p className="text-[15px] font-extrabold tabular-nums tracking-[-0.01em]">
                   {formatCurrency(lineTotal(item.unitPrice, item.quantity), order.currency)}
+                </p>
+                <p className="text-[11px] tabular-nums text-hint">
+                  {item.quantity} &times; {formatCurrency(item.unitPrice, order.currency)}
                 </p>
               </div>
             </div>
           ))}
+          <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-border pt-3 text-[15px]">
+            <span className="text-muted-foreground">Total del pedido</span>
+            <b className="text-[17px] font-extrabold tabular-nums tracking-[-0.01em]">
+              {formatCurrency(order.totalValue, order.currency)}
+            </b>
+          </div>
         </div>
       </section>
+
+      {/* Ruta del envío: el recorrido de 6 tramos del mockup (.route). Los
+          facturados POR FUERA no tienen seguimiento — ahí no se pinta. */}
+      {!external ? (
+        <section className="space-y-2.5">
+          <SectionTitle
+            icon={Truck}
+            hint={
+              order.guideNumber ? (
+                <>
+                  rastreo Coordinadora · guía{' '}
+                  <span className="font-mono text-[0.92em] tracking-[0.02em]">
+                    {order.guideNumber}
+                  </span>
+                </>
+              ) : (
+                'aún sin guía'
+              )
+            }
+          >
+            Ruta del envío
+          </SectionTitle>
+          <div className="rounded-[14px] border border-border bg-surface px-4 py-3.5">
+            <ShipRoute order={order} />
+          </div>
+        </section>
+      ) : null}
 
       {/* Eliminar (solo pedidos MONTADOS a mano): se borra TODO el pedido.
           Un pedido ya COMPLETADO (factura + guia) solo lo elimina un admin —
@@ -670,6 +859,121 @@ function DetalleTab({
       {order.provider === 'manual' && (isAdminRole || order.status !== 'invoiced') ? (
         <DeleteOrderZone order={order} onDeleted={onDeleted} />
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * Casilla 44x44 del producto (.product-ico): la FOTO que trae el marketplace y,
+ * si no hay o no carga, el chip de icono con el lavado cobalto.
+ * `broken` es estado puramente visual del <img>.
+ */
+function ProductThumb({ src }: { src: string | null }) {
+  const [broken, setBroken] = useState(false);
+  // MISMA silueta en las dos variantes (44px, rounded-xl, sin borde): la foto
+  // solo tapa el degradado diagonal del lavado cobalto (.product-ico).
+  const shell =
+    'grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-xl bg-[linear-gradient(135deg,hsl(var(--wash)),hsl(var(--wash-strong)))]';
+  if (src && !broken) {
+    return (
+      <span className={shell}>
+        <img
+          src={src}
+          alt=""
+          loading="lazy"
+          onError={() => setBroken(true)}
+          className="h-full w-full object-cover"
+        />
+      </span>
+    );
+  }
+  return (
+    <span className={cn(shell, 'text-accent')}>
+      <Smartphone className="h-[22px] w-[22px]" />
+    </span>
+  );
+}
+
+/** Los 6 tramos del recorrido del pedido (mockup .route). */
+const ROUTE_LEGS = ['Pedido', 'Facturado', 'Guía', 'Origen', 'Reparto', 'Entregado'] as const;
+
+/**
+ * Tramo ACTUAL (1..6): se lee del rastreo de Coordinadora cuando lo hay y, si
+ * no, de lo que ya se hizo en la plataforma (factura / guía).
+ */
+function routeStep(order: OrderSummary): number {
+  const t = (order.shippingStatus ?? '').toUpperCase();
+  if (/ENTREGAD/.test(t) || order.shippingState === 'entregado') return 6;
+  if (/REPARTO/.test(t) || /TERMINAL\s+(DE\s+)?DESTINO/.test(t)) return 5;
+  if (
+    /TRANSPORTE/.test(t) ||
+    /TERMINAL\s+(DE\s+)?ORIGEN/.test(t) ||
+    order.shippingState === 'en_transito' ||
+    order.shippingState === 'novedad'
+  ) {
+    return 4;
+  }
+  if (order.guideNumber) return 3;
+  if (order.status === 'invoiced') return 2;
+  return 1;
+}
+
+/**
+ * Ruta del envío: linea de 3px entre tramos, punto de 17px (relleno = hecho,
+ * hueco con pulso = donde va ahora) y etiqueta de 10.5px.
+ */
+function ShipRoute({ order }: { order: OrderSummary }) {
+  const step = routeStep(order);
+  const delivered = step === ROUTE_LEGS.length;
+  return (
+    /* Los 6 tramos necesitan ~55px cada uno para que la etiqueta («Entregado»)
+       quepa en una linea. Por debajo de eso NO se estrujan ni se salen de la
+       tarjeta: el recorrido scrollea horizontalmente dentro de su propia caja. */
+    <div className="-mx-1 overflow-x-auto px-1 scrollbar-none">
+      <div
+        className="flex min-w-[330px] items-start px-[2px] pb-[2px] pt-1.5"
+        title={order.shippingStatus ?? undefined}
+      >
+        {ROUTE_LEGS.map((label, i) => {
+          const n = i + 1;
+          const done = n < step || delivered;
+          const now = n === step && !delivered;
+          return (
+            <div
+              key={label}
+              className="relative flex min-w-0 flex-1 flex-col items-center gap-[7px]"
+            >
+              {n > 1 ? (
+                <span
+                  aria-hidden
+                  className={cn(
+                    'absolute left-[-50%] top-2 h-[3px] w-full rounded-[2px]',
+                    done ? 'bg-accent' : 'bg-input',
+                  )}
+                />
+              ) : null}
+              <span
+                aria-hidden
+                className={cn(
+                  'relative z-[1] h-[17px] w-[17px] rounded-full border-[3px] bg-card',
+                  done && 'ring-halo border-accent bg-accent',
+                  now && 'animate-route-pulse border-accent',
+                  !done && !now && 'border-input',
+                )}
+              />
+              <span
+                className={cn(
+                  'whitespace-nowrap text-center text-[10.5px] font-bold',
+                  // .route .leg.done/.now .lbl del mockup: --cobalt-ink.
+                  done || now ? 'text-accent-ink' : 'text-hint',
+                )}
+              >
+                {label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -697,13 +1001,21 @@ function DeleteOrderZone({ order, onDeleted }: { order: OrderSummary; onDeleted?
   });
 
   return (
-    <section className="space-y-2">
-      <SectionTitle>Zona de peligro</SectionTitle>
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/25 bg-destructive/[0.04] px-3 py-2.5">
-        <p className="text-xs text-muted-foreground">
+    <section className="space-y-2.5">
+      <SectionTitle icon={AlertTriangle} tone="destructive">
+        Zona de peligro
+      </SectionTitle>
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[14px] border border-destructive/25 bg-destructive/[0.04] px-4 py-3.5">
+        <p className="min-w-[min(100%,180px)] flex-1 text-[12.5px] text-muted-foreground">
           Este pedido fue montado a mano: puedes eliminarlo del todo.
         </p>
-        <Button variant="outline" size="sm" onClick={() => setConfirming(true)} className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive">
+        {/* .btn-ghost del mockup, tintado de peligro (vive en la zona roja). */}
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setConfirming(true)}
+          className="h-auto shrink-0 rounded-[11px] border-destructive/40 bg-card px-[18px] py-2.5 text-[13.5px] font-extrabold text-destructive shadow-none hover:border-destructive hover:bg-destructive/10 hover:text-destructive"
+        >
           <Trash2 className="h-3.5 w-3.5" />
           Eliminar pedido
         </Button>
@@ -712,7 +1024,7 @@ function DeleteOrderZone({ order, onDeleted }: { order: OrderSummary; onDeleted?
       {confirming && typeof document !== 'undefined'
         ? createPortal(
             <div
-              className="fixed inset-0 z-[120] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]"
+              className="fixed inset-0 z-[120] flex items-center justify-center bg-scrim/55 p-4 backdrop-blur-[2px]"
               onClick={() => (del.isPending ? null : setConfirming(false))}
             >
               <div
@@ -734,11 +1046,25 @@ function DeleteOrderZone({ order, onDeleted }: { order: OrderSummary; onDeleted?
                     </p>
                   </div>
                 </div>
-                <div className="mt-4 flex justify-end gap-2">
-                  <Button variant="outline" size="sm" onClick={() => setConfirming(false)} disabled={del.isPending}>
+                <div className="mt-4 flex flex-wrap justify-end gap-2">
+                  {/* .btn-ghost */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setConfirming(false)}
+                    disabled={del.isPending}
+                    className="h-auto rounded-[11px] border-input bg-card px-[18px] py-2.5 text-[13.5px] font-extrabold text-muted-foreground shadow-none hover:border-accent hover:bg-card hover:text-accent"
+                  >
                     Cancelar
                   </Button>
-                  <Button variant="destructive" size="sm" onClick={() => del.mutate()} loading={del.isPending}>
+                  {/* Geometria del .btn-primary con el color y el halo de peligro. */}
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => del.mutate()}
+                    loading={del.isPending}
+                    className="h-auto rounded-[11px] px-[18px] py-2.5 text-[13.5px] font-extrabold shadow-[0_6px_18px_-6px_hsl(var(--destructive)/0.55),inset_0_1px_0_rgba(255,255,255,0.18)] transition-[transform,box-shadow,background] [transition-duration:120ms] hover:-translate-y-px hover:shadow-[0_10px_24px_-8px_hsl(var(--destructive)/0.6),inset_0_1px_0_rgba(255,255,255,0.18)]"
+                  >
                     <Trash2 className="h-3.5 w-3.5" />
                     Sí, eliminar
                   </Button>
@@ -1649,7 +1975,7 @@ function ConversacionTab({
           <div className="py-10 text-center">
             <MessageSquare className="mx-auto h-6 w-6 text-muted-foreground" />
             <p className="mt-2 text-sm text-muted-foreground">
-              Sin mensajes todavia. Coordina aqui, menciona con @ y adjunta fotos, videos o archivos
+              Sin mensajes todavía. Coordina aquí, menciona con @ y adjunta fotos, videos o archivos
               con el clip.
             </p>
           </div>
@@ -1839,9 +2165,9 @@ function ConversacionTab({
             {attachOpen && isDesktop ? (
               <>
                 <div className="fixed inset-0 z-10" onClick={() => setAttachOpen(false)} />
-                <div className="absolute bottom-full left-0 z-20 mb-2 w-52 overflow-hidden rounded-lg border border-border bg-popover p-1 shadow-lg">
+                <div className="absolute bottom-full left-0 z-20 mb-2 w-52 max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-lg border border-border bg-popover p-1 shadow-lg">
                   <p className="px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                    Leer codigo
+                    Leer código
                   </p>
                   <AttachOption icon={ScanBarcode} label="Foto IMEI" onClick={() => pickPhoto('imei')} />
                   <AttachOption icon={ScanLine} label="Foto serial" onClick={() => pickPhoto('serial')} />
@@ -1868,7 +2194,7 @@ function ConversacionTab({
               ? createPortal(
                   <div className="fixed inset-0 z-[75]">
                     <div
-                      className="absolute inset-0 bg-[rgba(5,8,14,0.5)]"
+                      className="absolute inset-0 bg-scrim/50"
                       onClick={() => setAttachOpen(false)}
                     />
                     <div className="shadow-pop absolute inset-x-0 bottom-0 rounded-t-2xl bg-popover pb-[max(env(safe-area-inset-bottom),10px)] pt-2">
@@ -1929,7 +2255,7 @@ function ConversacionTab({
           />
           <div className="relative flex-1">
             {mention && (mentionMatches.length > 0 || 'todos'.startsWith(mention.query.toLowerCase())) ? (
-              <div className="absolute bottom-full left-0 z-20 mb-2 w-64 overflow-hidden rounded-lg border border-border bg-popover p-1 shadow-lg">
+              <div className="absolute bottom-full left-0 z-20 mb-2 w-64 max-w-full overflow-hidden rounded-lg border border-border bg-popover p-1 shadow-lg">
                 <p className="px-2 pb-1 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                   Mencionar
                 </p>
@@ -1958,7 +2284,7 @@ function ConversacionTab({
                     onClick={() => pickMention(m)}
                     className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
                   >
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent/10 text-[11px] font-semibold text-accent">
+                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent/10 text-[11px] font-semibold text-accent-ink">
                       {initialsOf(mentionName(m))}
                     </span>
                     <span className="min-w-0">
@@ -2235,7 +2561,7 @@ function MentionText({
               'inline-block max-w-full truncate rounded-[5px] px-[5px] align-bottom font-medium',
               mine
                 ? 'bg-accent-foreground/25 text-accent-foreground'
-                : 'bg-accent/10 text-accent',
+                : 'bg-accent/10 text-accent-ink',
             )}
           >
             {part.value}
@@ -2495,8 +2821,10 @@ function MessageBubble({
           Las acciones flotan encima al pasar el mouse, estilo Google Chat.
           OJO: el tope de ancho (85%) vive AQUI, en el wrapper — si viviera en
           la burbuja seria 85% del propio wrapper (que encoge al contenido) y
-          los mensajes se estrechaban en cascada hasta cortarse. */}
-      <div className="relative max-w-[85%]">
+          los mensajes se estrechaban en cascada hasta cortarse.
+          El tope duro (640px) evita que con el drawer arrastrado a pantalla
+          completa una burbuja de texto cruce 1500px de ancho. */}
+      <div className="relative max-w-[min(85%,640px)]">
         {bubble}
 
         {onReply || onReact || (canDelete && onDelete) ? (
@@ -2532,7 +2860,7 @@ function MessageBubble({
                   type="button"
                   onClick={(e) => onReact({ clientX: e.clientX, clientY: e.clientY })}
                   className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-                  aria-label="Mas emojis"
+                  aria-label="Más emojis"
                   title="Más emojis"
                 >
                   <SmilePlus className="h-3.5 w-3.5" />
@@ -2579,12 +2907,12 @@ function MessageBubble({
                 // mensaje (emoji legible sin lupa).
                 'flex items-center gap-1 rounded-full border px-2.5 py-[3px] text-[14px] transition-all hover:-translate-y-px md:py-[2px] md:text-[12.5px]',
                 r.mine
-                  ? 'border-accent/60 bg-accent/15 text-accent'
+                  ? 'border-accent/60 bg-accent/15 text-accent-ink'
                   : 'border-accent/30 bg-accent/10 hover:border-accent/50',
               )}
             >
               <span className="text-[14px] leading-none md:text-[12.5px]">{r.emoji}</span>
-              <span className="font-mono text-[12px] tabular-nums text-accent md:text-[11px]">
+              <span className="font-mono text-[12px] tabular-nums text-accent-ink md:text-[11px]">
                 {r.count}
               </span>
             </button>
@@ -2942,46 +3270,68 @@ function ActividadTab({ orderId }: { orderId: string }) {
     queryFn: () => api.get<OrderEvent[]>(`/v1/orders/${orderId}/events`),
   });
 
+  // Mismo cargando que Facturar/Guía (spinner de 20px en tinte --hint).
   if (isLoading) {
     return (
-      <div className="flex justify-center py-8">
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+      <div className="flex justify-center py-14">
+        <Loader2 className="h-5 w-5 animate-spin text-hint motion-reduce:animate-none" />
       </div>
     );
   }
   if (events.length === 0) {
     return (
-      <div className="py-10 text-center">
-        <Activity className="mx-auto h-6 w-6 text-muted-foreground" />
-        <p className="mt-2 text-sm text-muted-foreground">Sin actividad registrada.</p>
+      <div className="space-y-2.5 p-[22px]">
+        <SectionTitle icon={Activity} hint="registro del pedido">
+          Actividad
+        </SectionTitle>
+        <div className="rounded-[14px] border border-border bg-surface px-4 py-10 text-center">
+          <Activity className="mx-auto h-6 w-6 text-hint" />
+          <p className="mt-2 text-[13.5px] text-muted-foreground">Sin actividad registrada.</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <ol className="space-y-1 p-5">
-      {events.map((e) => (
-        <li key={e.id} className="flex gap-3">
-          <div className="flex flex-col items-center">
-            <span className="mt-1 flex h-6 w-6 items-center justify-center rounded-full border border-border bg-muted text-muted-foreground">
-              <EventIcon type={e.type} />
-            </span>
-            <span className="my-0.5 w-px flex-1 bg-border last:hidden" />
-          </div>
-          <div className="pb-3">
-            <p className="text-sm">{describeEvent(e)}</p>
-            {/* SIEMPRE quien lo hizo: persona, o Sistema/VTEX si fue automatico. */}
-            <p className="text-[11px] text-muted-foreground">
-              <span className="font-medium text-muted-foreground">
-                {e.actorName ?? (e.type === 'created' ? 'VTEX' : 'Sistema')}
+    /* Mismo lenguaje Cobalto que Detalle: encabezado de sección + tarjeta, y
+       cada hito con su chip de lavado cobalto unido por el riel (.step). */
+    <div className="space-y-2.5 p-[22px]">
+      <SectionTitle
+        icon={Activity}
+        hint={events.length > 1 ? `${events.length} movimientos` : undefined}
+      >
+        Actividad
+      </SectionTitle>
+      <ol className="rounded-[14px] border border-border bg-surface px-4 py-3.5">
+        {events.map((e) => (
+          <li key={e.id} className="group flex gap-3.5">
+            <div className="flex flex-col items-center">
+              <span className="grid h-[28px] w-[28px] shrink-0 place-items-center rounded-[9px] bg-wash text-accent-ink">
+                <EventIcon type={e.type} />
               </span>
-              {' · '}
-              {format(new Date(e.createdAt), "d MMM yyyy '·' HH:mm", { locale: es })}
-            </p>
-          </div>
-        </li>
-      ))}
-    </ol>
+              {/* Riel entre hitos: se corta en el último. */}
+              <span
+                aria-hidden
+                className="my-1 w-[2px] flex-1 rounded-[1px] bg-input group-last:hidden"
+              />
+            </div>
+            <div className="min-w-0 pb-4 pt-[5px] group-last:pb-0">
+              <p className="min-w-0 break-words text-[13.5px] font-semibold leading-snug">
+                {describeEvent(e)}
+              </p>
+              {/* SIEMPRE quien lo hizo: persona, o Sistema/VTEX si fue automatico. */}
+              <p className="mt-1 min-w-0 break-words text-[11.5px] tabular-nums text-hint">
+                <span className="font-bold">
+                  {e.actorName ?? (e.type === 'created' ? 'VTEX' : 'Sistema')}
+                </span>
+                {' · '}
+                {format(new Date(e.createdAt), "d MMM yyyy '·' HH:mm", { locale: es })}
+              </p>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 
@@ -3025,7 +3375,7 @@ function describeEvent(e: OrderEvent): string {
     case 'invoiced':
       return `Factura ${(e.data.number as string | undefined) ?? ''} emitida en Alegra`.trim();
     case 'guide_generated': {
-      const base = `Guia ${(e.data.number as string | undefined) ?? ''} generada en Coordinadora`.trim();
+      const base = `Guía ${(e.data.number as string | undefined) ?? ''} generada en Coordinadora`.trim();
       return typeof e.data.cod === 'number' && e.data.cod > 0
         ? `${base} · con recaudo contraentrega`
         : base;
@@ -3051,41 +3401,72 @@ function describeEvent(e: OrderEvent): string {
 
 // === UI helpers ===
 
-function Stat({ label, value }: { label: string; value: string }) {
+/**
+ * Encabezado de sección estilo Cobalto (.sec-h): chip de icono tintado +
+ * título en negrilla + nota opcional a la derecha. Sin icono conserva la
+ * versión compacta (label en mayúsculas).
+ */
+function SectionTitle({
+  icon: Icon,
+  tone = 'accent',
+  hint,
+  children,
+}: {
+  icon?: typeof Mail;
+  tone?: 'accent' | 'success' | 'destructive';
+  /** Nota al final de la fila (.sec-h .hint): de dónde salen los datos. */
+  hint?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  if (!Icon) {
+    return (
+      <h3 className="text-[11px] font-bold uppercase tracking-[0.06em] text-muted-foreground">
+        {children}
+      </h3>
+    );
+  }
   return (
-    <div className="rounded-lg border border-border bg-muted/30 px-3 py-2">
-      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className="mt-0.5 truncate text-sm font-semibold tabular-nums">{value}</p>
+    /* flex-wrap: en un panel angosto la pista salta a su propia linea en vez de
+       estrujar (o desbordar) el titulo. */
+    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+      <span
+        className={cn(
+          'grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[9px]',
+          tone === 'accent' && 'bg-wash text-accent',
+          tone === 'success' && 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+          tone === 'destructive' && 'bg-destructive/10 text-destructive',
+        )}
+      >
+        <Icon className="h-4 w-4" />
+      </span>
+      <h3 className="min-w-0 break-words text-sm font-extrabold tracking-[-0.01em]">{children}</h3>
+      {hint ? (
+        <span className="ml-auto min-w-0 break-words text-right text-xs text-hint">{hint}</span>
+      ) : null}
     </div>
-  );
-}
-
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return (
-    <h3 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-      {children}
-    </h3>
   );
 }
 
 function InfoRow({
-  icon: Icon,
+  label,
   value,
   placeholder,
+  pill,
 }: {
-  icon: typeof Mail;
+  label: string;
   value: string | null | undefined;
   placeholder: string;
+  /** Pastilla de estado pegada al dato (.kv dd .pill del mockup). */
+  pill?: React.ReactNode;
 }) {
   return (
-    <div className="flex items-start gap-2.5 text-sm">
-      <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-      {value ? (
-        <span className="break-words">{value}</span>
-      ) : (
-        <span className="text-muted-foreground">{placeholder}</span>
-      )}
-    </div>
+    <>
+      <dt className="min-w-0 self-start break-words font-semibold text-hint">{label}</dt>
+      <dd className="flex min-w-0 flex-wrap items-center gap-2 break-words font-semibold">
+        {value ? value : <span className="font-normal text-muted-foreground">{placeholder}</span>}
+        {pill}
+      </dd>
+    </>
   );
 }
 
@@ -3093,16 +3474,29 @@ const STATUS_LABELS: Record<string, { label: string; variant: 'warning' | 'succe
   'ready-for-handling': { label: 'Listo para preparar', variant: 'warning' },
   handling: { label: 'Preparando', variant: 'success' },
   invoiced: { label: 'Facturado', variant: 'secondary' },
-  'window-to-cancel': { label: 'En ventana de cancelacion', variant: 'secondary' },
+  'window-to-cancel': { label: 'En ventana de cancelación', variant: 'secondary' },
   canceled: { label: 'Cancelado', variant: 'secondary' },
 };
 
 function StatusPill({ status }: { status: string }) {
   const mapped = STATUS_LABELS[status];
+  const variant = mapped?.variant ?? 'secondary';
+  // "Facturado" es el estado de envío en curso: tinte cobalto con puntico.
+  const shipping = status === 'invoiced';
   return (
-    <Badge variant={mapped?.variant ?? 'secondary'} className="whitespace-nowrap">
+    <span
+      className={cn(
+        'inline-flex shrink-0 items-center gap-[5px] whitespace-nowrap rounded-full px-2.5 py-[3px] text-[11.5px] font-bold tracking-[0.01em]',
+        variant === 'warning' && 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
+        variant === 'success' && 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+        variant === 'secondary' &&
+          // .pill-ship del mockup: lavado cobalto + texto --cobalt-ink.
+          (shipping ? 'bg-wash text-accent-ink' : 'bg-muted text-muted-foreground'),
+      )}
+    >
+      {shipping ? <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden /> : null}
       {mapped?.label ?? status}
-    </Badge>
+    </span>
   );
 }
 

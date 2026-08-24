@@ -5,12 +5,15 @@ import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/
 import {
   AlertTriangle,
   CheckCircle2,
+  CreditCard,
   ExternalLink,
   Loader2,
   MapPin,
   Package,
   RefreshCw,
   Truck,
+  Zap,
+  type LucideIcon,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -35,6 +38,37 @@ import { ApiError, api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 
 import { clearDraft, getDraft, setDraft } from './panel-drafts';
+
+/* ── Lenguaje visual "Cobalto" (mockup aprobado) ─────────────────────────────
+   Constantes de ESTILO unicamente: el campo del mockup (.input) es una
+   superficie BLANCA sobre el lienzo, con el borde de campo mas fuerte, 10px de
+   radio, 38px de alto minimo y borde cobalto al pasar el mouse. */
+const INPUT_CLS =
+  'h-auto min-h-[38px] rounded-[10px] border-input bg-card text-[13.5px] shadow-none transition-colors placeholder:text-hint hover:border-accent max-md:min-h-[42px]';
+/** Mismo tratamiento para los <select> nativos (la flecha la pone el sufijo). */
+const SELECT_CLS =
+  'h-auto min-h-[38px] w-full max-w-full appearance-none rounded-[10px] border border-input bg-card px-3 py-2 pr-9 text-[13.5px] shadow-none outline-none transition-colors hover:border-accent focus-visible:ring-2 focus-visible:ring-ring max-md:min-h-[42px]';
+/** Sufijo dentro del campo (.input .suffix): unidad, flecha o pista corta. */
+const SUFFIX_CLS =
+  'pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-bold text-hint';
+/** Identificadores (guia, codigo postal, DANE) en monoespaciada (.mono): la
+ *  monoespaciada corre mas ancha, asi que el mockup la baja al 92% para que
+ *  case con el texto vecino. */
+const MONO_CLS = 'font-mono text-[0.92em] tracking-[0.02em]';
+/** Foco de teclado visible sobre las superficies cobalto. */
+const FOCUS_RING =
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-card';
+/** Alcanza SOLO el disparador del CityPicker (el desplegable vive mas adentro):
+ *  lo deja identico a un .input del mockup. */
+const CITY_TRIGGER_CLS =
+  '[&>div>button]:min-h-[38px] [&>div>button]:rounded-[10px] [&>div>button]:border-input [&>div>button]:bg-card [&>div>button]:text-[13.5px] [&>div>button]:transition-colors [&>div>button:hover]:border-accent max-md:[&>div>button]:min-h-[42px] [&>div>button>span]:min-w-0';
+/** Boton primario del mockup (.btn-primary): degradado cobalto -> cobalto
+ *  profundo, halo de color y el reflejo interno del borde superior. */
+const BTN_PRIMARY_CLS =
+  'h-auto max-w-full whitespace-normal rounded-[11px] bg-[linear-gradient(to_bottom,hsl(var(--accent)),hsl(var(--accent-deep)))] px-[18px] py-2.5 text-center text-[13.5px] font-extrabold tracking-[0.01em] text-accent-foreground shadow-[0_6px_18px_-6px_hsl(var(--ring)),inset_0_1px_0_rgba(255,255,255,0.18)] transition-[transform,box-shadow,background] [transition-duration:120ms] hover:-translate-y-px hover:shadow-[0_10px_24px_-8px_hsl(var(--ring)),inset_0_1px_0_rgba(255,255,255,0.18)] motion-reduce:transition-none motion-reduce:hover:translate-y-0 max-sm:w-full [&_svg]:size-[15px]';
+/** Boton secundario del mockup (.btn-ghost). */
+const BTN_GHOST_CLS =
+  'h-auto max-w-full whitespace-normal rounded-[11px] border border-input bg-card px-[18px] py-2.5 text-center text-[13.5px] font-extrabold tracking-[0.01em] text-muted-foreground shadow-none hover:bg-card hover:border-accent hover:text-accent motion-reduce:transition-none max-sm:w-full [&_svg]:size-[15px]';
 
 interface Recipient {
   name: string;
@@ -140,6 +174,11 @@ export function GuidePanel({
   // Nombre visible de la transportadora con la que salio la guia (para la
   // tarjeta de exito; tras remontar lo repone el endpoint de rastreo).
   const [emittedCarrier, setEmittedCarrier] = useState<string | null>(null);
+  // Chip de paquete guardado resaltado. PRESENTACIONAL: solo dice cual se
+  // pulso (el estado real son las medidas en `pkg`), igual que el `value` que
+  // llevaba el <select> al que reemplaza. '' = Personalizado.
+  const [presetName, setPresetName] = useState<string>('');
+  const [sdxPresetName, setSdxPresetName] = useState<string>('');
 
   const {
     data: preview,
@@ -223,7 +262,18 @@ export function GuidePanel({
         ...(sdxCity ? { cityTo: sdxCity.name, departmentTo: sdxCity.department } : {}),
       });
     }
-  }, [recipient, pkg, rotuloId, codOn, codValue, courier, postalCodeTo, packagingCode, sdxCity, orderId]);
+  }, [
+    recipient,
+    pkg,
+    rotuloId,
+    codOn,
+    codValue,
+    courier,
+    postalCodeTo,
+    packagingCode,
+    sdxCity,
+    orderId,
+  ]);
 
   const generate = useMutation({
     // Con clave: si cierran el drawer con la guia EN CURSO, al volver el boton
@@ -256,7 +306,7 @@ export function GuidePanel({
     onSuccess: (g) => {
       setResult(g);
       clearDraft(`guide:${orderId}`);
-      toast.success(`Guia ${g.number} generada`);
+      toast.success(`Guía ${g.number} generada`);
       qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
       qc.invalidateQueries({ queryKey: ['order-events', orderId] });
       qc.invalidateQueries({ queryKey: ['guide-preview', orderId] });
@@ -264,7 +314,8 @@ export function GuidePanel({
       // de seccion en la lista de la sede.
       if (manual) qc.invalidateQueries({ queryKey: ['orders'] });
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo generar la guia'),
+    onError: (err) =>
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo generar la guía'),
   });
 
   // Paquete en el shape que pide Skydropx (cotizar y generar usan el MISMO:
@@ -338,7 +389,7 @@ export function GuidePanel({
           address: recipient!.address.trim(),
           phone: recipient!.phone.trim(),
         },
-        packageContent: pkg!.content.trim() || 'CELULAR',
+        packageContent: pkg!.content.trim() || 'TECNOLOGIA',
         // Embalaje del catalogo de Skydropx (codigo, ej. '4G' caja de carton).
         ...(packagingCode ? { packagingCode } : {}),
       };
@@ -350,13 +401,14 @@ export function GuidePanel({
       setEmittedCarrier(selectedRate?.carrier ?? null);
       setResult(g);
       clearDraft(`guide:${orderId}`);
-      toast.success(`Guia ${g.number} generada`);
+      toast.success(`Guía ${g.number} generada`);
       qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
       qc.invalidateQueries({ queryKey: ['order-events', orderId] });
       qc.invalidateQueries({ queryKey: ['guide-preview', orderId] });
       if (manual) qc.invalidateQueries({ queryKey: ['orders'] });
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo generar la guia'),
+    onError: (err) =>
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo generar la guía'),
   });
 
   // Pendiente GLOBAL: cuenta la mutacion en vuelo aunque este panel se haya
@@ -380,26 +432,46 @@ export function GuidePanel({
 
   if (isLoading) {
     return (
-      <div className="flex justify-center py-10">
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+      <div className="flex justify-center py-14">
+        <Loader2 className="h-5 w-5 animate-spin text-hint motion-reduce:animate-none" />
       </div>
     );
   }
   if (error) {
     return (
-      <div className="p-5">
-        <p className="rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
-          {error instanceof ApiError ? error.message : 'No se pudo preparar la guia.'}
+      <div className="p-[22px]">
+        {/* .notice-warn del mockup: mismo aviso ambar que el resto del drawer. */}
+        <p className="flex items-start gap-2.5 rounded-xl bg-amber-500/10 px-3.5 py-[11px] text-[12.5px] leading-[1.45] text-amber-600 dark:text-amber-400">
+          <AlertTriangle className="mt-px h-[15px] w-[15px] shrink-0" aria-hidden />
+          <span className="min-w-0 break-words">
+            {error instanceof ApiError ? error.message : 'No se pudo preparar la guía.'}
+          </span>
         </p>
       </div>
     );
   }
 
   const emitted = result ?? preview?.guide ?? null;
-  if (emitted) return <GuideDoneView orderId={orderId} guide={emitted} carrierName={emittedCarrier} />;
+  if (emitted)
+    return <GuideDoneView orderId={orderId} guide={emitted} carrierName={emittedCarrier} />;
   if (!recipient || !pkg || !preview) return null;
 
   const sdx = courier === 'skydropx';
+
+  /** Ciudad y departamento de destino VIGENTES en modo Skydropx: lo elegido
+   *  manda, luego lo que salio en la cotizacion, y de base lo que el preview
+   *  ya resolvio con el catalogo postal (por eso ambos campos arrancan llenos). */
+  const sdxCityName =
+    sdxCity?.name ||
+    quotedCity?.name ||
+    quote?.cityTo ||
+    (recipient?.cityName ?? '').replace(/\s*\(.*?\)\s*/g, '').trim();
+  const sdxDepartment =
+    sdxCity?.department ||
+    quotedCity?.department ||
+    quote?.departmentTo ||
+    preview?.recipient.department ||
+    '';
 
   const canGenerate =
     recipient.name.trim().length >= 2 &&
@@ -430,419 +502,632 @@ export function GuidePanel({
   const patchR = (p: Partial<Recipient>) => setRecipient((r) => (r ? { ...r, ...p } : r));
   const patchP = (p: Partial<Pkg>) => setPkg((v) => (v ? { ...v, ...p } : v));
 
+  // Total mas bajo de la cotizacion vigente (solo para la pastilla "Más
+  // barata" de la tarjeta de tarifa; puramente visual).
+  const cheapestRateTotal =
+    quote && quote.rates.length > 0 ? Math.min(...quote.rates.map((r) => r.total)) : null;
+
   return (
-    <div className="space-y-5 p-5">
+    <div className="p-[22px]">
       {/* Transportadora: Coordinadora (flujo directo, por defecto) o Skydropx
           (agregador: cotiza varias transportadoras y genera con la elegida). */}
-      <section className="space-y-3">
-        <SectionTitle>Transportadora</SectionTitle>
-        <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5">
-          <button
-            type="button"
-            onClick={() => setCourier('coordinadora')}
-            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-              !sdx ? 'bg-card text-foreground shadow-card' : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            Coordinadora
-          </button>
-          <button
-            type="button"
-            onClick={() => setCourier('skydropx')}
-            className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-              sdx ? 'bg-card text-foreground shadow-card' : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            Skydropx
-          </button>
-        </div>
-      </section>
+      <div
+        role="group"
+        aria-label="Transportadora"
+        className="mb-[18px] flex max-w-full flex-wrap gap-[3px] rounded-xl border border-border bg-wash p-[3px] sm:inline-flex"
+      >
+        <button
+          type="button"
+          onClick={() => setCourier('coordinadora')}
+          aria-pressed={!sdx}
+          className={cn(
+            'inline-flex min-w-0 flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-[9px] px-4 py-[7px] text-[13px] font-extrabold transition-colors sm:flex-none sm:justify-start max-md:min-h-[40px]',
+            FOCUS_RING,
+            !sdx ? 'bg-card text-foreground shadow-card' : 'text-muted-foreground',
+          )}
+        >
+          <CourierMark slug="coordinadora" />
+          Coordinadora
+        </button>
+        <button
+          type="button"
+          onClick={() => setCourier('skydropx')}
+          aria-pressed={sdx}
+          className={cn(
+            'inline-flex min-w-0 flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-[9px] px-4 py-[7px] text-[13px] font-extrabold transition-colors sm:flex-none sm:justify-start max-md:min-h-[40px]',
+            FOCUS_RING,
+            sdx ? 'bg-card text-foreground shadow-card' : 'text-muted-foreground',
+          )}
+        >
+          <CourierMark slug="skydropx" />
+          Skydropx
+        </button>
+      </div>
 
       {/* Remitente (de la sede) */}
-      <section className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
-        <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Remitente (origen)</p>
-        <p className="mt-0.5 font-medium">{preview.sender.name}</p>
-        <p className="text-xs text-muted-foreground">
+      <section className="mb-5 rounded-[14px] border border-border bg-surface px-4 py-3.5">
+        <p className="text-[11px] font-bold uppercase tracking-[0.06em] text-hint">
+          Remitente (origen)
+        </p>
+        <p className="mt-0.5 break-words text-[13.5px] font-semibold">{preview.sender.name}</p>
+        <p className="break-words text-xs text-hint">
           {preview.sender.address}
           {preview.sender.cityName ? ` · ${preview.sender.cityName}` : ''} · {preview.sender.phone}
         </p>
       </section>
 
-      {/* Destinatario (de VTEX, editable) */}
-      <section className="space-y-3">
-        <SectionTitle>Destinatario</SectionTitle>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Nombre">
-            <Input value={recipient.name} onChange={(e) => patchR({ name: e.target.value })} />
-          </Field>
-          {/* Documento en AMBOS modos (mismo estado). En Skydropx es solo
+      {/* En modo Skydropx, formulario y tarifas van a dos columnas cuando el
+          PANEL da el ancho (la cotizacion es la columna derecha); si no, todo
+          fluye en una sola columna. Mismo orden de DOM.
+          OJO: el reparto NO puede depender del viewport — el drawer se
+          redimensiona a mano, asi que un `min-[860px]` partia en dos columnas
+          un panel de 560px. Con flex-wrap el corte lo decide el ANCHO REAL:
+          las bases (480px + 340px + 20px de hueco) hacen que se apilen por
+          debajo de ~840px de panel, y el factor de crecimiento gigante de la
+          izquierda deja la columna de tarifas clavada en sus 340px. */}
+      <div className={cn('mb-5', sdx ? 'flex flex-wrap items-start gap-5' : 'space-y-5')}>
+        <div className={cn('space-y-5', sdx && 'min-w-0 flex-[999_1_480px]')}>
+          {/* Destinatario (de VTEX, editable) */}
+          <section className="space-y-2.5">
+            <SectionTitle
+              icon={MapPin}
+              hint={sdx ? 'catálogo postal nacional' : 'llega listo del pedido — solo verifica'}
+            >
+              {sdx ? 'Destino' : 'Destinatario'}
+            </SectionTitle>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Nombre">
+                <Input
+                  value={recipient.name}
+                  onChange={(e) => patchR({ name: e.target.value })}
+                  className={INPUT_CLS}
+                />
+              </Field>
+              {/* Documento en AMBOS modos (mismo estado). En Skydropx es solo
               informativo/registro: NO viaja en el payload de Skydropx. */}
-          <Field label="Documento (cedula/NIT)">
-            <Input value={recipient.document} onChange={(e) => patchR({ document: e.target.value })} />
-          </Field>
-          <div className="sm:col-span-2">
-            <Field label="Direccion">
-              <Input value={recipient.address} onChange={(e) => patchR({ address: e.target.value })} />
-            </Field>
-          </div>
-          {sdx ? (
-            <>
-              {/* Ciudades del catalogo POSTAL nacional embebido, en el formato
+              <Field label="Cédula / NIT">
+                <Input
+                  value={recipient.document}
+                  onChange={(e) => patchR({ document: e.target.value })}
+                  className={cn(INPUT_CLS, MONO_CLS)}
+                />
+              </Field>
+              <div className="sm:col-span-2">
+                <Field label="Dirección">
+                  <Input
+                    value={recipient.address}
+                    onChange={(e) => patchR({ address: e.target.value })}
+                    className={INPUT_CLS}
+                  />
+                </Field>
+              </div>
+              {sdx ? (
+                <>
+                  {/* Ciudades del catalogo POSTAL nacional embebido, en el formato
                   que Skydropx pide (ciudad + departamento completo) —
                   independiente del catalogo de Coordinadora. Elegir una fija
                   tambien su codigo postal automaticamente. */}
-              <Field label="Ciudad de destino">
-                <CityPicker
-                  value={
-                    sdxCity
-                      ? `${sdxCity.name} — ${sdxCity.department}`
-                      : quotedCity
-                        ? `${quotedCity.name} — ${quotedCity.department}`
-                        : // Sin eleccion ni cotizacion: la ciudad YA resuelta del
-                          // preview (la misma automatica del modo Coordinadora).
-                          quote?.cityTo ||
-                          (recipient?.cityName ?? '').replace(/\s*\(.*?\)\s*/g, '').trim()
-                  }
-                  onPick={(c: CoordinadoraCity) => {
-                    setSdxCity({ name: c.name, department: c.department });
-                    // CP automatico de la ciudad elegida (viene colado en el
-                    // shape adaptado del catalogo postal).
-                    const cp = (c as CoordinadoraCity & { postalCode?: string }).postalCode;
-                    if (cp) setPostalCodeTo(cp);
-                    // Las tarifas cotizadas son de otro destino -> re-cotizar.
-                    setSelectedRateId(null);
-                  }}
-                  search={(q) =>
-                    api
-                      .get<SkydropxCity[]>(`/v1/skydropx/cities?q=${encodeURIComponent(q)}`)
-                      // Al shape del picker; el DANE hace de key.
-                      .then((rows) =>
-                        rows.map((r) => ({
-                          code: r.dane,
-                          name: r.city,
-                          department: r.department,
-                          postalCode: r.postalCode,
-                        })),
-                      )
-                  }
-                  queryKey={`sdx-dest-${orderId}`}
-                />
-              </Field>
-              {/* Skydropx enruta por CP: llega YA resuelto en el preview (la
+                  <Field label="Ciudad">
+                    <div className={CITY_TRIGGER_CLS}>
+                      {/* Solo la ciudad: el departamento tiene su propio campo. */}
+                      <CityPicker
+                        value={sdxCityName}
+                        onPick={(c: CoordinadoraCity) => {
+                          setSdxCity({ name: c.name, department: c.department });
+                          // CP automatico de la ciudad elegida (viene colado en el
+                          // shape adaptado del catalogo postal).
+                          const cp = (c as CoordinadoraCity & { postalCode?: string }).postalCode;
+                          if (cp) setPostalCodeTo(cp);
+                          // Las tarifas cotizadas son de otro destino -> re-cotizar.
+                          setSelectedRateId(null);
+                        }}
+                        search={(q) =>
+                          api
+                            .get<SkydropxCity[]>(`/v1/skydropx/cities?q=${encodeURIComponent(q)}`)
+                            // Al shape del picker; el DANE hace de key.
+                            .then((rows) =>
+                              rows.map((r) => ({
+                                code: r.dane,
+                                name: r.city,
+                                department: r.department,
+                                postalCode: r.postalCode,
+                              })),
+                            )
+                        }
+                        queryKey={`sdx-dest-${orderId}`}
+                      />
+                    </div>
+                  </Field>
+                  {/* Departamento: se llena SOLO con la ciudad (catalogo postal
+                  nacional), igual que el CP. Skydropx lo pide como area_level1. */}
+                  <Field label="Departamento">
+                    <Input
+                      readOnly
+                      value={sdxDepartment}
+                      className={cn(INPUT_CLS, 'cursor-default')}
+                    />
+                  </Field>
+                  {/* Skydropx enruta por CP: llega YA resuelto en el preview (la
                   ciudad del pedido) y se actualiza al elegir otra ciudad.
                   Editable por si hay que corregirlo. */}
-              <Field label="Codigo postal destino">
-                <Input
-                  inputMode="numeric"
-                  placeholder="Ej: 110111"
-                  maxLength={10}
-                  className="w-32 tabular-nums"
-                  value={postalCodeTo}
-                  onChange={(e) => setPostalCodeTo(e.target.value.replace(/\D/g, ''))}
-                />
-              </Field>
-              <Field label="Telefono">
-                <Input value={recipient.phone} onChange={(e) => patchR({ phone: e.target.value })} />
-              </Field>
-            </>
-          ) : (
-            <>
-              <Field label="Ciudad de destino">
-                <CityPicker
-                  value={recipient.cityName || recipient.cityCode}
-                  onPick={(c: CoordinadoraCity) =>
-                    patchR({ cityCode: c.code, cityName: `${c.name} — ${c.department}` })
-                  }
-                  search={(q) =>
-                    api.get<CoordinadoraCity[]>(
-                      `/v1/orders/${orderId}/guide-cities?q=${encodeURIComponent(q)}`,
-                    )
-                  }
-                  queryKey={`dest-${orderId}`}
-                />
-              </Field>
-              <Field label="Telefono">
-                <Input value={recipient.phone} onChange={(e) => patchR({ phone: e.target.value })} />
-              </Field>
-            </>
-          )}
-        </div>
-        {sdx ? (
-          <p className="text-[11px] text-muted-foreground">
-            El código postal se pone solo según la ciudad del pedido (catálogo postal nacional); si
-            eliges otra ciudad, se actualiza con ella.
-          </p>
-        ) : !recipient.cityCode ? (
-          <p className="text-[11px] text-amber-600 dark:text-amber-400">
-            No se reconocio la ciudad de VTEX — selecciona la ciudad de destino.
-          </p>
-        ) : null}
-      </section>
-
-      {/* Paquete */}
-      <section className="space-y-3">
-        <SectionTitle>Paquete</SectionTitle>
-        {sdx && sdxPresets.length > 0 ? (
-          <Field label="Paquete guardado (Skydropx)">
-            {/* Los paquetes PROPIOS del modo Skydropx (se gestionan en Ajustes >
-                Paquetes Skydropx): elegirlo llena medidas, peso y — si el
-                preset los trae del panel de Skydropx — contenido y embalaje. */}
-            <select
-              defaultValue=""
-              onChange={(e) => {
-                const p = sdxPresets.find((x) => x.name === e.target.value);
-                if (p) {
-                  patchP({
-                    weight: String(p.weight),
-                    height: String(p.height),
-                    width: String(p.width),
-                    length: String(p.length),
-                    ...(p.content ? { content: p.content } : {}),
-                  });
-                  if (p.packagingCode) setPackagingCode(p.packagingCode);
-                }
-              }}
-              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <option value="">— Personalizado —</option>
-              {sdxPresets.map((p) => (
-                <option key={p.name} value={p.name}>
-                  {p.name} · {p.height}x{p.width}x{p.length} cm · {p.weight} kg
-                </option>
-              ))}
-            </select>
-          </Field>
-        ) : null}
-        {sdx ? (
-          /* Embalaje del catalogo de Skydropx (los presets generales de paquete
-             son de Coordinadora y en este modo NO aplican). */
-          <Field label="Embalaje (Skydropx)">
-            {packagingsError ? (
-              <p className="text-xs text-muted-foreground">
-                {packagingsError instanceof ApiError
-                  ? packagingsError.message
-                  : 'No se pudo cargar el catálogo de embalajes de Skydropx.'}
+                  <Field label="Código postal">
+                    <Input
+                      inputMode="numeric"
+                      placeholder="Ej: 110111"
+                      maxLength={10}
+                      className={cn(INPUT_CLS, MONO_CLS, 'tabular-nums')}
+                      value={postalCodeTo}
+                      onChange={(e) => setPostalCodeTo(e.target.value.replace(/\D/g, ''))}
+                    />
+                  </Field>
+                  <Field label="Teléfono">
+                    <Input
+                      value={recipient.phone}
+                      onChange={(e) => patchR({ phone: e.target.value })}
+                      className={INPUT_CLS}
+                    />
+                  </Field>
+                </>
+              ) : (
+                <>
+                  <Field label="Ciudad (DANE)">
+                    <div
+                      className={cn(
+                        'relative',
+                        CITY_TRIGGER_CLS,
+                        recipient.cityCode ? '[&>div>button]:pr-20' : '',
+                      )}
+                    >
+                      <CityPicker
+                        value={recipient.cityName || recipient.cityCode}
+                        onPick={(c: CoordinadoraCity) =>
+                          patchR({ cityCode: c.code, cityName: `${c.name} — ${c.department}` })
+                        }
+                        search={(q) =>
+                          api.get<CoordinadoraCity[]>(
+                            `/v1/orders/${orderId}/guide-cities?q=${encodeURIComponent(q)}`,
+                          )
+                        }
+                        queryKey={`dest-${orderId}`}
+                      />
+                      {recipient.cityCode ? (
+                        <span className={cn(SUFFIX_CLS, MONO_CLS)} aria-hidden>
+                          {recipient.cityCode}
+                        </span>
+                      ) : null}
+                    </div>
+                  </Field>
+                  <Field label="Teléfono">
+                    <Input
+                      value={recipient.phone}
+                      onChange={(e) => patchR({ phone: e.target.value })}
+                      className={INPUT_CLS}
+                    />
+                  </Field>
+                </>
+              )}
+            </div>
+            {!sdx && !recipient.cityCode ? (
+              <p className="flex items-start gap-2.5 rounded-xl bg-amber-500/10 px-3.5 py-[11px] text-[12.5px] leading-[1.45] text-amber-600 dark:text-amber-400">
+                <AlertTriangle className="mt-px h-[15px] w-[15px] shrink-0" aria-hidden />
+                <span className="min-w-0 break-words">
+                  No se reconoció la ciudad de VTEX — selecciona la ciudad de destino.
+                </span>
               </p>
-            ) : (
-              <select
-                value={packagingCode}
-                onChange={(e) => setPackagingCode(e.target.value)}
-                disabled={packagingsPending}
-                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {packagingsPending ? (
-                  <option value={packagingCode}>Cargando embalajes…</option>
-                ) : (
-                  <>
-                    {/* Borrador viejo con un codigo que ya no esta en el catalogo. */}
-                    {!(packagings ?? []).some((p) => p.code === packagingCode) ? (
-                      <option value={packagingCode}>{packagingCode}</option>
-                    ) : null}
-                    {(packagings ?? []).map((p) => (
-                      <option key={p.code} value={p.code}>
-                        {p.name}
+            ) : null}
+          </section>
+
+          {/* Paquete */}
+          <section className="space-y-2.5">
+            <SectionTitle
+              icon={Package}
+              hint={
+                sdx ? 'tus paquetes del panel de Skydropx' : 'paquetes de guía globales (Ajustes)'
+              }
+            >
+              Paquete
+            </SectionTitle>
+            {sdx && sdxPresets.length > 0 ? (
+              /* Los paquetes PROPIOS del modo Skydropx (se gestionan en Ajustes >
+              Paquetes Skydropx): elegirlo llena medidas, peso y — si el
+              preset los trae del panel de Skydropx — contenido y embalaje.
+              Aqui va DESPLEGABLE y no en chips como Coordinadora: son decenas
+              (los del panel de Skydropx) y en chips inundan el panel. */
+              <Field label="Paquete guardado">
+                <div className="relative">
+                  <select
+                    value={sdxPresetName}
+                    onChange={(e) => {
+                      const name = e.target.value;
+                      setSdxPresetName(name);
+                      const p = sdxPresets.find((x) => x.name === name);
+                      if (!p) return; // "Personalizado": no toca las medidas
+                      patchP({
+                        weight: String(p.weight),
+                        height: String(p.height),
+                        width: String(p.width),
+                        length: String(p.length),
+                        ...(p.content ? { content: p.content } : {}),
+                      });
+                      if (p.packagingCode) setPackagingCode(p.packagingCode);
+                    }}
+                    className={SELECT_CLS}
+                  >
+                    <option value="">Personalizado</option>
+                    {sdxPresets.map((p) => (
+                      <option key={p.name} value={p.name}>
+                        {p.name} · {p.height}×{p.width}×{p.length} cm · {p.weight} kg
                       </option>
                     ))}
-                  </>
+                  </select>
+                  <span className={SUFFIX_CLS} aria-hidden>
+                    ▾
+                  </span>
+                </div>
+              </Field>
+            ) : null}
+            {sdx ? (
+              /* Embalaje del catalogo de Skydropx (los presets generales de paquete
+             son de Coordinadora y en este modo NO aplican). */
+              <Field label="Embalaje">
+                {packagingsError ? (
+                  <p className="flex items-start gap-2.5 rounded-xl bg-amber-500/10 px-3.5 py-[11px] text-[12.5px] leading-[1.45] text-amber-600 dark:text-amber-400">
+                    <AlertTriangle className="mt-px h-[15px] w-[15px] shrink-0" aria-hidden />
+                    <span className="min-w-0 break-words">
+                      {packagingsError instanceof ApiError
+                        ? packagingsError.message
+                        : 'No se pudo cargar el catálogo de embalajes de Skydropx.'}
+                    </span>
+                  </p>
+                ) : (
+                  <div className="relative">
+                    <select
+                      value={packagingCode}
+                      onChange={(e) => setPackagingCode(e.target.value)}
+                      disabled={packagingsPending}
+                      className={SELECT_CLS}
+                    >
+                      {packagingsPending ? (
+                        <option value={packagingCode}>Cargando embalajes…</option>
+                      ) : (
+                        <>
+                          {/* Borrador viejo con un codigo que ya no esta en el catalogo. */}
+                          {!(packagings ?? []).some((p) => p.code === packagingCode) ? (
+                            <option value={packagingCode}>{packagingCode}</option>
+                          ) : null}
+                          {/* El codigo del catalogo (4G, 5H4…) va en la
+                              etiqueta: un <option> nativo no admite el sufijo
+                              en monoespaciada que dibuja el mockup. */}
+                          {(packagings ?? []).map((p) => (
+                            <option key={p.code} value={p.code}>
+                              {p.name} · {p.code}
+                            </option>
+                          ))}
+                        </>
+                      )}
+                    </select>
+                    <span className={SUFFIX_CLS} aria-hidden>
+                      ▾
+                    </span>
+                  </div>
                 )}
-              </select>
-            )}
-          </Field>
-        ) : preview.packagePresets.length > 0 ? (
-          <Field label="Paquete guardado">
-            {/* Igual que los "empaques" del portal de Coordinadora: elegirlo llena
-                peso y medidas (despues se pueden ajustar a mano). */}
-            <select
-              defaultValue=""
-              onChange={(e) => {
-                const p = preview.packagePresets.find((x) => x.name === e.target.value);
-                if (p) {
-                  patchP({
-                    weight: String(p.weight),
-                    height: String(p.height),
-                    width: String(p.width),
-                    length: String(p.length),
-                  });
-                }
-              }}
-              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <option value="">— Personalizado —</option>
-              {preview.packagePresets.map((p) => (
-                <option key={p.name} value={p.name}>
-                  {p.name} · {p.height}x{p.width}x{p.length} cm · {p.weight} kg
-                </option>
-              ))}
-            </select>
-          </Field>
-        ) : null}
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Contenido">
-            <Input value={pkg.content} onChange={(e) => patchP({ content: e.target.value })} />
-          </Field>
-          <Field label="Valor declarado (COP) — por defecto, la mitad de la compra">
-            <Input
-              inputMode="numeric"
-              value={pkg.declaredValue}
-              onChange={(e) => patchP({ declaredValue: e.target.value.replace(/[^\d.]/g, '') })}
-            />
-          </Field>
-        </div>
-        {!sdx ? (
-          <Field label="Observaciones (opcional)">
-            <Input
-              value={pkg.observations}
-              placeholder="Aparece en la guía de Coordinadora; vacío = sin observaciones"
-              maxLength={300}
-              onChange={(e) => patchP({ observations: e.target.value })}
-            />
-          </Field>
-        ) : null}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Field label="Peso (kg)">
-            <Input inputMode="decimal" value={pkg.weight} onChange={(e) => patchP({ weight: e.target.value.replace(/[^\d.]/g, '') })} />
-          </Field>
-          <Field label="Alto (cm)">
-            <Input inputMode="decimal" value={pkg.height} onChange={(e) => patchP({ height: e.target.value.replace(/[^\d.]/g, '') })} />
-          </Field>
-          <Field label="Ancho (cm)">
-            <Input inputMode="decimal" value={pkg.width} onChange={(e) => patchP({ width: e.target.value.replace(/[^\d.]/g, '') })} />
-          </Field>
-          <Field label="Largo (cm)">
-            <Input inputMode="decimal" value={pkg.length} onChange={(e) => patchP({ length: e.target.value.replace(/[^\d.]/g, '') })} />
-          </Field>
-        </div>
-        {!sdx ? (
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="w-24">
-              <Field label="Unidades">
-                <Input inputMode="numeric" value={pkg.units} onChange={(e) => patchP({ units: e.target.value.replace(/\D/g, '') })} />
+              </Field>
+            ) : preview.packagePresets.length > 0 ? (
+              /* Igual que los "empaques" del portal de Coordinadora: elegirlo llena
+              peso y medidas (despues se pueden ajustar a mano). */
+              <PresetChips label="Paquete guardado">
+                {preview.packagePresets.map((p) => (
+                  <PresetChip
+                    key={p.name}
+                    active={presetName === p.name}
+                    onClick={() => {
+                      // Como el <select> al que reemplaza: solo aplica al
+                      // CAMBIAR. Re-pulsar el activo no pisa lo editado a mano.
+                      if (presetName === p.name) return;
+                      setPresetName(p.name);
+                      patchP({
+                        weight: String(p.weight),
+                        height: String(p.height),
+                        width: String(p.width),
+                        length: String(p.length),
+                      });
+                    }}
+                  >
+                    {p.name} · {p.height}×{p.width}×{p.length} · {p.weight} kg
+                  </PresetChip>
+                ))}
+                <PresetChip active={presetName === ''} onClick={() => setPresetName('')}>
+                  Personalizado
+                </PresetChip>
+              </PresetChips>
+            ) : null}
+            {/* Medidas: mismo orden del mockup (Alto · Ancho · Largo · Peso). */}
+            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+              <Field label="Alto">
+                <div className="relative">
+                  <Input
+                    inputMode="decimal"
+                    value={pkg.height}
+                    onChange={(e) => patchP({ height: e.target.value.replace(/[^\d.]/g, '') })}
+                    className={cn(INPUT_CLS, 'pr-9 tabular-nums')}
+                  />
+                  <span className={SUFFIX_CLS} aria-hidden>
+                    cm
+                  </span>
+                </div>
+              </Field>
+              <Field label="Ancho">
+                <div className="relative">
+                  <Input
+                    inputMode="decimal"
+                    value={pkg.width}
+                    onChange={(e) => patchP({ width: e.target.value.replace(/[^\d.]/g, '') })}
+                    className={cn(INPUT_CLS, 'pr-9 tabular-nums')}
+                  />
+                  <span className={SUFFIX_CLS} aria-hidden>
+                    cm
+                  </span>
+                </div>
+              </Field>
+              <Field label="Largo">
+                <div className="relative">
+                  <Input
+                    inputMode="decimal"
+                    value={pkg.length}
+                    onChange={(e) => patchP({ length: e.target.value.replace(/[^\d.]/g, '') })}
+                    className={cn(INPUT_CLS, 'pr-9 tabular-nums')}
+                  />
+                  <span className={SUFFIX_CLS} aria-hidden>
+                    cm
+                  </span>
+                </div>
+              </Field>
+              <Field label="Peso">
+                <div className="relative">
+                  <Input
+                    inputMode="decimal"
+                    value={pkg.weight}
+                    onChange={(e) => patchP({ weight: e.target.value.replace(/[^\d.]/g, '') })}
+                    className={cn(INPUT_CLS, 'pr-9 tabular-nums')}
+                  />
+                  <span className={SUFFIX_CLS} aria-hidden>
+                    kg
+                  </span>
+                </div>
               </Field>
             </div>
-            <Field label="Formato de rotulo">
-              <select
-                value={rotuloId ?? ''}
-                onChange={(e) => setRotuloId(Number(e.target.value))}
-                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {coordinadoraRotuloOptions.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </div>
-        ) : null}
-      </section>
-
-      {sdx ? (
-        /* Cotizacion Skydropx: todas las transportadoras disponibles para la
-           ruta, como tarjetas seleccionables (ya vienen ordenadas por precio). */
-        <section className="space-y-3">
-          <SectionTitle>Tarifas</SectionTitle>
-          <Button
-            variant="outline"
-            onClick={() => quoteMutation.mutate(sdxCity)}
-            loading={quoteMutation.isPending}
-            disabled={!canQuote || quoteMutation.isPending}
-          >
-            Cotizar transportadoras
-          </Button>
-          {quote ? (
-            quote.rates.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-border bg-muted/20 px-4 py-8 text-center">
-                <Truck className="mx-auto h-5 w-5 text-muted-foreground" />
-                <p className="mt-2 text-sm font-medium">Ninguna transportadora disponible para esta ruta</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  Revisa el código postal de destino o ajusta las medidas del paquete.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {quote.rates.map((r) => (
-                  <RateCard
-                    key={r.id}
-                    rate={r}
-                    selected={r.id === selectedRateId}
-                    onSelect={() => setSelectedRateId(r.id)}
-                  />
-                ))}
-              </div>
-            )
-          ) : (
-            <p className="text-[11px] text-muted-foreground">
-              Cotiza para ver las transportadoras disponibles con precio y tiempo de entrega.
-            </p>
-          )}
-        </section>
-      ) : (
-        /* Recaudo contraentrega: para TODOS los pedidos (manuales y de
-           marketplace). Coordinadora cobra el valor al entregar. NO aplica en
-           modo Skydropx. */
-        <section className="space-y-3">
-          <SectionTitle>Cobro del envio</SectionTitle>
-          <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5">
-            <button
-              type="button"
-              onClick={() => setCodOn(false)}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                !codOn ? 'bg-card text-foreground shadow-card' : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Normal (ya pagado)
-            </button>
-            <button
-              type="button"
-              onClick={() => setCodOn(true)}
-              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                codOn ? 'bg-card text-foreground shadow-card' : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Recaudo contraentrega
-            </button>
-          </div>
-          {codOn ? (
-            <div className="max-w-xs">
-              <Field label="Valor a recaudar (COP) — lo cobra Coordinadora al entregar">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="Contenido">
                 <Input
-                  inputMode="numeric"
-                  value={codValue}
-                  onChange={(e) => setCodValue(e.target.value.replace(/[^\d.]/g, ''))}
-                  className="tabular-nums"
+                  value={pkg.content}
+                  onChange={(e) => patchP({ content: e.target.value })}
+                  className={INPUT_CLS}
                 />
               </Field>
-              <p className="mt-1.5 text-[11px] text-muted-foreground">
-                Si hubo un abono inicial, pon aqui solo lo que falta por cobrar.
-              </p>
+              <Field label="Valor declarado">
+                <div className="relative">
+                  <Input
+                    inputMode="numeric"
+                    value={pkg.declaredValue}
+                    onChange={(e) =>
+                      patchP({ declaredValue: e.target.value.replace(/[^\d.]/g, '') })
+                    }
+                    className={cn(INPUT_CLS, 'tabular-nums', !sdx ? 'pr-[116px]' : '')}
+                  />
+                  {!sdx ? (
+                    <span className={SUFFIX_CLS} aria-hidden>
+                      mitad de la compra
+                    </span>
+                  ) : null}
+                </div>
+              </Field>
             </div>
-          ) : null}
-        </section>
-      )}
+            {!sdx ? (
+              <Field label="Observaciones">
+                <Input
+                  value={pkg.observations}
+                  placeholder="Aparece en la guía de Coordinadora; vacío = sin observaciones"
+                  maxLength={300}
+                  onChange={(e) => patchP({ observations: e.target.value })}
+                  className={INPUT_CLS}
+                />
+              </Field>
+            ) : null}
+            {!sdx ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="w-24">
+                  <Field label="Unidades">
+                    <Input
+                      inputMode="numeric"
+                      value={pkg.units}
+                      onChange={(e) => patchP({ units: e.target.value.replace(/\D/g, '') })}
+                      className={cn(INPUT_CLS, 'tabular-nums')}
+                    />
+                  </Field>
+                </div>
+                <Field label="Formato de rótulo">
+                  <div className="relative">
+                    <select
+                      value={rotuloId ?? ''}
+                      onChange={(e) => setRotuloId(Number(e.target.value))}
+                      className={SELECT_CLS}
+                    >
+                      {coordinadoraRotuloOptions.map((o) => (
+                        <option key={o.id} value={o.id}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                    <span className={SUFFIX_CLS} aria-hidden>
+                      ▾
+                    </span>
+                  </div>
+                </Field>
+              </div>
+            ) : null}
+          </section>
+        </div>
 
-      <div className="flex items-center justify-between border-t border-border pt-3">
-        <p className="text-[11px] text-muted-foreground">
-          {sdx ? (
-            selectedRate ? (
-              <>
-                Saldrá por <b className="text-foreground/80">{selectedRate.carrier}</b> ·{' '}
-                {formatCOP(selectedRate.total)}
-              </>
+        {sdx ? (
+          /* Cotizacion Skydropx: todas las transportadoras disponibles para la
+           ruta, como tarjetas seleccionables (ya vienen ordenadas por precio). */
+          <section className="min-w-0 flex-[1_1_340px] space-y-2.5">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] font-extrabold">
+              <Zap className="h-4 w-4 shrink-0 text-accent" aria-hidden />
+              Selección de transportadora
+              {quote && quote.rates.length > 0 ? (
+                <span className="ml-auto text-[11px] font-semibold text-hint">
+                  {quote.rates.length} disponibles
+                </span>
+              ) : null}
+            </div>
+            <Button
+              variant="ghost"
+              onClick={() => quoteMutation.mutate(sdxCity)}
+              loading={quoteMutation.isPending}
+              disabled={!canQuote || quoteMutation.isPending}
+              className={BTN_GHOST_CLS}
+            >
+              Cotizar transportadoras
+            </Button>
+            {quote ? (
+              quote.rates.length === 0 ? (
+                <div className="rounded-[15px] border border-dashed border-input bg-surface px-4 py-8 text-center">
+                  <Truck className="mx-auto h-5 w-5 text-hint" />
+                  <p className="mt-2 text-[13.5px] font-extrabold">
+                    Ninguna transportadora disponible para esta ruta
+                  </p>
+                  <p className="mt-0.5 text-xs text-hint">
+                    Revisa el código postal de destino o ajusta las medidas del paquete.
+                  </p>
+                </div>
+              ) : (
+                /* pt para que la pastilla flotante (-top-2) de la primera tarjeta
+                 no se monte sobre el boton de cotizar. */
+                <div className="space-y-2.5 pt-1.5">
+                  {quote.rates.map((r) => (
+                    <RateCard
+                      key={r.id}
+                      rate={r}
+                      selected={r.id === selectedRateId}
+                      cheapest={r.total === cheapestRateTotal}
+                      onSelect={() => setSelectedRateId(r.id)}
+                    />
+                  ))}
+                </div>
+              )
             ) : (
-              'Cotiza y elige una tarifa para generar la guía.'
-            )
-          ) : (
-            'El rotulo se adjunta al chat al generar la guia.'
-          )}
-        </p>
+              <p className="text-xs text-hint">
+                Cotiza para ver las transportadoras disponibles con precio y tiempo de entrega.
+              </p>
+            )}
+          </section>
+        ) : (
+          /* Recaudo contraentrega: para TODOS los pedidos (manuales y de
+           marketplace). Coordinadora cobra el valor al entregar. NO aplica en
+           modo Skydropx. */
+          <section className="space-y-2.5">
+            <SectionTitle icon={CreditCard} tone="success">
+              Cobro del envío
+            </SectionTitle>
+            <div className="flex flex-wrap items-center gap-4 rounded-[14px] border border-border bg-surface px-4 py-3.5">
+              <button
+                type="button"
+                onClick={() => setCodOn(!codOn)}
+                aria-pressed={codOn}
+                className={cn(
+                  'inline-flex items-center gap-2.5 rounded-[10px] max-md:min-h-[40px]',
+                  FOCUS_RING,
+                )}
+              >
+                <span
+                  className={cn(
+                    'relative h-[22px] w-[38px] shrink-0 rounded-full transition-colors motion-reduce:transition-none',
+                    codOn ? 'bg-emerald-600 dark:bg-emerald-500' : 'bg-input',
+                  )}
+                  aria-hidden
+                >
+                  <span
+                    className={cn(
+                      'absolute top-[3px] h-4 w-4 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,.25)] transition-[left] motion-reduce:transition-none',
+                      codOn ? 'left-[19px]' : 'left-[3px]',
+                    )}
+                  />
+                </span>
+                <b className="text-[13px]">Recaudo contraentrega</b>
+              </button>
+              {codOn ? (
+                <div className="min-w-[min(100%,200px)] flex-1">
+                  <div className="relative max-w-[200px]">
+                    <Input
+                      inputMode="numeric"
+                      aria-label="Valor a recaudar"
+                      value={codValue}
+                      onChange={(e) => setCodValue(e.target.value.replace(/[^\d.]/g, ''))}
+                      className={cn(INPUT_CLS, 'pr-[76px] tabular-nums')}
+                    />
+                    <span className={SUFFIX_CLS} aria-hidden>
+                      a recaudar
+                    </span>
+                  </div>
+                  <p className="mt-1.5 text-xs text-hint">
+                    Si hubo un abono inicial, pon aquí solo lo que falta por cobrar.
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          </section>
+        )}
+      </div>
+
+      <div className="mt-1.5 flex flex-wrap items-center gap-3 border-t border-border pt-4">
         <Button
           onClick={() => (sdx ? generateSkydropx.mutate() : generate.mutate())}
           loading={generating}
           disabled={(sdx ? !canGenerateSdx : !canGenerate) || generating}
+          className={BTN_PRIMARY_CLS}
         >
-          <Truck className="h-4 w-4" />
-          Generar guia
+          <Truck />
+          {sdx ? (
+            selectedRate ? (
+              <>
+                Generar guía · {selectedRate.carrier}{' '}
+                <span className="tabular-nums">{formatCOP(selectedRate.total)}</span>
+              </>
+            ) : (
+              'Generar guía'
+            )
+          ) : (
+            /* El modo Skydropx nombra su transportadora: el directo tambien. */
+            'Generar guía Coordinadora'
+          )}
         </Button>
+        {sdx && quote ? (
+          <Button
+            variant="ghost"
+            onClick={() => quoteMutation.mutate(sdxCity)}
+            loading={quoteMutation.isPending}
+            disabled={!canQuote || quoteMutation.isPending}
+            className={BTN_GHOST_CLS}
+          >
+            Cotizar de nuevo
+          </Button>
+        ) : null}
+        <p className="min-w-[min(100%,220px)] flex-1 text-xs leading-[1.45] text-hint">
+          {sdx ? (
+            <>
+              Mismo cierre: <b className="text-muted-foreground">rótulo al chat</b>,{' '}
+              <b className="text-muted-foreground">WhatsApp</b>,{' '}
+              <b className="text-muted-foreground">VTEX</b> — sin importar la transportadora.
+            </>
+          ) : (
+            <>
+              Después: <b className="text-muted-foreground">rótulo al chat</b> →{' '}
+              <b className="text-muted-foreground">guía por WhatsApp</b> →{' '}
+              <b className="text-muted-foreground">cierre en VTEX</b>. Todo solo.
+            </>
+          )}
+        </p>
       </div>
     </div>
   );
@@ -865,8 +1150,34 @@ const CARRIER_BRAND_COLORS: Record<string, string> = {
  *  las demas caen a la inicial con color de marca. */
 const CARRIER_LOGOS = new Set(['coordinadora', 'servientrega', 'interrapidisimo', 'envia']);
 
+/**
+ * Marca chiquita para el selector de transportadora (18px). Los logos son
+ * baldosas cuadradas con SU fondo horneado, asi que el de Coordinadora es azul
+ * sobre BLANCO: sin un borde de pelo se perderia contra el boton activo (que
+ * tambien es blanco). El borde se lo da la baldosa, no el logo.
+ */
+function CourierMark({ slug }: { slug: 'coordinadora' | 'skydropx' }) {
+  return (
+    <span
+      className="block h-[18px] w-[18px] shrink-0 overflow-hidden rounded-[5px] ring-1 ring-inset ring-border"
+      aria-hidden
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={`/carriers/${slug}.webp`} alt="" className="h-full w-full object-cover" />
+    </span>
+  );
+}
+
 /** Chip de transportadora: logo real si lo hay, inicial de color si no. */
-function CarrierChip({ code, name, size = 'h-10 w-10' }: { code: string; name: string; size?: string }) {
+function CarrierChip({
+  code,
+  name,
+  size = 'h-10 w-10',
+}: {
+  code: string;
+  name: string;
+  size?: string;
+}) {
   const slug = code.trim().toLowerCase();
   if (CARRIER_LOGOS.has(slug)) {
     return (
@@ -894,10 +1205,13 @@ function CarrierChip({ code, name, size = 'h-10 w-10' }: { code: string; name: s
 function RateCard({
   rate,
   selected,
+  cheapest = false,
   onSelect,
 }: {
   rate: SkydropxRate;
   selected: boolean;
+  /** Tarifa mas barata de la cotizacion (pastilla verde; se oculta al elegirla). */
+  cheapest?: boolean;
   onSelect: () => void;
 }) {
   return (
@@ -906,24 +1220,71 @@ function RateCard({
       onClick={onSelect}
       aria-pressed={selected}
       className={cn(
-        'w-full rounded-xl border bg-card p-3 text-left transition-colors',
-        selected ? 'border-accent ring-1 ring-accent' : 'border-border hover:border-accent/40',
+        'relative w-full rounded-[15px] border bg-surface px-[15px] py-[13px] text-left',
+        // Solo lo que anima el mockup (.rate): el degradado del estado elegido
+        // aparece de golpe, como alli.
+        // duration-[130ms] es AMBIGUA para Tailwind (tailwindcss-animate añade
+        // su propio duration-*) y no emite nada: va como propiedad literal.
+        'transition-[border-color,box-shadow,transform] [transition-duration:130ms]',
+        'hover:-translate-y-px hover:border-accent',
+        FOCUS_RING,
+        'motion-reduce:transition-none motion-reduce:hover:translate-y-0',
+        selected
+          ? 'border-accent bg-gradient-to-b from-accent/[0.06] to-surface shadow-[0_10px_26px_-10px_hsl(var(--accent)/0.35)] ring-1 ring-accent'
+          : 'border-border hover:shadow-card',
       )}
     >
-      <div className="flex items-center gap-3">
-        <CarrierChip code={rate.carrierCode} name={rate.carrier} />
+      {selected ? (
+        <span className="absolute -top-2 right-3.5 rounded-full bg-accent px-[9px] py-0.5 text-[10px] font-extrabold uppercase tracking-[0.04em] text-accent-foreground">
+          Elegida
+        </span>
+      ) : cheapest ? (
+        <span className="absolute -top-2 right-3.5 rounded-full bg-emerald-600 px-[9px] py-0.5 text-[10px] font-extrabold uppercase tracking-[0.04em] text-white dark:bg-emerald-500">
+          Más barata
+        </span>
+      ) : null}
+      <div className="flex items-center gap-[11px]">
+        <CarrierChip code={rate.carrierCode} name={rate.carrier} size="h-10 w-10 rounded-[11px]" />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm">
-            <span className="font-semibold">{rate.carrier}</span>
-            {rate.service ? <span className="text-muted-foreground"> · {rate.service}</span> : null}
-          </p>
-          {rate.days !== null ? (
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
-              Tiempo estimado · {rate.days} {rate.days === 1 ? 'día hábil' : 'días hábiles'}
-            </p>
+          <p className="truncate text-sm font-extrabold tracking-[-0.01em]">{rate.carrier}</p>
+          {rate.service ? (
+            <p className="truncate text-[11.5px] font-semibold text-hint">{rate.service}</p>
           ) : null}
         </div>
-        <p className="shrink-0 text-base font-semibold tabular-nums">{formatCOP(rate.total)}</p>
+        {/* Indicador tipo radio (espejo de aria-pressed, solo decorativo). */}
+        <span
+          className={cn(
+            'grid h-5 w-5 shrink-0 place-items-center rounded-full border-2',
+            selected ? 'border-accent bg-accent' : 'border-input',
+          )}
+          aria-hidden
+        >
+          {selected ? <span className="h-[7px] w-[7px] rounded-full bg-white" /> : null}
+        </span>
+      </div>
+      <p className="mt-[9px] flex items-center gap-[7px] text-[11.5px] font-semibold text-muted-foreground">
+        <span className="h-[7px] w-[7px] shrink-0 rounded-full bg-accent" aria-hidden />
+        Recepción · {rate.pickup ? 'Con recolección' : 'Llevar a oficina'}
+      </p>
+      <p className="mt-[9px] flex items-center gap-[7px] text-[11.5px] font-semibold text-muted-foreground">
+        <span
+          className="h-[5px] w-[5px] shrink-0 rounded-full border-2 border-accent bg-card"
+          aria-hidden
+        />
+        Entrega · {rate.officeDelivery ? 'Domicilio + Sucursal' : 'Domicilio'}
+      </p>
+      <div className="mt-2.5 flex flex-wrap items-end gap-x-3 gap-y-1 border-t border-dashed border-input pt-2.5">
+        {rate.days !== null ? (
+          <p className="min-w-0 text-[11.5px] font-bold text-muted-foreground">
+            Tiempo estimado ·{' '}
+            <b className="text-foreground">
+              {rate.days} {rate.days === 1 ? 'día hábil' : 'días hábiles'}
+            </b>
+          </p>
+        ) : null}
+        <p className="ml-auto shrink-0 text-[19px] font-extrabold tabular-nums tracking-[-0.02em]">
+          {formatCOP(rate.total)}
+        </p>
       </div>
     </button>
   );
@@ -956,21 +1317,23 @@ function GuideDoneView({
   const carrier = tracking?.carrier ?? carrierName ?? 'Coordinadora';
   const isCoordinadora = carrier.toLowerCase().includes('coordinadora');
   return (
-    <div className="space-y-4 p-5">
-      <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-4 text-center">
-        <CheckCircle2 className="mx-auto h-7 w-7 text-emerald-600 dark:text-emerald-400" />
-        <h3 className="mt-2 text-base font-semibold">Guia {guide.number} generada</h3>
-        <p className="mt-0.5 flex items-center justify-center gap-1.5 text-sm text-muted-foreground">
-          <Package className="h-3.5 w-3.5" />
-          {carrier}
+    <div className="space-y-4 p-[22px]">
+      <div className="rounded-[12px] bg-emerald-500/10 px-3.5 py-3 text-center text-emerald-600 dark:text-emerald-400">
+        <CheckCircle2 className="mx-auto h-7 w-7" />
+        <h3 className="mt-2 break-words text-[13.5px] font-extrabold">
+          Guía <span className={cn(MONO_CLS, 'break-all')}>{guide.number}</span> generada
+        </h3>
+        <p className="mt-0.5 flex flex-wrap items-center justify-center gap-1.5 text-[12.5px] font-semibold text-emerald-600/90 dark:text-emerald-400/90">
+          <Package className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 break-words">{carrier}</span>
         </p>
       </div>
 
       <TrackingTimeline orderId={orderId} />
 
-      <p className="text-center text-[11px] text-muted-foreground">
+      <p className="text-center text-xs text-hint">
         {isCoordinadora
-          ? 'El rotulo esta en la conversacion. Para generar otra guia, anulala primero en Coordinadora.'
+          ? 'El rótulo está en la conversación. Para generar otra guía, anúlala primero en Coordinadora.'
           : `La guía está en la conversación. Para generar otra, anúlala primero en ${carrier}.`}
       </p>
     </div>
@@ -985,28 +1348,33 @@ function TrackingTimeline({ orderId }: { orderId: string }) {
   const hasMovements = (data?.estados.length ?? 0) > 0;
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border bg-card">
-      <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
-        <h4 className="flex items-center gap-1.5 text-sm font-semibold">
-          <Truck className="h-4 w-4" />
-          Seguimiento del envio
+    <div className="overflow-hidden rounded-[14px] border border-border bg-surface">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5 border-b border-border px-4 py-3">
+        <h4 className="flex min-w-0 items-center gap-2.5 text-sm font-extrabold tracking-[-0.01em]">
+          <span
+            className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[9px] bg-wash text-accent"
+            aria-hidden
+          >
+            <Truck className="h-4 w-4" />
+          </span>
+          <span className="min-w-0 break-words">Seguimiento del envío</span>
         </h4>
-        <div className="flex items-center gap-3">
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           {data?.trackingUrl ? (
             <a
               href={data.trackingUrl}
               target="_blank"
               rel="noreferrer"
-              className="flex items-center gap-1 text-[11px] text-sky-600 hover:underline dark:text-sky-400"
+              className="flex min-w-0 items-center gap-1 text-xs font-semibold text-accent hover:underline"
             >
-              <ExternalLink className="h-3 w-3" />
-              {data.carrier ?? 'Coordinadora'}
+              <ExternalLink className="h-3 w-3 shrink-0" />
+              <span className="truncate">{data.carrier ?? 'Coordinadora'}</span>
             </a>
           ) : null}
           <button
             type="button"
             onClick={() => refetch()}
-            className="text-muted-foreground hover:text-foreground"
+            className="-mr-1.5 grid h-9 w-9 shrink-0 place-items-center rounded-[9px] text-hint transition-colors hover:text-accent max-md:h-10 max-md:w-10"
             aria-label="Actualizar seguimiento"
             title="Actualizar"
           >
@@ -1015,22 +1383,27 @@ function TrackingTimeline({ orderId }: { orderId: string }) {
         </div>
       </div>
 
-      <div className="p-4">
+      <div className="px-4 py-3.5">
         {isLoading ? (
           <div className="flex justify-center py-4">
-            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            <Loader2 className="h-5 w-5 animate-spin text-hint motion-reduce:animate-none" />
           </div>
         ) : error ? (
-          <p className="text-sm text-muted-foreground">No se pudo consultar el seguimiento.</p>
+          <p className="flex items-start gap-2.5 rounded-xl bg-amber-500/10 px-3.5 py-[11px] text-[12.5px] leading-[1.45] text-amber-600 dark:text-amber-400">
+            <AlertTriangle className="mt-px h-[15px] w-[15px] shrink-0" aria-hidden />
+            <span className="min-w-0 break-words">No se pudo consultar el seguimiento.</span>
+          </p>
         ) : !data ? (
-          <p className="text-sm text-muted-foreground">Este pedido aun no tiene guia para rastrear.</p>
+          <p className="text-[13.5px] text-muted-foreground">
+            Este pedido aún no tiene guía para rastrear.
+          </p>
         ) : (
           <>
             {/* Con Skydropx el envio puede salir por CUALQUIER transportadora:
                 dejarla siempre visible junto al estado, con su logo. El
                 rastreo trae el NOMBRE ("Interrapidísimo") -> normalizar a slug. */}
             {data.carrier ? (
-              <p className="mb-3 inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/40 px-2.5 py-1 text-[11px] font-medium">
+              <p className="mb-3 inline-flex items-center gap-1.5 rounded-full bg-wash px-2.5 py-[3px] text-[11.5px] font-bold text-accent-ink">
                 <CarrierChip
                   code={data.carrier
                     .toLowerCase()
@@ -1045,28 +1418,30 @@ function TrackingTimeline({ orderId }: { orderId: string }) {
             ) : null}
 
             {delivered ? (
-              <div className="mb-3 flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700 dark:text-emerald-400">
+              <div className="mb-3 flex items-center gap-2.5 rounded-xl bg-emerald-500/10 px-3.5 py-[11px] text-[12.5px] font-semibold text-emerald-600 dark:text-emerald-400">
                 <CheckCircle2 className="h-4 w-4 shrink-0" />
-                Entregado {data.fechaEntrega}
-                {data.horaEntrega ? ` · ${data.horaEntrega}` : ''}
+                <span className="min-w-0 break-words">
+                  Entregado {data.fechaEntrega}
+                  {data.horaEntrega ? ` · ${data.horaEntrega}` : ''}
+                </span>
               </div>
             ) : data.descripcionEstado ? (
-              <div className="mb-3 flex items-center gap-2 rounded-lg border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-sm font-medium text-sky-700 dark:text-sky-400">
+              <div className="mb-3 flex items-center gap-2.5 rounded-xl bg-wash px-3.5 py-[11px] text-[12.5px] font-semibold text-accent-ink">
                 <MapPin className="h-4 w-4 shrink-0" />
-                {data.descripcionEstado}
+                <span className="min-w-0 break-words">{data.descripcionEstado}</span>
               </div>
             ) : null}
 
             {data.novedades.length > 0 ? (
-              <div className="mb-3 space-y-1.5 rounded-lg border border-amber-500/20 bg-amber-500/10 p-3">
-                <p className="flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-500">
+              <div className="mb-3 space-y-1.5 rounded-xl bg-amber-500/10 px-3.5 py-[11px]">
+                <p className="flex items-center gap-1.5 text-[12.5px] font-bold text-amber-600 dark:text-amber-400">
                   <AlertTriangle className="h-3.5 w-3.5" />
                   Novedades
                 </p>
                 {data.novedades.map((n, i) => (
-                  <p key={i} className="text-xs">
+                  <p key={i} className="break-words text-[12.5px]">
                     {n.descripcion}
-                    <span className="text-muted-foreground">
+                    <span className="text-hint">
                       {n.fecha ? ` · ${n.fecha}` : ''}
                       {n.hora ? ` ${n.hora}` : ''}
                     </span>
@@ -1081,13 +1456,15 @@ function TrackingTimeline({ orderId }: { orderId: string }) {
                   <li key={i} className="flex gap-3">
                     <div className="flex flex-col items-center">
                       <span
-                        className={`mt-1 h-2 w-2 shrink-0 rounded-full ${i === 0 ? 'bg-foreground' : 'bg-foreground/40'}`}
+                        className={`mt-1 h-2 w-2 shrink-0 rounded-full ${i === 0 ? 'bg-accent' : 'bg-input'}`}
                       />
-                      {i < data.estados.length - 1 ? <span className="my-0.5 w-px flex-1 bg-border" /> : null}
+                      {i < data.estados.length - 1 ? (
+                        <span className="my-0.5 w-px flex-1 bg-input" />
+                      ) : null}
                     </div>
-                    <div className="pb-3">
-                      <p className="text-sm leading-snug">{e.descripcion}</p>
-                      <p className="text-[11px] text-muted-foreground">
+                    <div className="min-w-0 pb-3">
+                      <p className="break-words text-[13.5px] leading-snug">{e.descripcion}</p>
+                      <p className="text-[11px] text-hint">
                         {e.fecha}
                         {e.hora ? ` · ${e.hora}` : ''}
                       </p>
@@ -1096,8 +1473,9 @@ function TrackingTimeline({ orderId }: { orderId: string }) {
                 ))}
               </ol>
             ) : (
-              <p className="text-sm text-muted-foreground">
-                Aun sin movimientos registrados. La transportadora los actualiza al recoger y mover el paquete.
+              <p className="text-[13.5px] text-muted-foreground">
+                Aún sin movimientos registrados. La transportadora los actualiza al recoger y mover
+                el paquete.
               </p>
             )}
           </>
@@ -1120,16 +1498,95 @@ function formatCOP(value: number): string {
   }
 }
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
+/** Cabecera de seccion (patron Cobalto): chip de icono tintado + titulo, con
+ *  pista opcional a la derecha. tone="success" = chip esmeralda (cobros). */
+function SectionTitle({
+  icon: Icon,
+  tone = 'accent',
+  hint,
+  children,
+}: {
+  icon?: LucideIcon;
+  tone?: 'accent' | 'success';
+  hint?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
-    <h3 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{children}</h3>
+    /* flex-wrap: en un panel angosto la pista salta a su propia linea en vez de
+       estrujar (o desbordar) el titulo. */
+    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+      {Icon ? (
+        <span
+          className={cn(
+            'grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[9px]',
+            tone === 'success'
+              ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+              : 'bg-wash text-accent',
+          )}
+          aria-hidden
+        >
+          <Icon className="h-4 w-4" />
+        </span>
+      ) : null}
+      <h3 className="min-w-0 break-words text-sm font-extrabold tracking-[-0.01em]">{children}</h3>
+      {hint ? (
+        <span className="ml-auto min-w-0 break-words text-right text-xs text-hint">{hint}</span>
+      ) : null}
+    </div>
+  );
+}
+
+/** Fila de pastillas del mockup (.preset-chips). Como el control es un GRUPO de
+ *  botones (no un campo), el micro-rotulo no es un <label> suelto: da su nombre
+ *  accesible al grupo. */
+function PresetChips({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0 space-y-[5px]">
+      <p className="break-words text-[11px] font-bold uppercase leading-[1.35] tracking-[0.06em] text-hint">
+        {label}
+      </p>
+      <div className="flex flex-wrap gap-2" role="group" aria-label={label}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** Pastilla de preset (.preset): al pulsarla queda con borde y texto cobalto
+ *  sobre el lavado del acento. */
+function PresetChip({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn(
+        'min-w-0 max-w-full break-words rounded-[10px] border px-[13px] py-[7px] text-left text-[12.5px] font-bold transition-colors motion-reduce:transition-none max-md:min-h-[40px]',
+        FOCUS_RING,
+        active
+          ? 'border-accent bg-wash text-accent-ink'
+          : 'border-input bg-card text-muted-foreground hover:border-accent hover:text-accent',
+      )}
+    >
+      {children}
+    </button>
   );
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
+    <div className="min-w-0 space-y-[5px]">
+      <Label className="block break-words text-[11px] font-bold uppercase leading-[1.35] tracking-[0.06em] text-hint">
+        {label}
+      </Label>
       {children}
     </div>
   );

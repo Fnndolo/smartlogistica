@@ -155,7 +155,7 @@ export const createSkydropxGuideSchema = z.object({
     phone: z.string().trim().min(5).max(30),
     email: z.string().trim().email().optional(),
   }),
-  packageContent: z.string().trim().min(2).max(60).default('CELULAR'),
+  packageContent: z.string().trim().min(2).max(60).default('TECNOLOGIA'),
   /** Tipo de embalaje del catalogo de Skydropx (codigo, ej. '4G' caja). */
   packagingCode: z.string().trim().max(10).optional(),
 });

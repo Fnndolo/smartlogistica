@@ -3,81 +3,108 @@
 @tailwind utilities;
 
 /*
- * Tokens del rediseño (propuesta "cobalto señal"):
- * - Lienzo claro con sesgo frio (ya no blanco plano) y tarjetas blancas.
- * - Acento cobalto mas electrico (#3d63f5 claro / #6d8bff oscuro) reservado
- *   para lo vivo: menciones, no leidos, activo, hover de fila.
- * - primary sigue monocromo (botones negro/blanco, ADN Vercel).
+ * Tokens "Cobalto" (paleta aprobada en el mockup del drawer, portada 1:1).
+ * Los neutros NO son grises: llevan sesgo cobalto en TODOS los niveles, que
+ * es lo que separa este look del gris apagado anterior.
+ *
+ *   ground  #eef2fb   lienzo          card   #ffffff   superficie e inputs
+ *   surface #f7f9ff   tarjeta interna wash   #edf2ff   lavado del acento
+ *   line    #e2e8f8   borde tarjeta   input  #cdd8f3   borde de campo (mas fuerte)
+ *   ink     #0b1533   texto           ink-2  #46527a   texto secundario
+ *   ink-3   #7c87ad   micro-etiquetas cobalt #2653f1   acento
  */
 @layer base {
   :root {
-    --background: 220 25% 97%;
-    --foreground: 221 44% 10%;
+    --background: 221 60% 96%; /* ground #eef2fb */
+    --foreground: 225 64% 12%; /* ink #0b1533 */
 
     --card: 0 0% 100%;
-    --card-foreground: 221 44% 10%;
+    --card-foreground: 225 64% 12%;
+
+    /* Tarjeta interna del drawer: blanco azulado, un peldaño sobre el lienzo. */
+    --surface: 225 100% 98%; /* card-2 #f7f9ff */
 
     --popover: 0 0% 100%;
-    --popover-foreground: 221 44% 10%;
+    --popover-foreground: 225 64% 12%;
 
-    --primary: 221 44% 11%;
+    --primary: 225 64% 12%;
     --primary-foreground: 210 40% 98%;
 
-    --secondary: 218 30% 95%;
-    --secondary-foreground: 221 44% 10%;
+    --secondary: 224 61% 93%;
+    --secondary-foreground: 225 64% 12%;
 
-    --muted: 218 30% 95%;
-    --muted-foreground: 219 14% 42%;
+    --muted: 224 61% 93%;
+    --muted-foreground: 226 27% 38%; /* ink-2 #46527a */
+    /* Micro-etiquetas y pistas (mas claro que muted-foreground). */
+    --hint: 227 23% 58%; /* ink-3 #7c87ad */
 
-    --accent: 228 90% 60%;
+    --accent: 227 88% 55%; /* cobalt #2653f1 */
     --accent-foreground: 0 0% 100%;
+    /* Fondo del boton primario: degradado cobalt -> cobalt-deep del mockup. */
+    --accent-deep: 226 77% 47%; /* #1b3fd6 */
+    /* Texto SOBRE lavado cobalto (pastillas, chips, pestaña en hover): azul
+       marino profundo, no el cobalto brillante — es lo que da el contraste. */
+    --accent-ink: 227 73% 32%; /* cobalt-ink #16308f */
+    /* Lavado del acento (fondos de chip/pastilla) y su version fuerte. */
+    --wash: 226 100% 96%; /* #edf2ff */
+    --wash-strong: 224 100% 94%; /* #dfe8ff */
+    /* Velo detras del drawer. */
+    --scrim: 225 64% 8%;
 
-    --destructive: 351 60% 48%;
+    --destructive: 357 72% 56%; /* #df3d45 */
     --destructive-foreground: 210 40% 98%;
 
-    --border: 216 30% 91%;
-    --input: 216 30% 91%;
-    --ring: 228 90% 60%;
+    --border: 224 61% 93%; /* line #e2e8f8 */
+    --input: 223 61% 88%; /* line-2 #cdd8f3 — borde de campo */
+    --ring: 227 88% 55%;
 
     --radius: 0.5rem;
 
-    /* Sombras suaves por capas (Linear-style) */
-    --shadow-card: 0 1px 2px rgb(14 21 36 / 0.05), 0 0 0 1px rgb(14 21 36 / 0.03);
-    --shadow-float: 0 12px 32px -12px rgb(14 21 36 / 0.18), 0 2px 8px rgb(14 21 36 / 0.06);
-    --shadow-pop: 0 24px 64px -16px rgb(14 21 36 / 0.28), 0 4px 16px rgb(14 21 36 / 0.08);
+    /* Sombras suaves por capas, tintadas de cobalto (Linear-style) */
+    --shadow-card: 0 1px 2px rgb(11 21 51 / 0.04), 0 8px 24px -12px rgb(38 83 241 / 0.12);
+    --shadow-float: 0 2px 4px rgb(11 21 51 / 0.05), 0 16px 40px -16px rgb(38 83 241 / 0.22);
+    --shadow-pop: 0 24px 64px -16px rgb(11 21 51 / 0.28), 0 4px 16px rgb(38 83 241 / 0.14);
   }
 
   .dark {
-    --background: 222 35% 7%; /* #0b0f17 */
-    --foreground: 218 40% 95%;
+    --background: 226 60% 7%; /* ground #070c1c */
+    --foreground: 224 76% 95%; /* ink #e9eefc */
 
-    --card: 219 39% 10%;
-    --card-foreground: 218 40% 95%;
+    --card: 225 53% 12%; /* #0e162e */
+    --card-foreground: 224 76% 95%;
 
-    --popover: 220 34% 13%;
-    --popover-foreground: 218 40% 95%;
+    --surface: 226 51% 15%; /* card-2 #121b38 */
 
-    --primary: 218 40% 95%;
-    --primary-foreground: 221 44% 11%;
+    --popover: 226 51% 15%;
+    --popover-foreground: 224 76% 95%;
 
-    --secondary: 221 30% 16%;
-    --secondary-foreground: 218 40% 95%;
+    --primary: 224 76% 95%;
+    --primary-foreground: 225 53% 12%;
 
-    --muted: 221 30% 16%;
-    --muted-foreground: 220 16% 66%;
+    --secondary: 227 44% 22%;
+    --secondary-foreground: 224 76% 95%;
 
-    --accent: 227 100% 71%;
-    --accent-foreground: 222 35% 7%;
+    --muted: 227 44% 22%;
+    --muted-foreground: 226 35% 73%; /* ink-2 #a3aed3 */
+    --hint: 227 24% 53%; /* ink-3 #6a76a3 */
 
-    --destructive: 351 80% 62%;
-    --destructive-foreground: 222 35% 7%;
+    --accent: 225 100% 72%; /* cobalt #6e92ff */
+    --accent-foreground: 226 60% 7%;
+    --accent-deep: 227 87% 64%; /* #5379f5 */
+    --accent-ink: 226 100% 86%; /* cobalt-ink #b7c8ff */
+    --wash: 226 53% 18%; /* #141f45 */
+    --wash-strong: 226 55% 23%; /* #1b2a5c */
+    --scrim: 226 60% 3%;
 
-    --border: 221 26% 19%;
-    --input: 221 26% 19%;
-    --ring: 227 100% 71%;
+    --destructive: 357 82% 67%; /* #f0666d */
+    --destructive-foreground: 226 60% 7%;
 
-    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.35), 0 0 0 1px rgb(255 255 255 / 0.03);
-    --shadow-float: 0 16px 40px -14px rgb(0 0 0 / 0.6), 0 2px 8px rgb(0 0 0 / 0.35);
+    --border: 227 44% 22%; /* line #1f2a50 */
+    --input: 226 41% 28%; /* line-2 #2b3966 */
+    --ring: 225 100% 72%;
+
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px -12px rgb(0 0 0 / 0.5);
+    --shadow-float: 0 2px 4px rgb(0 0 0 / 0.4), 0 16px 40px -16px rgb(20 40 120 / 0.6);
     --shadow-pop: 0 28px 80px -18px rgb(0 0 0 / 0.75), 0 4px 18px rgb(0 0 0 / 0.5);
   }
 }
@@ -161,8 +188,19 @@
   .animate-unread {
     animation: unread-breathe 3s ease-in-out infinite;
   }
+  /* Punto ACTUAL de la ruta de envio: el aro arranca solido y se expande
+     hasta desvanecerse (@keyframes pulse del mockup). */
+  .animate-route-pulse {
+    animation: route-pulse 2s ease-in-out infinite;
+  }
+  /* Entrada de pestaña del drawer (.pane.on del mockup: sube 6px y aparece). */
+  .pane-rise {
+    animation: pane-rise 0.22s ease;
+  }
   @media (prefers-reduced-motion: reduce) {
-    .animate-unread {
+    .animate-unread,
+    .animate-route-pulse,
+    .pane-rise {
       animation: none;
     }
   }
@@ -185,6 +223,27 @@
   to {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+@keyframes route-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 hsl(var(--ring) / 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 6px hsl(var(--ring) / 0);
+  }
+}
+
+@keyframes pane-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
 

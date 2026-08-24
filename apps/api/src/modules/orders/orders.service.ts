@@ -1965,8 +1965,8 @@ export class OrdersService {
             : (client.address?.street ?? extractShippingAddress(order.rawPayload) ?? ''),
         cityCode: city?.code ?? null,
         cityName: city?.name ?? client.address?.city ?? null,
-        // CP YA resuelto (DANE exacto > nombre > zip del pedido): el campo de
-        // CP del modo Skydropx arranca lleno, sin esperar a cotizar.
+        // CP y DEPARTAMENTO YA resueltos (DANE exacto > nombre > pedido): los
+        // campos del modo Skydropx arrancan llenos, sin esperar a cotizar.
         postalCode:
           postalCodeForDane(city?.code) ||
           postalCodeForCity(
@@ -1975,6 +1975,7 @@ export class OrdersService {
           ) ||
           (client.address?.zipCode ?? '').trim() ||
           null,
+        department: city?.department || (client.address?.department ?? '').trim() || null,
         phone: client.phone,
       },
       sender: senderData,
@@ -1985,7 +1986,7 @@ export class OrdersService {
         width: 15,
         length: 20,
         units: 1,
-        content: 'CELULAR',
+        content: 'TECNOLOGIA',
         // Regla del negocio: se declara LA MITAD del total de la compra
         // (editable antes de generar si un envio necesita otro monto).
         declaredValue: Math.round((Number(order.totalValue) || 0) / 2),
@@ -2821,6 +2822,8 @@ export class OrdersService {
     reactions: OrderSummary['reactions'] = [],
     waConfirmation: OrderSummary['waConfirmation'] = null,
   ): OrderSummary {
+    // Fotos del marketplace (del payload guardado): sin persistir ni re-sincronizar.
+    const images = extractItemImages(o.rawPayload);
     return {
       unreadCount,
       waConfirmation,
@@ -2845,6 +2848,7 @@ export class OrdersService {
         name: i.name,
         quantity: i.quantity,
         unitPrice: i.unitPrice.toString(),
+        imageUrl: images.get(i.sku) ?? images.get(i.name) ?? null,
       })),
       warehouseId: o.warehouseId,
       assignedAt: o.assignedAt ? o.assignedAt.toISOString() : null,
@@ -2914,6 +2918,31 @@ export class OrdersService {
       createdAt: e.createdAt.toISOString(),
     };
   }
+}
+
+/**
+ * Fotos de producto del rawPayload, indexadas por SKU y por nombre: VTEX manda
+ * `items[].imageUrl` y el pedido guarda el payload entero, asi que las traen
+ * TODOS los pedidos ya sincronizados (nada que migrar ni re-sincronizar).
+ * Se indexa por refId/id/sellerSku porque OrderItem.sku guarda `refId ?? id`.
+ */
+function extractItemImages(rawPayload: unknown): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!rawPayload || typeof rawPayload !== 'object') return out;
+  const items = (rawPayload as Record<string, unknown>).items;
+  if (!Array.isArray(items)) return out;
+  for (const raw of items) {
+    if (!raw || typeof raw !== 'object') continue;
+    const it = raw as Record<string, unknown>;
+    const url = typeof it.imageUrl === 'string' ? it.imageUrl.trim() : '';
+    if (!url.startsWith('http')) continue;
+    for (const key of [it.refId, it.id, it.sellerSku, it.name]) {
+      if (typeof key === 'string' && key.trim() && !out.has(key.trim())) {
+        out.set(key.trim(), url);
+      }
+    }
+  }
+  return out;
 }
 
 /**
