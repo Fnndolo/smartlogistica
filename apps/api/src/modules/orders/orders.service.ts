@@ -43,7 +43,7 @@ import type {
   MentionItem,
   OrderSearchResult,
 } from '@smartlogistica/shared';
-import type { Prisma } from '.prisma/tenant-client';
+import type { Prisma, PrismaClient } from '.prisma/tenant-client';
 
 import { isAdmin } from '../../common/rbac';
 import type { AuthContext } from '../../common/types/authenticated-request';
@@ -2041,9 +2041,21 @@ export class OrdersService {
         skydropxShipmentId: { not: null },
         OR: [{ shippingState: null }, { shippingState: { not: 'entregado' } }],
       },
-      select: { id: true, skydropxShipmentId: true, shippingState: true, shippingStatus: true },
+      select: {
+        id: true,
+        skydropxShipmentId: true,
+        shippingState: true,
+        shippingStatus: true,
+        guideNumber: true,
+      },
     });
     for (const o of skyPending) {
+      // RESCATE del rotulo: si la guia se creo antes de que Skydropx emitiera
+      // los documentos, el pedido quedo con el UUID del envio como "guia" y sin
+      // rotulo en el chat. Aqui se rellena en cuanto la paqueteria los publica.
+      if (o.guideNumber === o.skydropxShipmentId) {
+        await this.backfillSkydropxLabel(tenantId, prisma, o.id, o.skydropxShipmentId as string);
+      }
       const t = await this.skydropx.tracking(o.skydropxShipmentId as string);
       if (!t) continue;
       const statusText = t.carrier ? `${t.carrier} · ${t.statusText}` : t.statusText;
@@ -2601,6 +2613,77 @@ export class OrdersService {
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
 
     return { id: guide.id, number: guide.number, url: guide.url, createdAt: new Date().toISOString() };
+  }
+
+  /**
+   * RESCATE del rotulo de Skydropx. Su API crea el envio de forma asincrona: si
+   * al generar la guia la paqueteria aun no habia emitido los documentos, el
+   * pedido quedo con el UUID del envio como numero y sin rotulo en el chat.
+   * Aqui, ya con los documentos publicados, se corrige el numero, se manda el
+   * rotulo al chat y se envia la guia por WhatsApp — lo mismo que habria pasado
+   * en el momento. Idempotente: solo actua mientras el numero siga siendo el UUID.
+   */
+  private async backfillSkydropxLabel(
+    tenantId: string,
+    prisma: PrismaClient,
+    orderId: string,
+    shipmentId: string,
+  ): Promise<void> {
+    const docs = await this.skydropx.shipmentDocs(shipmentId).catch(() => null);
+    if (!docs?.trackingNumber || docs.trackingNumber === shipmentId) return;
+
+    const order = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
+    if (!order || order.guideNumber !== shipmentId) return; // ya lo rescato otra pasada
+
+    await prisma.order.update({
+      where: { id: orderId },
+      data: { guideNumber: docs.trackingNumber },
+    });
+    await prisma.orderEvent.create({
+      data: {
+        orderId,
+        type: 'guide_generated',
+        actorId: null,
+        actorName: 'Sistema',
+        data: {
+          number: docs.trackingNumber,
+          id: shipmentId,
+          url: docs.labelUrl,
+          cod: null,
+          via: 'skydropx',
+          carrier: docs.carrier,
+        } as Prisma.InputJsonValue,
+      },
+    });
+    await prisma.orderMessage.create({
+      data: {
+        orderId,
+        authorId: 'system',
+        authorName: 'Sistema',
+        kind: 'system',
+        body: `Guia ${docs.trackingNumber} confirmada por ${docs.carrier ?? 'la transportadora'}.`,
+        imeis: [],
+      },
+    });
+
+    const label = docs.labelUrl ? await this.skydropx.downloadLabel(docs.labelUrl) : null;
+    if (!label) return;
+    const rotuloKey = await this.attachRotulo(
+      orderId,
+      order,
+      { number: docs.trackingNumber },
+      label,
+      { userId: 'system', name: 'Sistema' } as unknown as AuthContext,
+    );
+    await this.whatsapp
+      .sendGuideByWhatsApp(
+        tenantId,
+        prisma,
+        { id: orderId, customerPhone: order.customerPhone, customerName: order.customerName },
+        label,
+        rotuloKey,
+      )
+      .catch(() => null);
   }
 
   /** Sube el rotulo (sticker) a storage y lo adjunta al chat. Best-effort.

@@ -349,7 +349,69 @@ export class SkydropxService {
       this.logger.warn(`Skydropx shipment sin id/rastreo reconocible: ${JSON.stringify(raw).slice(0, 600)}`);
       throw new BadRequestException('Skydropx creo el envio pero no devolvio numero de rastreo (revisar log)');
     }
+    // El POST responde ANTES de que la paqueteria emita la guia: numero real y
+    // rotulo llegan despues (medido ~1 min con Interrapidisimo). Se sondea el
+    // envio hasta tenerlos; si se agota el tiempo se devuelve lo que haya y el
+    // refresco de envios los rellena luego (shipmentDocs).
+    if (shipmentId && (!labelUrl || !trackingNumber)) {
+      const docs = await this.pollShipmentDocs(shipmentId);
+      if (docs) {
+        return {
+          shipmentId,
+          trackingNumber: docs.trackingNumber || trackingNumber || shipmentId,
+          labelUrl: docs.labelUrl ?? labelUrl,
+          carrier: docs.carrier ?? carrier,
+          raw,
+        };
+      }
+    }
     return { shipmentId, trackingNumber: trackingNumber || shipmentId, labelUrl, carrier, raw };
+  }
+
+  /**
+   * Numero de guia REAL + rotulo de un envio ya creado. Viven en el paquete
+   * incluido (`included[type=package]`), no en el envio.
+   */
+  async shipmentDocs(
+    shipmentId: string,
+  ): Promise<{ trackingNumber: string | null; labelUrl: string | null; carrier: string | null } | null> {
+    const creds = await this.credsOrNull();
+    if (!creds) return null;
+    try {
+      const raw = await this.client.getShipmentWithPackages(creds, shipmentId);
+      const data = (raw.data ?? raw) as Record<string, unknown>;
+      const attrs = ((data.attributes ?? data) ?? {}) as Record<string, unknown>;
+      const included = Array.isArray(raw.included)
+        ? (raw.included as Array<Record<string, unknown>>)
+        : [];
+      const pkg = included.find((i) => i.type === 'package');
+      const pAttrs = ((pkg?.attributes ?? pkg) ?? {}) as Record<string, unknown>;
+      const str = (v: unknown): string | null =>
+        typeof v === 'string' && v.trim() ? v.trim() : null;
+      return {
+        trackingNumber: str(pAttrs.tracking_number) ?? str(attrs.master_tracking_number),
+        labelUrl: str(pAttrs.label_url),
+        carrier: str(attrs.carrier_name),
+      };
+    } catch (err) {
+      this.logger.warn(`No se pudieron leer los documentos del envio ${shipmentId}: ${String(err)}`);
+      return null;
+    }
+  }
+
+  /** Sondea hasta ~36s (los tiempos medidos rondan el minuto, pero no se puede
+   *  dejar colgada la peticion del navegador: lo que falte lo rellena luego el
+   *  refresco de envios). */
+  private async pollShipmentDocs(
+    shipmentId: string,
+  ): Promise<{ trackingNumber: string | null; labelUrl: string | null; carrier: string | null } | null> {
+    const delays = [1_500, 2_500, 4_000, 6_000, 8_000, 14_000];
+    for (const wait of delays) {
+      await new Promise((r) => setTimeout(r, wait));
+      const docs = await this.shipmentDocs(shipmentId);
+      if (docs?.labelUrl && docs.trackingNumber) return docs;
+    }
+    return null;
   }
 
   async downloadLabel(url: string): Promise<Buffer | null> {

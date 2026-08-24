@@ -249,6 +249,22 @@ export class SkydropxClient {
       .map((p) => ({ code: String(p.code), name: String(p.name) }));
   }
 
+  /**
+   * Envio CON sus paquetes. Skydropx crea la guia de forma ASINCRONA: el POST
+   * responde al instante pero el numero real y el rotulo aparecen despues (se
+   * han visto ~1 minuto). Ambos viven en el paquete incluido, no en el envio.
+   */
+  async getShipmentWithPackages(
+    creds: { apiKey: string; apiSecret: string; mode: SkydropxMode },
+    shipmentId: string,
+  ): Promise<Record<string, unknown>> {
+    return this.call<Record<string, unknown>>(
+      creds,
+      'GET',
+      `/api/v1/shipments/${shipmentId}?include=packages`,
+    );
+  }
+
   /** Estado/eventos de un envio (para el rastreo). */
   async getShipment(
     creds: { apiKey: string; apiSecret: string; mode: SkydropxMode },
