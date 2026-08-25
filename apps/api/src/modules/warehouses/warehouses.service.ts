@@ -14,7 +14,7 @@ import type {
 import type { Prisma } from '.prisma/tenant-client';
 
 import type { AuthContext } from '../../common/types/authenticated-request';
-import { isAdmin } from '../../common/rbac';
+import { canSeeAllWarehouses, isAdmin } from '../../common/rbac';
 import { getTenantContext } from '../../infrastructure/tenant-context';
 
 // Eventos que FINALIZAN un pedido (mismo criterio que OrdersService): cerrado
@@ -131,11 +131,12 @@ export class WarehousesService {
   }
 
   /**
-   * IDs de sedes que el usuario puede ver. null = todas (admin). Para operadores,
+   * IDs de sedes que el usuario puede ver. null = todas (OWNER/ADMIN/GESTOR:
+   * el gestor entra a todas las sedes igual que un admin). Para operadores,
    * solo las sedes de las que es miembro (WarehouseMember).
    */
   async accessibleWarehouseIds(auth: AuthContext): Promise<string[] | null> {
-    if (isAdmin(auth)) return null;
+    if (canSeeAllWarehouses(auth)) return null;
     const { prisma } = getTenantContext();
     const memberships = await prisma.warehouseMember.findMany({
       where: { userId: auth.userId },

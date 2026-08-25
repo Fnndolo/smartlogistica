@@ -1,9 +1,10 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ArrowRight, Building2, Link2, Mail, Users } from 'lucide-react';
-import type { PackagePreset, Platform, VtexFees } from '@smartlogistica/shared';
+import type { PackagePreset, Platform, SessionUser, VtexFees } from '@smartlogistica/shared';
 
 import { Badge } from '@/components/ui/badge';
+import { canManageConnections, canManageMembers, canSeeAllWarehouses, isAdmin, ROLE_LABEL } from '@/lib/rbac';
 import { serverFetch, serverFetchResult } from '@/lib/server-api';
 
 import { ChangePasswordCard } from './change-password-card';
@@ -15,24 +16,12 @@ import { VtexFeesCard } from './vtex-fees-card';
 
 export const metadata: Metadata = { title: 'Ajustes' };
 
-interface Me {
-  id: string;
-  email: string;
-  activeTenantId: string | null;
-  activeTenantSlug: string | null;
-  role: string | null;
-}
-
-const ROLE_LABEL: Record<string, string> = {
-  OWNER: 'Propietario',
-  ADMIN: 'Admin',
-  OPERATOR: 'Operador',
-};
-
 export default async function SettingsPage() {
-  const res = await serverFetchResult<Me>('/v1/auth/me');
+  const res = await serverFetchResult<SessionUser>('/v1/auth/me');
   const me = res.ok ? res.data : null;
-  const isOwner = me?.role === 'OWNER' || me?.role === 'ADMIN';
+  // TODA la configuracion del workspace es de administradores: el gestor entra
+  // a Ajustes solo por "Tu cuenta" (cambiar su clave).
+  const isOwner = isAdmin(me?.role);
   const packagePresets = isOwner
     ? ((await serverFetch<PackagePreset[]>('/v1/warehouses/package-presets')) ?? [])
     : [];
@@ -67,15 +56,19 @@ export default async function SettingsPage() {
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="truncate text-sm font-semibold">{me?.email ?? 'No disponible'}</h3>
                 {me?.role ? (
-                  <Badge variant={isOwner ? 'success' : 'outline'}>
-                    {ROLE_LABEL[me.role] ?? me.role}
+                  <Badge
+                    variant={isOwner ? 'success' : me.role === 'GESTOR' ? 'info' : 'outline'}
+                  >
+                    {ROLE_LABEL[me.role]}
                   </Badge>
                 ) : null}
               </div>
               <p className="mt-0.5 text-sm text-muted-foreground">
                 {isOwner
                   ? 'Ves y gestionas todo: sedes, conexiones, equipo y facturacion.'
-                  : 'Ves unicamente las sedes que te asignaron.'}
+                  : canSeeAllWarehouses(me?.role)
+                    ? 'Trabajas los pedidos de todas las sedes: facturas y generas guías.'
+                    : 'Ves unicamente las sedes que te asignaron.'}
               </p>
             </div>
           </div>
@@ -102,21 +95,21 @@ export default async function SettingsPage() {
           </div>
         </div>
 
-        {isOwner ? (
-          <>
-            <SettingsLink
-              href="/settings/team"
-              icon={<Users className="h-4 w-4" />}
-              title="Equipo"
-              description="Agrega personas y decide que sedes ve cada quien."
-            />
-            <SettingsLink
-              href="/connections"
-              icon={<Link2 className="h-4 w-4" />}
-              title="Conexiones"
-              description="VTEX/Addi e inteligencia artificial. Alegra, Coordinadora y el certificado se configuran dentro de cada sede."
-            />
-          </>
+        {canManageMembers(me?.role) ? (
+          <SettingsLink
+            href="/settings/team"
+            icon={<Users className="h-4 w-4" />}
+            title="Equipo"
+            description="Agrega personas y decide que sedes ve cada quien."
+          />
+        ) : null}
+        {canManageConnections(me?.role) ? (
+          <SettingsLink
+            href="/connections"
+            icon={<Link2 className="h-4 w-4" />}
+            title="Conexiones"
+            description="VTEX/Addi e inteligencia artificial. Alegra, Coordinadora y el certificado se configuran dentro de cada sede."
+          />
         ) : null}
       </section>
 

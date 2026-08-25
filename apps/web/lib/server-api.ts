@@ -1,6 +1,6 @@
 import { cache } from 'react';
 import { cookies } from 'next/headers';
-import type { WarehouseSummary } from '@smartlogistica/shared';
+import type { SessionUser, WarehouseSummary } from '@smartlogistica/shared';
 
 const SESSION_COOKIE_NAME = 'smartlog_session';
 
@@ -51,6 +51,16 @@ export async function serverFetch<T>(path: string): Promise<T | null> {
 export async function hasSession(): Promise<boolean> {
   return Boolean((await cookies()).get(SESSION_COOKIE_NAME));
 }
+
+/**
+ * Usuario de la sesion (cacheado por request). Sirve para que una pagina
+ * entera se pueda cerrar por ROL en el servidor, antes de pedirle datos al API.
+ * `null` = no se pudo leer (API caido): en ese caso NO se expulsa a nadie — el
+ * API sigue siendo quien bloquea de verdad cada lectura.
+ */
+export const getSessionUser = cache(
+  async (): Promise<SessionUser | null> => serverFetch<SessionUser>('/v1/auth/me'),
+);
 
 /** Sedes del tenant (cacheado por request: layout + page comparten el fetch). */
 export const getWarehouses = cache(

@@ -32,6 +32,7 @@ import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { ApiError, api } from '@/lib/api-client';
+import { canUseWhatsapp } from '@/lib/rbac';
 import { cn, titleCaseName } from '@/lib/utils';
 
 import { ClaimChip, ClaimSlot, initialsOf } from './claim-chip';
@@ -1040,9 +1041,9 @@ function SendConfirmationButton({ orderId }: { orderId: string }) {
   const qc = useQueryClient();
   const [sending, setSending] = useState(false);
 
-  // El estado/boton lo ven los ADMINISTRADORES; los operadores ven el badge
-  // normal (el server igual exige rol de admin para enviar).
-  if (me?.role !== 'OWNER' && me?.role !== 'ADMIN') {
+  // El estado/boton lo ven los ADMINISTRADORES; los demas (gestor, operador)
+  // ven el badge normal — WhatsApp es de administradores en el API.
+  if (!canUseWhatsapp(me?.role)) {
     return <Badge dot variant="outline" className="whitespace-nowrap">Sin responder</Badge>;
   }
 

@@ -54,6 +54,7 @@ import type {
 import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { Button } from '@/components/ui/button';
 import { ApiError, api } from '@/lib/api-client';
+import { canManageOrders, canModerateChat, canUseWhatsapp, isAdmin } from '@/lib/rbac';
 import { cn, titleCaseName } from '@/lib/utils';
 
 import { setActiveChat } from './active-chat';
@@ -343,8 +344,12 @@ function DrawerContent({
   const me = useCurrentUser();
   const qc = useQueryClient();
   // El OPERADOR solo trabaja el pedido: detalle + conversacion (sube fotos,
-  // chatea). Facturar, guia y actividad son de administradores.
-  const canManage = me?.role === 'OWNER' || me?.role === 'ADMIN';
+  // chatea). Facturar, guia y actividad son de quien gestiona pedidos
+  // (administradores y gestores).
+  const canManage = canManageOrders(me?.role);
+  // WhatsApp va aparte: el API lo reserva a administradores, asi que al gestor
+  // ni se le ofrece la pestaña (seria un 403).
+  const canWhatsapp = canUseWhatsapp(me?.role);
 
   const { data: detail } = useQuery(orderDetailQuery(order.id));
 
@@ -383,7 +388,7 @@ function DrawerContent({
           { id: 'guia', label: 'Guía', icon: Truck },
         ] as { id: Tab; label: string; icon: typeof Info }[])
       : []),
-    // Actividad SIEMPRE para admins (en los facturados por fuera es la
+    // Actividad para quien gestiona pedidos (admins y gestores) (en los facturados por fuera es la
     // trazabilidad misma).
     ...(canManage
       ? ([{ id: 'actividad', label: 'Actividad', icon: Activity }] as {
@@ -393,7 +398,7 @@ function DrawerContent({
         }[])
       : []),
     // WhatsApp de ULTIMA, para todos los administradores.
-    ...(canManage
+    ...(canWhatsapp
       ? ([{ id: 'whatsapp', label: 'WhatsApp', icon: MessageCircle }] as {
           id: Tab;
           label: string;
@@ -581,7 +586,7 @@ function DrawerContent({
             <ActividadTab orderId={order.id} />
           </TabPane>
         ) : null}
-        {canManage ? (
+        {canWhatsapp ? (
           <TabPane tab="whatsapp" active={tab === 'whatsapp'}>
             <WhatsappPanel orderId={order.id} active={tab === 'whatsapp'} />
           </TabPane>
@@ -745,7 +750,7 @@ function DetalleTab({
   const items = detail?.items ?? order.items;
   const external = !order.warehouseId && order.status !== 'ready-for-handling';
   const me = useCurrentUser();
-  const isAdminRole = me?.role === 'OWNER' || me?.role === 'ADMIN';
+  const isAdminRole = isAdmin(me?.role);
   return (
     <div className="space-y-5 p-[22px]">
       {external ? (
@@ -1741,7 +1746,9 @@ function ConversacionTab({
     return () => clearInterval(t);
   }, [typingUsers]);
 
-  const isOwner = me?.role === 'OWNER' || me?.role === 'ADMIN';
+  // Borrar mensajes de OTROS es moderacion: solo administradores (el gestor,
+  // como cualquiera, borra los suyos).
+  const canModerate = canModerateChat(me?.role);
 
   const pickPhoto = (kind: DevicePhotoKind) => {
     pendingKind.current = kind;
@@ -2055,7 +2062,7 @@ function ConversacionTab({
                 }
                 matchByCode={matchByCode}
                 members={members}
-                canDelete={!isTemp && m.kind !== 'system' && (m.authorId === me?.id || isOwner)}
+                canDelete={!isTemp && m.kind !== 'system' && (m.authorId === me?.id || canModerate)}
                 onDelete={() => setConfirmDelete([m.id])}
                 onReply={
                   !isTemp && m.kind !== 'system'

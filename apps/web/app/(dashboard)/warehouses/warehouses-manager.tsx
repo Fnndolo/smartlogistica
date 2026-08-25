@@ -7,12 +7,18 @@ import { ArrowRight, Building2, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import type { WarehouseSummary } from '@smartlogistica/shared';
 
+import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { ApiError, api } from '@/lib/api-client';
+import { canManageWarehouses } from '@/lib/rbac';
 
 export function WarehousesManager({ initial }: { initial: WarehouseSummary[] }) {
   const qc = useQueryClient();
+  const me = useCurrentUser();
+  // Crear, renombrar y archivar sedes es configuracion: solo administradores.
+  // Los demas (gestor, operador) entran a la sede a trabajar sus pedidos.
+  const canManage = canManageWarehouses(me?.role);
   const { data: warehouses = [] } = useQuery({
     queryKey: ['warehouses'],
     queryFn: () => api.get<WarehouseSummary[]>('/v1/warehouses'),
@@ -44,33 +50,35 @@ export function WarehousesManager({ initial }: { initial: WarehouseSummary[] }) 
 
   return (
     <div className="space-y-6">
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          create();
-        }}
-        className="flex items-center gap-2"
-      >
-        <Input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Nombre de la sede (ej: Pasto, Medellin, Bodega Centro)"
-          className="max-w-sm"
-          maxLength={60}
-        />
-        <Input
-          value={prefix}
-          onChange={(e) => setPrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))}
-          placeholder="Prefijo (ej: PA)"
-          className="w-32 font-mono uppercase"
-          maxLength={6}
-          title="Prefijo de factura VTEX (ej. Pasto = PA)"
-        />
-        <Button type="submit" loading={creating} disabled={name.trim().length < 2}>
-          <Plus className="h-4 w-4" />
-          Crear sede
-        </Button>
-      </form>
+      {canManage ? (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            create();
+          }}
+          className="flex items-center gap-2"
+        >
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Nombre de la sede (ej: Pasto, Medellin, Bodega Centro)"
+            className="max-w-sm"
+            maxLength={60}
+          />
+          <Input
+            value={prefix}
+            onChange={(e) => setPrefix(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))}
+            placeholder="Prefijo (ej: PA)"
+            className="w-32 font-mono uppercase"
+            maxLength={6}
+            title="Prefijo de factura VTEX (ej. Pasto = PA)"
+          />
+          <Button type="submit" loading={creating} disabled={name.trim().length < 2}>
+            <Plus className="h-4 w-4" />
+            Crear sede
+          </Button>
+        </form>
+      ) : null}
 
       {warehouses.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border bg-card p-12 text-center">
@@ -79,13 +87,15 @@ export function WarehousesManager({ initial }: { initial: WarehouseSummary[] }) 
           </div>
           <h2 className="mt-4 text-base font-semibold">Aun no tienes sedes</h2>
           <p className="mx-auto mt-1 max-w-md text-sm text-muted-foreground">
-            Crea tu primera sede arriba. Luego podras asignarle pedidos desde &laquo;Pedidos&raquo;.
+            {canManage
+              ? 'Crea tu primera sede arriba. Luego podras asignarle pedidos desde «Pedidos».'
+              : 'Todavia no hay sedes creadas. Un administrador debe crear la primera.'}
           </p>
         </div>
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {warehouses.map((w) => (
-            <WarehouseCard key={w.id} warehouse={w} onChanged={refresh} />
+            <WarehouseCard key={w.id} warehouse={w} canManage={canManage} onChanged={refresh} />
           ))}
         </div>
       )}
@@ -95,9 +105,12 @@ export function WarehousesManager({ initial }: { initial: WarehouseSummary[] }) 
 
 function WarehouseCard({
   warehouse,
+  canManage,
   onChanged,
 }: {
   warehouse: WarehouseSummary;
+  /** false = solo lectura: sin renombrar ni archivar (no es administrador). */
+  canManage: boolean;
   onChanged: () => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -155,7 +168,16 @@ function WarehouseCard({
           <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-muted">
             <Building2 className="h-4 w-4 text-foreground" />
           </div>
-          {editing ? (
+          {!canManage ? (
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="truncate text-sm font-semibold">{warehouse.name}</span>
+              {warehouse.invoicePrefix ? (
+                <span className="shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                  {warehouse.invoicePrefix}
+                </span>
+              ) : null}
+            </span>
+          ) : editing ? (
             <div className="flex items-center gap-1.5">
               <Input
                 autoFocus
@@ -200,15 +222,17 @@ function WarehouseCard({
             </button>
           )}
         </div>
-        <button
-          type="button"
-          onClick={archive}
-          disabled={busy}
-          className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive disabled:opacity-50"
-          aria-label="Archivar sede"
-        >
-          <Trash2 className="h-4 w-4" />
-        </button>
+        {canManage ? (
+          <button
+            type="button"
+            onClick={archive}
+            disabled={busy}
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-destructive disabled:opacity-50"
+            aria-label="Archivar sede"
+          >
+            <Trash2 className="h-4 w-4" />
+          </button>
+        ) : null}
       </div>
 
       <p className="mt-3 text-2xl font-semibold tabular-nums">{warehouse.orderCount}</p>

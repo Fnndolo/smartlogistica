@@ -22,20 +22,37 @@ import type { WarehouseSummary } from '@smartlogistica/shared';
 
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api-client';
+import {
+  canManageConnections,
+  canManageMembers,
+  canManageOrders,
+  canSeeAllWarehouses,
+  canUseWhatsapp,
+  isAdmin,
+  roleLabel,
+  type MaybeRole,
+} from '@/lib/rbac';
 import { useCurrentUser } from '@/components/providers/current-user-provider';
 
 import { LogoutButton } from './_components/logout-button';
 import { GlobalSearch } from './global-search';
 import { useMentions } from './use-mentions';
 
+/**
+ * Cada item declara QUE permiso lo destapa (no "adminOnly", que solo sabia
+ * decir admin/no-admin y dejaba al GESTOR sin pedidos o con Conexiones).
+ */
+const everyone: (role: MaybeRole) => boolean = () => true;
+
 const NAV_ITEMS = [
-  { href: '/dashboard', label: 'Resumen', icon: LayoutDashboard, adminOnly: true },
-  { href: '/orders', label: 'Pedidos', icon: Boxes, adminOnly: true },
-  { href: '/whatsapp', label: 'WhatsApp', icon: MessageCircle, adminOnly: true },
-  { href: '/mentions', label: 'Menciones', icon: AtSign, adminOnly: false },
-  { href: '/connections', label: 'Conexiones', icon: Link2, adminOnly: true },
-  { href: '/settings/team', label: 'Equipo', icon: Users, adminOnly: true },
-  { href: '/settings', label: 'Ajustes', icon: Settings, adminOnly: false },
+  { href: '/dashboard', label: 'Resumen', icon: LayoutDashboard, show: canSeeAllWarehouses },
+  { href: '/orders', label: 'Pedidos', icon: Boxes, show: canManageOrders },
+  // WhatsApp es de administradores en el API (WhatsappService.assertAdmin).
+  { href: '/whatsapp', label: 'WhatsApp', icon: MessageCircle, show: canUseWhatsapp },
+  { href: '/mentions', label: 'Menciones', icon: AtSign, show: everyone },
+  { href: '/connections', label: 'Conexiones', icon: Link2, show: canManageConnections },
+  { href: '/settings/team', label: 'Equipo', icon: Users, show: canManageMembers },
+  { href: '/settings', label: 'Ajustes', icon: Settings, show: everyone },
 ] as const;
 
 /** Contador de menciones sin leer (item "Menciones" del sidebar). */
@@ -62,8 +79,10 @@ export function Sidebar() {
   const pathname = usePathname();
   // El operador solo trabaja sus sedes: nada de pedidos generales, conexiones,
   // equipo ni resumen (cosas que no puede tocar). Ve sus sedes + Ajustes.
-  const isAdminUser = user?.role === 'OWNER' || user?.role === 'ADMIN';
-  const navItems = NAV_ITEMS.filter((i) => isAdminUser || !i.adminOnly);
+  // El gestor trabaja los pedidos de TODAS las sedes, pero sin conexiones,
+  // equipo, WhatsApp ni la configuracion de la sede.
+  const isAdminUser = isAdmin(user?.role);
+  const navItems = NAV_ITEMS.filter((i) => i.show(user?.role));
   const { data: warehouses = [] } = useQuery({
     queryKey: ['warehouses'],
     queryFn: () => api.get<WarehouseSummary[]>('/v1/warehouses'),
@@ -268,15 +287,7 @@ export function Sidebar() {
               </span>
               <span className="min-w-0">
                 <p className="truncate text-xs font-medium">{user.name ?? user.email}</p>
-                <p className="text-[11px] text-muted-foreground">
-                  {user.role === 'OWNER'
-                    ? 'Propietario'
-                    : user.role === 'ADMIN'
-                      ? 'Admin'
-                      : user.role === 'OPERATOR'
-                        ? 'Operador'
-                        : 'Sin rol'}
-                </p>
+                <p className="text-[11px] text-muted-foreground">{roleLabel(user.role)}</p>
               </span>
             </>
           ) : (

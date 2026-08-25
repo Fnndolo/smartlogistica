@@ -2,7 +2,18 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Check, Loader2, Plus, RefreshCw, Shield, Trash2, User, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  Check,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Shield,
+  Trash2,
+  User,
+  UserCog,
+  X,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import type { MemberSummary, WarehouseSummary } from '@smartlogistica/shared';
 
@@ -12,25 +23,33 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, api } from '@/lib/api-client';
+import { canManageMembers, ROLE_HELP, ROLE_LABEL } from '@/lib/rbac';
 import { cn } from '@/lib/utils';
 
 type Role = MemberSummary['role'];
 
-const ROLE_LABEL: Record<Role, string> = {
-  OWNER: 'Propietario',
-  ADMIN: 'Admin',
-  OPERATOR: 'Operador',
-};
-const ROLE_HELP: Record<Role, string> = {
-  OWNER: 'Ve y gestiona todo. Es el dueño del workspace (el primer usuario).',
-  ADMIN: 'Ve y gestiona todo: sedes, conexiones, equipo y facturación.',
-  OPERATOR: 'Solo ve las sedes que le asignes: detalle y conversación de sus pedidos.',
-};
+/** Roles que se pueden asignar aqui (Propietario no: es el primer usuario). */
+const ASSIGNABLE_ROLES = ['OPERATOR', 'GESTOR', 'ADMIN'] as const satisfies readonly Role[];
+
+/** Icono por rol: admin = escudo, gestor = usuario con engranaje, operador = usuario. */
+function RoleIcon({ role, className }: { role: Role; className?: string }) {
+  if (role === 'OPERATOR') return <User className={className} />;
+  if (role === 'GESTOR') return <UserCog className={className} />;
+  return <Shield className={className} />;
+}
+
+/** Pastilla del rol: propietario/admin/gestor/operador, cada uno distinguible. */
+function roleBadgeVariant(role: Role): 'success' | 'secondary' | 'info' | 'outline' {
+  if (role === 'OWNER') return 'success';
+  if (role === 'ADMIN') return 'secondary';
+  if (role === 'GESTOR') return 'info';
+  return 'outline';
+}
 
 export function TeamList({ initial }: { initial?: MemberSummary[] }) {
   const qc = useQueryClient();
   const me = useCurrentUser();
-  const canManage = me?.role === 'OWNER' || me?.role === 'ADMIN';
+  const canManage = canManageMembers(me?.role);
   const [adding, setAdding] = useState(false);
 
   const { data, isPending, error, refetch, isFetching } = useQuery({
@@ -152,23 +171,19 @@ function MemberRow({
           <div
             className={cn(
               'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border',
-              member.role !== 'OPERATOR'
-                ? 'border-violet-500/20 bg-violet-500/10 text-violet-600 dark:text-violet-400'
-                : 'border-border bg-muted text-foreground',
+              member.role === 'GESTOR'
+                ? 'border-accent/25 bg-accent/10 text-accent'
+                : member.role !== 'OPERATOR'
+                  ? 'border-violet-500/20 bg-violet-500/10 text-violet-600 dark:text-violet-400'
+                  : 'border-border bg-muted text-foreground',
             )}
           >
-            {member.role !== 'OPERATOR' ? <Shield className="h-4 w-4" /> : <User className="h-4 w-4" />}
+            <RoleIcon role={member.role} className="h-4 w-4" />
           </div>
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <p className="truncate text-sm font-medium">{member.name ?? member.email}</p>
-              <Badge
-                variant={
-                  member.role === 'OWNER' ? 'success' : member.role === 'ADMIN' ? 'secondary' : 'outline'
-                }
-              >
-                {ROLE_LABEL[member.role]}
-              </Badge>
+              <Badge variant={roleBadgeVariant(member.role)}>{ROLE_LABEL[member.role]}</Badge>
               {member.isYou ? <Badge variant="secondary">Tú</Badge> : null}
             </div>
             <p className="mt-0.5 truncate text-xs text-muted-foreground">{member.email}</p>
@@ -356,8 +371,8 @@ function RolePicker({ value, onChange }: { value: Role; onChange: (r: Role) => v
     <div className="space-y-1.5">
       <Label>Rol</Label>
       {/* Propietario no se asigna aqui: es el primer usuario del workspace. */}
-      <div className="grid gap-2 sm:grid-cols-2">
-        {(['OPERATOR', 'ADMIN'] as const).map((r) => (
+      <div className="grid gap-2 sm:grid-cols-3">
+        {ASSIGNABLE_ROLES.map((r) => (
           <button
             key={r}
             type="button"
@@ -368,9 +383,9 @@ function RolePicker({ value, onChange }: { value: Role; onChange: (r: Role) => v
             )}
           >
             <div className="flex items-center gap-2">
-              {r === 'ADMIN' ? <Shield className="h-3.5 w-3.5" /> : <User className="h-3.5 w-3.5" />}
+              <RoleIcon role={r} className="h-3.5 w-3.5 shrink-0" />
               <span className="text-sm font-medium">{ROLE_LABEL[r]}</span>
-              {value === r ? <Check className="ml-auto h-3.5 w-3.5" /> : null}
+              {value === r ? <Check className="ml-auto h-3.5 w-3.5 shrink-0" /> : null}
             </div>
             <p className="mt-1 text-[11px] text-muted-foreground">{ROLE_HELP[r]}</p>
           </button>

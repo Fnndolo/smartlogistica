@@ -3,7 +3,8 @@ import Link from 'next/link';
 import { cookies } from 'next/headers';
 import { ArrowRight, Link2 } from 'lucide-react';
 
-import { INTERNAL_API_URL } from '@/lib/server-api';
+import { canManageConnections } from '@/lib/rbac';
+import { getSessionUser, INTERNAL_API_URL } from '@/lib/server-api';
 
 export const metadata: Metadata = {
   title: 'Resumen',
@@ -35,7 +36,11 @@ async function fetchStats(): Promise<StatsResponse> {
 }
 
 export default async function DashboardHomePage() {
-  const stats = await fetchStats();
+  const [stats, me] = await Promise.all([fetchStats(), getSessionUser()]);
+  // Conectar marketplaces es configuracion: a quien no puede (gestor) no se le
+  // ofrece el atajo — su entrada a Conexiones esta cerrada. Si el rol no se
+  // pudo leer (API caido) se deja como estaba.
+  const canConnect = !me || canManageConnections(me.role);
   return (
     <div className="space-y-8">
       <header className="flex flex-col gap-1">
@@ -53,22 +58,24 @@ export default async function DashboardHomePage() {
         <KpiCard label="Conexiones" value={String(stats.connections)} hint="VTEX, Shopify, ML" />
       </div>
 
-      <section className="rounded-xl border border-dashed border-border bg-card p-8 text-center">
-        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-          <Link2 className="h-5 w-5 text-foreground" />
-        </div>
-        <h2 className="mt-4 text-base font-semibold">Aun no tienes marketplaces conectados</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Conecta VTEX/Addi en menos de un minuto y empieza a centralizar todos tus pedidos.
-        </p>
-        <Link
-          href="/connections/vtex/new"
-          className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90"
-        >
-          Conectar VTEX
-          <ArrowRight className="h-3.5 w-3.5" />
-        </Link>
-      </section>
+      {canConnect ? (
+        <section className="rounded-xl border border-dashed border-border bg-card p-8 text-center">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+            <Link2 className="h-5 w-5 text-foreground" />
+          </div>
+          <h2 className="mt-4 text-base font-semibold">Aun no tienes marketplaces conectados</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Conecta VTEX/Addi en menos de un minuto y empieza a centralizar todos tus pedidos.
+          </p>
+          <Link
+            href="/connections/vtex/new"
+            className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-foreground px-4 py-2 text-sm font-medium text-background hover:opacity-90"
+          >
+            Conectar VTEX
+            <ArrowRight className="h-3.5 w-3.5" />
+          </Link>
+        </section>
+      ) : null}
     </div>
   );
 }

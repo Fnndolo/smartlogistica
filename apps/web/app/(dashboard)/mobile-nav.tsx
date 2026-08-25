@@ -5,10 +5,14 @@ import { usePathname } from 'next/navigation';
 import { AtSign, Boxes, Building2, LayoutDashboard, Settings } from 'lucide-react';
 
 import { useCurrentUser } from '@/components/providers/current-user-provider';
+import { canManageOrders, canSeeAllWarehouses, type MaybeRole } from '@/lib/rbac';
 import { cn } from '@/lib/utils';
 
 import { GlobalSearch } from './global-search';
 import { useMentions } from './use-mentions';
+
+/** Igual que el sidebar: cada pestaña dice QUE permiso la destapa. */
+const everyone: (role: MaybeRole) => boolean = () => true;
 
 const TABS = [
   {
@@ -16,35 +20,35 @@ const TABS = [
     label: 'Resumen',
     icon: LayoutDashboard,
     match: (p: string) => p === '/dashboard',
-    adminOnly: true,
+    show: canSeeAllWarehouses,
   },
   {
     href: '/orders',
     label: 'Pedidos',
     icon: Boxes,
     match: (p: string) => p.startsWith('/orders'),
-    adminOnly: true,
+    show: canManageOrders,
   },
   {
     href: '/warehouses',
     label: 'Sedes',
     icon: Building2,
     match: (p: string) => p.startsWith('/warehouses'),
-    adminOnly: false,
+    show: everyone,
   },
   {
     href: '/mentions',
     label: 'Menciones',
     icon: AtSign,
     match: (p: string) => p.startsWith('/mentions'),
-    adminOnly: false,
+    show: everyone,
   },
   {
     href: '/settings',
     label: 'Ajustes',
     icon: Settings,
     match: (p: string) => p.startsWith('/settings') || p.startsWith('/connections'),
-    adminOnly: false,
+    show: everyone,
   },
 ] as const;
 
@@ -82,15 +86,15 @@ export function MobileTopBar() {
 export function MobileBottomNav() {
   const pathname = usePathname();
   const user = useCurrentUser();
-  // El operador solo ve Sedes y Ajustes (no pedidos generales ni resumen).
-  const isAdminUser = user?.role === 'OWNER' || user?.role === 'ADMIN';
-  const tabs = TABS.filter((t) => isAdminUser || !t.adminOnly);
+  // El operador solo ve Sedes, Menciones y Ajustes (no pedidos generales ni
+  // resumen); el gestor los ve todos (WhatsApp no vive en esta barra).
+  const tabs = TABS.filter((t) => t.show(user?.role));
   const { unread } = useMentions();
   return (
     <nav
       className={cn(
         'fixed inset-x-0 bottom-0 z-30 grid border-t border-border bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden',
-        tabs.length === 5 ? 'grid-cols-5' : 'grid-cols-3',
+        tabs.length >= 5 ? 'grid-cols-5' : tabs.length === 4 ? 'grid-cols-4' : 'grid-cols-3',
       )}
       aria-label="Navegacion principal"
     >

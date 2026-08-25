@@ -10,6 +10,7 @@ import {
 } from '@smartlogistica/shared';
 import type { Prisma } from '.prisma/tenant-client';
 
+import { canManageOrders, isAdmin } from '../../../common/rbac';
 import type { AuthContext } from '../../../common/types/authenticated-request';
 import { EnvelopeService } from '../../../infrastructure/crypto/envelope.service';
 import { getTenantContext } from '../../../infrastructure/tenant-context';
@@ -54,8 +55,13 @@ export class SkydropxService {
     private readonly envelope: EnvelopeService,
   ) {}
 
+  /**
+   * Gate de CONFIGURACION Skydropx: la conexion (credenciales), el remitente
+   * por sede y los paquetes guardados. NO ampliar a GESTOR. La unica excepcion
+   * es packagings(), que la usa el panel de guia del pedido.
+   */
   private assertAdmin(auth: AuthContext): void {
-    if (auth.role !== 'OWNER' && auth.role !== 'ADMIN') {
+    if (!isAdmin(auth)) {
       throw new ForbiddenException('Solo administradores');
     }
   }
@@ -170,7 +176,11 @@ export class SkydropxService {
   private pkgCache: { at: number; list: Array<{ code: string; name: string }> } | null = null;
 
   async packagings(auth: AuthContext): Promise<Array<{ code: string; name: string }>> {
-    this.assertAdmin(auth);
+    // Lo pide el panel de GUIA del pedido (selector de embalaje), no Ajustes:
+    // sin esto un gestor veria un error dentro de la pestaña Guia.
+    if (!canManageOrders(auth)) {
+      throw new ForbiddenException('No tienes permiso para trabajar los envíos.');
+    }
     if (this.pkgCache && Date.now() - this.pkgCache.at < 600_000) return this.pkgCache.list;
     const creds = await this.requireCreds();
     const list = await this.client.listPackagings(creds);

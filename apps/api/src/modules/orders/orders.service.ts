@@ -45,7 +45,7 @@ import type {
 } from '@smartlogistica/shared';
 import type { Prisma, PrismaClient } from '.prisma/tenant-client';
 
-import { isAdmin } from '../../common/rbac';
+import { canManageOrders, canTransferOrders, isAdmin } from '../../common/rbac';
 import type { AuthContext } from '../../common/types/authenticated-request';
 import { getTenantContext } from '../../infrastructure/tenant-context';
 import { ControlPlaneService } from '../../infrastructure/prisma/control-plane.service';
@@ -172,8 +172,8 @@ export class OrdersService {
       where.warehouseId = query.warehouse;
       // En la sede mostramos todos los pedidos asignados (ya no son espejo de VTEX).
     } else {
-      // Pedidos generales (sin asignar). Solo admins.
-      if (!isAdmin(auth)) throw new ForbiddenException('Sin acceso a pedidos generales');
+      // Pedidos generales (sin asignar). Admins y gestores.
+      if (!canManageOrders(auth)) throw new ForbiddenException('Sin acceso a pedidos generales');
       where.warehouseId = null;
       if (query.state === 'invoiced') {
         // Trazabilidad TOTAL de lo que se procesa POR FUERA de SmartLogistica:
@@ -343,7 +343,7 @@ export class OrdersService {
       if (allowed && !allowed.includes(warehouseId)) {
         throw new ForbiddenException('Sin acceso a esta sede');
       }
-    } else if (!isAdmin(auth)) {
+    } else if (!canManageOrders(auth)) {
       throw new ForbiddenException('Sin acceso a pedidos generales');
     }
 
@@ -479,7 +479,9 @@ export class OrdersService {
     const { prisma } = getTenantContext();
 
     if (scope === 'general') {
-      if (!isAdmin(auth)) throw new ForbiddenException('Solo administradores');
+      // Mismo scope que list()/loadAccessibleOrder: quien ve la tabla de
+      // generales ve su pulso (si no, la tira de metricas daria 403).
+      if (!canManageOrders(auth)) throw new ForbiddenException('Sin acceso a pedidos generales');
       // "Hoy" en horario de Colombia (GMT-5, sin DST).
       const now = new Date();
       const bogota = new Date(now.getTime() - 5 * 3_600_000);
@@ -539,9 +541,14 @@ export class OrdersService {
     return { scope, a: total, b: transit, c: issues, d: delivered, deltaToday: null };
   }
 
-  /** Asigna / transfiere / devuelve (warehouseId null) pedidos. Solo admins. */
+  /**
+   * Asigna / transfiere / devuelve (warehouseId null) pedidos. Solo admins: la
+   * transferencia entre sedes NO la hace un gestor (decision del propietario).
+   */
   async assign(input: AssignOrdersInput, auth: AuthContext): Promise<{ count: number }> {
-    if (!isAdmin(auth)) throw new ForbiddenException('Solo administradores pueden asignar pedidos');
+    if (!canTransferOrders(auth)) {
+      throw new ForbiddenException('Solo administradores pueden asignar pedidos');
+    }
     const { tenantId, prisma } = getTenantContext();
 
     // Validaciones EN PARALELO (eran 3-4 esperas encadenadas que retrasaban el
@@ -873,9 +880,10 @@ export class OrdersService {
     const { tenantId, prisma } = getTenantContext();
     let mentions = await this.validMentions(tenantId, input.mentions);
 
-    // SUPER MENCION (@todos): destinatarios = todos los admins + los operadores
-    // con acceso a la sede del pedido (nunca el autor). Se agregan a mentions
-    // (asi cuentan en /mentions y no-leidos) y se crean alertas persistentes.
+    // SUPER MENCION (@todos): destinatarios = todos los que ven todas las sedes
+    // (admins y gestores) + los operadores con acceso a la sede del pedido
+    // (nunca el autor). Se agregan a mentions (asi cuentan en /mentions y
+    // no-leidos) y se crean alertas persistentes.
     let superRecipients: string[] = [];
     if (input.mentionAll) {
       const memberships = await this.control.membership.findMany({
@@ -2201,6 +2209,9 @@ export class OrdersService {
     input: SkydropxQuoteInput,
     auth: AuthContext,
   ): Promise<SkydropxQuoteResponse> {
+    if (!canManageOrders(auth)) {
+      throw new ForbiddenException('No tienes permiso para cotizar envíos.');
+    }
     await this.ensureNotExternallyInvoiced(orderId);
     const order = await this.loadAccessibleOrder(orderId, auth);
     if (!order.warehouseId) throw new BadRequestException('Asigna el pedido a una sede para cotizar.');
@@ -2284,6 +2295,12 @@ export class OrdersService {
     input: CreateSkydropxGuideInput,
     auth: AuthContext,
   ): Promise<Guide> {
+    // MISMO permiso que la guia de Coordinadora. Sin esto un OPERATOR podia
+    // emitir una guia real (con su costo) por Skydropx pero no por
+    // Coordinadora: las dos son la misma operacion del pedido.
+    if (!canManageOrders(auth)) {
+      throw new ForbiddenException('No tienes permiso para generar guías.');
+    }
     this.acquireLock(`${orderId}:guide`, 'Ya hay una guía en curso para este pedido.');
     try {
       return await this.generateGuideSkydropxLocked(orderId, input, auth);
@@ -3000,8 +3017,9 @@ export class OrdersService {
   }
 
   /**
-   * Carga un pedido verificando acceso: los generales (warehouseId null) solo los
-   * ve un admin; los de una sede, quien tenga acceso a esa sede.
+   * Carga un pedido verificando acceso: los generales (warehouseId null) los ven
+   * quienes trabajan pedidos (admins y gestores); los de una sede, quien tenga
+   * acceso a esa sede.
    */
   private async loadAccessibleOrder(orderId: string, auth: AuthContext): Promise<OrderWithItems> {
     const { prisma } = getTenantContext();
@@ -3012,7 +3030,7 @@ export class OrdersService {
     if (!order) throw new NotFoundException('Pedido no encontrado');
 
     if (order.warehouseId === null) {
-      if (!isAdmin(auth)) throw new ForbiddenException('Sin acceso a este pedido');
+      if (!canManageOrders(auth)) throw new ForbiddenException('Sin acceso a este pedido');
     } else {
       const allowed = await this.warehouses.accessibleWarehouseIds(auth);
       if (allowed && !allowed.includes(order.warehouseId)) {

@@ -1,7 +1,9 @@
 import type { Metadata } from 'next';
+import { redirect } from 'next/navigation';
 import type { MemberSummary } from '@smartlogistica/shared';
 
-import { serverFetchResult } from '@/lib/server-api';
+import { canManageMembers } from '@/lib/rbac';
+import { getSessionUser, serverFetchResult } from '@/lib/server-api';
 
 import { TeamList } from './team-list';
 
@@ -14,6 +16,10 @@ async function initialMembers(): Promise<MemberSummary[] | undefined> {
 }
 
 export default async function TeamPage() {
+  // Esconder el enlace no basta: sin esto un GESTOR llegaba al roster
+  // completo escribiendo /settings/team en la barra de direcciones.
+  const me = await getSessionUser();
+  if (!canManageMembers(me?.role)) redirect('/settings');
   const members = await initialMembers();
 
   return (

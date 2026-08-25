@@ -13,8 +13,10 @@ import type {
   WarehouseSummary,
 } from '@smartlogistica/shared';
 
+import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { Button } from '@/components/ui/button';
 import { ApiError, api } from '@/lib/api-client';
+import { canTransferOrders } from '@/lib/rbac';
 import { cn, replaceUrlParams } from '@/lib/utils';
 
 import { OrdersTable } from './orders-table';
@@ -50,6 +52,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
+  const me = useCurrentUser();
   const page = Math.max(1, Number(searchParams.get('page') ?? '1') || 1);
   const from = searchParams.get('from') ?? undefined;
   const to = searchParams.get('to') ?? undefined;
@@ -212,8 +215,12 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
   const totalPages = data?.totalPages ?? 1;
-  // En "Facturados" no se permite seleccionar (ni transferir/devolver): ya se cerro en VTEX.
-  const canSelect = state !== 'invoiced';
+  // La seleccion existe SOLO para mover pedidos entre sedes, y eso lo hace
+  // unicamente un administrador (el gestor trabaja el pedido donde esta). Sin
+  // ese permiso no se pintan ni las casillas: no habria nada que hacer con ellas.
+  // Y en "Facturados" tampoco se selecciona: ya se cerro en VTEX.
+  const canTransfer = canTransferOrders(me?.role);
+  const canSelect = state !== 'invoiced' && canTransfer;
   const rangeStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const rangeEnd = Math.min(page * PAGE_SIZE, total);
 
@@ -432,7 +439,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
         </>
       )}
 
-      {selected.size > 0 ? (
+      {canTransfer && selected.size > 0 ? (
         <AssignmentBar
           scope={scope}
           warehouses={warehouses}

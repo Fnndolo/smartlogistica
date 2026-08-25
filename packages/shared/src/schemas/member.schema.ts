@@ -5,10 +5,13 @@ import { z } from 'zod';
  *
  * El rol vive en el control-plane (Membership) y el acceso por sede en la base
  * del tenant (WarehouseMember). OWNER (el propietario, el primero) y ADMIN ven
- * y hacen todo; un OPERATOR solo ve las sedes que se le asignen (detalle +
- * conversacion, sin facturar ni guias).
+ * y hacen todo; un GESTOR entra a TODAS las sedes y hace todo el trabajo de
+ * pedidos (generales, tomar, chat, facturar en Alegra, generar guias) pero NO
+ * toca configuracion, conexiones, equipo ni transfiere pedidos entre sedes; un
+ * OPERATOR solo ve las sedes que se le asignen (detalle + conversacion, sin
+ * facturar ni guias).
  */
-export const tenantRoleSchema = z.enum(['OWNER', 'ADMIN', 'OPERATOR']);
+export const tenantRoleSchema = z.enum(['OWNER', 'ADMIN', 'GESTOR', 'OPERATOR']);
 
 export const memberSummarySchema = z.object({
   userId: z.string(),
@@ -17,7 +20,7 @@ export const memberSummarySchema = z.object({
   name: z.string().nullable(),
   role: tenantRoleSchema,
   createdAt: z.string(),
-  /** Sedes asignadas. Vacio en un OWNER: ve todas por definicion. */
+  /** Sedes asignadas. Vacio en OWNER/ADMIN/GESTOR: ven todas por definicion. */
   warehouseIds: z.array(z.string()),
   /** El propio usuario que consulta (para no dejarle quitarse el acceso). */
   isYou: z.boolean(),

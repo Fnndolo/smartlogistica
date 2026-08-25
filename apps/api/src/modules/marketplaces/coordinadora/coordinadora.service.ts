@@ -16,7 +16,7 @@ import type {
   GuideTracking,
 } from '@smartlogistica/shared';
 
-import { isAdmin } from '../../../common/rbac';
+import { canManageOrders, isAdmin } from '../../../common/rbac';
 import type { AuthContext } from '../../../common/types/authenticated-request';
 import { EnvelopeService } from '../../../infrastructure/crypto/envelope.service';
 import { getTenantContext } from '../../../infrastructure/tenant-context';
@@ -105,6 +105,10 @@ export class CoordinadoraService {
   // === Conexion por sede ===
 
   async get(warehouseId: string, auth: AuthContext): Promise<CoordinadoraConnectionSummary | null> {
+    // Antes bastaba con tener acceso a la sede. Con el GESTOR (que las ve
+    // TODAS) eso filtraba la conexion de cada sede: las conexiones son
+    // configuracion, solo admin.
+    this.assertAdmin(auth);
     await this.assertWarehouseAccess(warehouseId, auth);
     const { prisma } = getTenantContext();
     const conn = await prisma.coordinadoraConnection.findUnique({ where: { warehouseId } });
@@ -350,7 +354,7 @@ export class CoordinadoraService {
 
   // === Generar guia (lo orquesta OrdersService) ===
 
-  /** Genera la guia en Coordinadora y trae el rotulo (PDF). Solo admin. */
+  /** Genera la guia en Coordinadora y trae el rotulo (PDF). Admins y gestores. */
   async generateGuideForWarehouse(
     warehouseId: string,
     recipient: GuideRecipient,
@@ -360,7 +364,12 @@ export class CoordinadoraService {
     auth: AuthContext,
     recaudo?: { referencia: string; valor: number },
   ): Promise<{ guide: GuiaResult; rotulo: Buffer | null }> {
-    this.assertAdmin(auth);
+    // GENERAR LA GUIA es trabajo de pedido, no configuracion: aqui SI entra un
+    // gestor (el resto de metodos gestionan la conexion de envios y siguen en
+    // assertAdmin). El acceso a la sede lo valida la linea siguiente.
+    if (!canManageOrders(auth)) {
+      throw new ForbiddenException('No tienes permiso para generar guías');
+    }
     await this.assertWarehouseAccess(warehouseId, auth);
     const conn = await this.requireConnection(warehouseId);
     const creds = await this.credsFor(warehouseId, conn);
@@ -420,6 +429,11 @@ export class CoordinadoraService {
     };
   }
 
+  /**
+   * Gate de la CONEXION de envios (probar/conectar/desconectar/ciudad origen).
+   * NO ampliar a GESTOR: por aqui pasan las credenciales de Coordinadora.
+   * Generar la guia (generateGuideForWarehouse) usa canManageOrders aparte.
+   */
   private assertAdmin(auth: AuthContext): void {
     if (!isAdmin(auth)) {
       throw new ForbiddenException('Solo administradores pueden gestionar la conexion de envios');

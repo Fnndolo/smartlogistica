@@ -23,8 +23,12 @@ export class WarrantyService {
     private readonly warehouses: WarehousesService,
   ) {}
 
-  /** Plantilla de la sede (o null si no tiene). */
+  /** Plantilla de la sede (o null si no tiene). Solo admin: es el editor del
+   *  certificado, configuracion de la sede. El GESTOR ve todas las sedes, asi
+   *  que sin este gate leeria la plantilla de cada una. (El uso INTERNO, al
+   *  facturar, va por loadTemplate/certificateFor y no pasa por aqui.) */
   async getTemplate(warehouseId: string, auth: AuthContext): Promise<CertificateTemplate | null> {
+    if (!isAdmin(auth)) throw new ForbiddenException('Solo administradores pueden ver la plantilla');
     await this.assertAccess(warehouseId, auth);
     return this.loadTemplate(warehouseId);
   }
@@ -46,8 +50,11 @@ export class WarrantyService {
     return parsed;
   }
 
-  /** PDF de la ULTIMA factura de venta de la sede — fondo del editor. */
+  /** PDF de la ULTIMA factura de venta de la sede — fondo del editor. Solo
+   *  admin: es parte del editor de la plantilla, y ademas expone una factura
+   *  real de la sede. */
   async getEditorInvoicePdf(warehouseId: string, auth: AuthContext): Promise<Buffer> {
+    if (!isAdmin(auth)) throw new ForbiddenException('Solo administradores');
     await this.assertAccess(warehouseId, auth);
     const { tenantId, prisma } = getTenantContext();
     const conn = await prisma.alegraConnection.findUnique({ where: { warehouseId } });

@@ -38,6 +38,12 @@ export class MembersService {
     return auth.activeTenantId;
   }
 
+  /**
+   * Escribir en el equipo (crear/editar/eliminar miembros). NUNCA ampliar: es
+   * la via de escalada de privilegios (un GESTOR podria ascenderse a ADMIN).
+   * La LECTURA del roster (list) queda abierta: la usan el selector de
+   * menciones y la pagina de menciones.
+   */
   private assertOwner(auth: AuthContext): void {
     if (!isAdmin(auth)) {
       throw new ForbiddenException('Solo administradores pueden gestionar el equipo');
@@ -55,7 +61,8 @@ export class MembersService {
     });
     if (memberships.length === 0) return [];
 
-    // Acceso por sede (base del tenant). OWNER/ADMIN ven todas, no necesitan filas.
+    // Acceso por sede (base del tenant). OWNER/ADMIN/GESTOR ven todas: no
+    // necesitan filas (por eso solo los OPERATOR reportan warehouseIds).
     const { prisma } = getTenantContext();
     const links = await prisma.warehouseMember.findMany({
       where: { userId: { in: memberships.map((m) => m.userId) } },
@@ -240,9 +247,9 @@ export class MembersService {
   }
 
   /**
-   * Deja el acceso por sede EXACTAMENTE como se pide. En OWNER/ADMIN se limpian
-   * las filas: ven todas las sedes por rol, y dejarlas seria confuso (al pasarlo
-   * a OPERATOR heredaria accesos viejos sin que nadie los eligiera).
+   * Deja el acceso por sede EXACTAMENTE como se pide. En OWNER/ADMIN/GESTOR se
+   * limpian las filas: ven todas las sedes por rol, y dejarlas seria confuso (al
+   * pasarlo a OPERATOR heredaria accesos viejos sin que nadie los eligiera).
    */
   private async setWarehouses(userId: string, role: string, warehouseIds: string[]): Promise<string[]> {
     const { prisma } = getTenantContext();

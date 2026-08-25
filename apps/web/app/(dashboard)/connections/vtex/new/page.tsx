@@ -1,12 +1,20 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { ArrowLeft } from 'lucide-react';
+
+import { canManageConnections } from '@/lib/rbac';
+import { getSessionUser } from '@/lib/server-api';
 
 import { VtexConnectWizard } from './vtex-connect-wizard';
 
 export const metadata: Metadata = { title: 'Conectar VTEX' };
 
-export default function VtexConnectPage() {
+export default async function VtexConnectPage() {
+  // Conectar un marketplace es configuracion: solo administradores.
+  const me = await getSessionUser();
+  if (me && !canManageConnections(me.role)) redirect('/settings');
+
   return (
     <div className="mx-auto max-w-2xl space-y-6">
       <div>

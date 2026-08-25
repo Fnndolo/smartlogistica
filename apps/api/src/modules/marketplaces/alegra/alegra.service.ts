@@ -16,7 +16,7 @@ import type {
   InvoiceResult,
 } from '@smartlogistica/shared';
 
-import { isAdmin } from '../../../common/rbac';
+import { canManageOrders, isAdmin } from '../../../common/rbac';
 import type { AuthContext } from '../../../common/types/authenticated-request';
 import { CatalogService } from '../../../infrastructure/catalog/catalog.service';
 import { EnvelopeService } from '../../../infrastructure/crypto/envelope.service';
@@ -169,8 +169,11 @@ export class AlegraService {
     private readonly ai: AiConnectionService,
   ) {}
 
-  /** Conexion Alegra de una sede (o null si no esta conectada). */
+  /** Conexion Alegra de una sede (o null si no esta conectada). Solo admin:
+   *  el GESTOR ve todas las sedes, y sin este gate leeria la conexion (correo
+   *  de la cuenta, empresa, estado) de cada una. */
   async get(warehouseId: string, auth: AuthContext): Promise<AlegraConnectionSummary | null> {
+    this.assertAdmin(auth);
     await this.assertWarehouseAccess(warehouseId, auth);
     const { prisma } = getTenantContext();
     const conn = await prisma.alegraConnection.findUnique({ where: { warehouseId } });
@@ -504,7 +507,13 @@ export class AlegraService {
     /** Forma/medio de pago REALES de la factura (ya traducidos), para el Certificado. */
     payment: { formaPago: string; medioPago: string };
   }> {
-    this.assertAdmin(auth);
+    // FACTURAR es trabajo de pedido, no configuracion: aqui SI entra un gestor
+    // (a diferencia del resto de metodos, que gestionan la conexion contable y
+    // siguen en assertAdmin). El acceso a la sede lo sigue validando la linea
+    // siguiente.
+    if (!canManageOrders(auth)) {
+      throw new ForbiddenException('No tienes permiso para facturar');
+    }
     await this.assertWarehouseAccess(warehouseId, auth);
     const { tenantId } = getTenantContext();
     const http = await this.client.forWarehouse(tenantId, warehouseId);
@@ -709,6 +718,11 @@ export class AlegraService {
 
   // === Helpers ===
 
+  /**
+   * Gate de la CONEXION contable (probar/conectar/desconectar/sincronizar). NO
+   * ampliar a GESTOR: por aqui pasa la pantalla de credenciales de Alegra.
+   * Facturar (createInvoiceForWarehouse) usa canManageOrders aparte.
+   */
   private assertAdmin(auth: AuthContext): void {
     if (!isAdmin(auth)) {
       throw new ForbiddenException('Solo administradores pueden gestionar la conexion contable');

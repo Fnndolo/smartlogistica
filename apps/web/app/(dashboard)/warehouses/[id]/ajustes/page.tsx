@@ -1,10 +1,12 @@
+import { redirect } from 'next/navigation';
 import type {
   AlegraConnectionSummary,
   CoordinadoraConnectionSummary,
   SkydropxSedeConfig,
 } from '@smartlogistica/shared';
 
-import { getWarehouses, serverFetch } from '@/lib/server-api';
+import { canManageConnections } from '@/lib/rbac';
+import { getSessionUser, getWarehouses, serverFetch } from '@/lib/server-api';
 import { AlegraConnectionCard } from '../alegra-connection-card';
 import { AlegraSellerCard } from '../alegra-seller-card';
 import { CertificateCard } from '../certificate-card';
@@ -14,6 +16,11 @@ import { SkydropxSedeCard } from '../skydropx-sede-card';
 /** Ajustes de la sede: conexiones (Alegra/Coordinadora) + Certificado. */
 export default async function WarehouseSettingsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  // Los Ajustes de la sede son conexiones/configuracion: solo administradores.
+  // Quien no lo sea vuelve a los pedidos de la sede (el gestor si entra ahi).
+  const me = await getSessionUser();
+  if (me && !canManageConnections(me.role)) redirect(`/warehouses/${id}`);
+
   const warehouse = (await getWarehouses()).find((w) => w.id === id);
   const name = warehouse?.name ?? '';
   const [alegra, coordinadora, skydropxSede] = await Promise.all([

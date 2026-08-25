@@ -2,7 +2,8 @@ import type { Metadata } from 'next';
 import { cookies } from 'next/headers';
 import type { WarehouseSummary } from '@smartlogistica/shared';
 
-import { INTERNAL_API_URL } from '@/lib/server-api';
+import { canManageWarehouses } from '@/lib/rbac';
+import { getSessionUser, INTERNAL_API_URL } from '@/lib/server-api';
 
 import { WarehousesManager } from './warehouses-manager';
 
@@ -27,14 +28,19 @@ async function fetchWarehouses(): Promise<WarehouseSummary[]> {
 }
 
 export default async function WarehousesPage() {
-  const warehouses = await fetchWarehouses();
+  const [warehouses, me] = await Promise.all([fetchWarehouses(), getSessionUser()]);
+  // Crear/archivar sedes es de administradores: a los demas la pagina les sirve
+  // de indice para entrar a trabajar los pedidos de cada sede.
+  const canManage = !me || canManageWarehouses(me.role);
 
   return (
     <div className="space-y-6">
       <header>
         <h1 className="text-2xl font-semibold tracking-tight">Sedes</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Crea y gestiona tus sedes/bodegas. Desde &laquo;Pedidos&raquo; asignas pedidos a cada una.
+          {canManage
+            ? 'Crea y gestiona tus sedes/bodegas. Desde «Pedidos» asignas pedidos a cada una.'
+            : 'Entra a una sede para trabajar sus pedidos.'}
         </p>
       </header>
 

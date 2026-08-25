@@ -56,3 +56,7 @@ prisma/generated/
 .scratch/
 tmp/
 temp/
+
+# Artefactos de herramientas de agentes (no son del proyecto)
+.agents/
+skills-lock.json

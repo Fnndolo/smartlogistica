@@ -30,6 +30,7 @@ import type {
 } from '@smartlogistica/shared';
 import type { Prisma, PrismaClient } from '.prisma/tenant-client';
 
+import { isAdmin } from '../../common/rbac';
 import type { AuthContext } from '../../common/types/authenticated-request';
 import { EnvelopeService } from '../../infrastructure/crypto/envelope.service';
 import { ControlPlaneService } from '../../infrastructure/prisma/control-plane.service';
@@ -1617,9 +1618,16 @@ export class WhatsappService {
     this.sendChains.set(chainKey, next);
   }
 
+  /**
+   * WhatsApp es de ADMINISTRADORES (propietario + admins); operadores y
+   * gestores no. Cubre tanto la CONEXION 360dialog (credenciales) como la
+   * mensajeria al cliente. Si algun dia se quiere dar la mensajeria a los
+   * gestores, hay que PARTIR este helper (uno para la conexion con isAdmin y
+   * otro para mensajeria con canManageOrders), nunca ampliarlo entero: las
+   * credenciales viven detras del mismo gate.
+   */
   private assertAdmin(auth: AuthContext): void {
-    // WhatsApp es de ADMINISTRADORES (propietario + admins); operadores no.
-    if (auth.role !== 'OWNER' && auth.role !== 'ADMIN') {
+    if (!isAdmin(auth)) {
       throw new ForbiddenException('WhatsApp es solo para administradores');
     }
   }

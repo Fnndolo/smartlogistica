@@ -20,8 +20,8 @@ export class AiConnectionController {
   constructor(private readonly ai: AiConnectionService) {}
 
   @Get()
-  async get(): Promise<AiConnectionSummary | null> {
-    return this.ai.get();
+  async get(@CurrentUser() user: AuthContext): Promise<AiConnectionSummary | null> {
+    return this.ai.get(user);
   }
 
   @Post('test')

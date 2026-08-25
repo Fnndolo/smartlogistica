@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { Plus } from 'lucide-react';
 import type {
   AiConnectionSummary,
@@ -9,7 +10,8 @@ import type {
 } from '@smartlogistica/shared';
 
 import { Button } from '@/components/ui/button';
-import { serverFetchResult } from '@/lib/server-api';
+import { canManageConnections } from '@/lib/rbac';
+import { getSessionUser, serverFetchResult } from '@/lib/server-api';
 
 import { AiConnectionCard } from './ai-connection-card';
 import { ConnectionsList } from './connections-list';
@@ -45,6 +47,12 @@ async function initialSkydropx(): Promise<SkydropxConnectionSummary | null | und
 }
 
 export default async function ConnectionsPage() {
+  // Conexiones es SOLO de administradores: quitarlo del menu no basta, la URL
+  // sigue siendo navegable. Si el rol no se pudo leer (API caido) no se expulsa
+  // a nadie: cada lectura de abajo la bloquea el API igual.
+  const me = await getSessionUser();
+  if (me && !canManageConnections(me.role)) redirect('/settings');
+
   const [connections, aiConnection, dialog360, skydropx] = await Promise.all([
     initialConnections(),
     initialAiConnection(),

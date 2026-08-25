@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { ListChecks, PackageCheck, Settings2 } from 'lucide-react';
 
 import { useCurrentUser } from '@/components/providers/current-user-provider';
+import { canManageConnections } from '@/lib/rbac';
 import { cn } from '@/lib/utils';
 
 /**
@@ -15,14 +16,14 @@ import { cn } from '@/lib/utils';
 export function SedeTabs({ warehouseId }: { warehouseId: string }) {
   const pathname = usePathname();
   const user = useCurrentUser();
-  const isAdminUser = user?.role === 'OWNER' || user?.role === 'ADMIN';
+  // Ajustes de la sede = conexiones/config: solo administradores (ni el gestor).
+  const canSeeSettings = canManageConnections(user?.role);
   const base = `/warehouses/${warehouseId}`;
 
   const tabs = [
     { href: base, label: 'Por preparar', icon: ListChecks },
     { href: `${base}/facturados`, label: 'Facturados', icon: PackageCheck },
-    // Ajustes de la sede = conexiones/config: solo administradores.
-    ...(isAdminUser ? [{ href: `${base}/ajustes`, label: 'Ajustes', icon: Settings2 }] : []),
+    ...(canSeeSettings ? [{ href: `${base}/ajustes`, label: 'Ajustes', icon: Settings2 }] : []),
   ];
 
   return (

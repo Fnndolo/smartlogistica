@@ -28,6 +28,7 @@ import type { WaInbox, WaInboxItem, WaMessage, WaThread } from '@smartlogistica/
 
 import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { ApiError, api } from '@/lib/api-client';
+import { canUseWhatsapp } from '@/lib/rbac';
 import { cn, titleCaseName } from '@/lib/utils';
 
 import { Ticks, WhatsappPanel } from '../orders/whatsapp-panel';
@@ -166,7 +167,8 @@ export function WhatsappInbox() {
   const selectedRef = useRef<string | null>(null);
   selectedRef.current = selected;
 
-  const isAdminUser = me?.role === 'OWNER' || me?.role === 'ADMIN';
+  // WhatsApp es de administradores (el API lo exige): ni gestores ni operadores.
+  const isAdminUser = canUseWhatsapp(me?.role);
 
   const { data: inbox, isLoading } = useQuery({
     queryKey: ['wa-inbox'],

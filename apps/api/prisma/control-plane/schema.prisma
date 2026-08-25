@@ -20,9 +20,13 @@ enum TenantStatus {
   DELETED
 }
 
+// De mas a menos permisos. GESTOR entra a TODAS las sedes y hace todo el
+// trabajo de pedidos (facturar, guias, generales) pero no toca configuracion,
+// conexiones, equipo ni transfiere pedidos entre sedes.
 enum TenantRole {
   OWNER
   ADMIN
+  GESTOR
   OPERATOR
 }
 

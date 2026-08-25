@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
+import type { TenantRole } from '@smartlogistica/shared';
 
 import { ApiError, api } from '@/lib/api-client';
 
@@ -12,7 +13,9 @@ export interface CurrentUser {
   name: string | null;
   activeTenantId: string | null;
   activeTenantSlug: string | null;
-  role: string | null;
+  /** Tipado con el enum real: si aparece un rol nuevo, los gates no compilan
+      hasta que se decida que ve y que no (ver @/lib/rbac). */
+  role: TenantRole | null;
 }
 
 const CurrentUserContext = createContext<{ user: CurrentUser | null; isLoading: boolean }>({

@@ -79,8 +79,13 @@ export class AiConnectionService {
     private readonly envelope: EnvelopeService,
   ) {}
 
-  /** La conexion IA del tenant (o null si no hay). Lectura abierta al tenant. */
-  async get(): Promise<AiConnectionSummary | null> {
+  /**
+   * La conexion IA del tenant (o null si no hay). Solo admin: "Conexiones" es
+   * una seccion de administradores completa — un gestor no debe poder leerla ni
+   * llamando al API directo. No devuelve secretos, pero el rol manda.
+   */
+  async get(auth: AuthContext): Promise<AiConnectionSummary | null> {
+    this.assertAdmin(auth);
     const { prisma } = getTenantContext();
     const conn = await prisma.aiConnection.findFirst({ orderBy: { createdAt: 'desc' } });
     return conn ? this.toSummary(conn) : null;
