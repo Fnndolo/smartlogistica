@@ -20,6 +20,18 @@ const adm = (u, db) => { const x = new URL(u); x.pathname = `/${db}`; return x.t
 const str = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 const ONLY = process.argv[2];
 
+/** MISMA cabecera que usa la app (orders.service.ts): 'inline' para que el PDF
+ *  se ABRA en el visor del chat. Con 'attachment' el navegador lanza el dialogo
+ *  de guardar cada vez que se entra a la conversacion. */
+const contentDisposition = (fileName) => {
+  const ascii = fileName
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^\x20-\x7E]/g, '_')
+    .replace(/"/g, '');
+  return `inline; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+};
+
 const kek = Buffer.from(process.env.KEK_V1 ?? '', 'base64');
 const ctl = new Client({ connectionString: strip(process.env.CONTROL_PLANE_DATABASE_URL), ssl: ssl() });
 await ctl.connect();
@@ -73,7 +85,7 @@ for (const r of rows) {
   });
   await s3.send(new PutObjectCommand({
     Bucket: process.env.STORAGE_BUCKET, Key: r.attachmentKey, Body: pdf,
-    ContentType: 'application/pdf', ContentDisposition: `attachment; filename="${r.body}"`,
+    ContentType: 'application/pdf', ContentDisposition: contentDisposition(r.body),
   }));
   console.log(`  ${r.externalId}: ${r.body} regenerada (${pdf.length} bytes)`);
   await new Promise((x) => setTimeout(x, 600)); // limite 2 req/s de Skydropx
