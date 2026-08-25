@@ -282,6 +282,18 @@ export class AiConnectionService {
   private translateError(err: unknown, provider: AiProvider, fallback: string): BadRequestException {
     if (isAxiosError(err)) {
       const status = err.response?.status;
+      // El motivo REAL viene en el cuerpo del proveedor (los tres lo ponen en
+      // error.message). Sin esto, quedarse sin saldo se veia igual que un
+      // modelo mal escrito: "no se pudo leer la imagen" y a adivinar.
+      const body = err.response?.data as { error?: { message?: unknown } } | undefined;
+      const detail =
+        typeof body?.error?.message === 'string' ? body.error.message.trim().slice(0, 220) : '';
+
+      if (/credit balance|insufficient_quota|quota|billing/i.test(detail)) {
+        return new BadRequestException(
+          `Sin saldo en ${provider}: recarga créditos en su panel de facturación para volver a leer fotos con IA.`,
+        );
+      }
       if (status === 401 || status === 403) {
         return new BadRequestException(`Credenciales de ${provider} rechazadas (401/403)`);
       }
@@ -291,7 +303,9 @@ export class AiConnectionService {
       if (status === 429) {
         return new BadRequestException(`${provider} respondio 429 (limite de uso)`);
       }
-      return new BadRequestException(`${fallback}: HTTP ${status ?? 'desconocido'}`);
+      return new BadRequestException(
+        detail ? `${fallback} — ${provider}: ${detail}` : `${fallback}: HTTP ${status ?? 'desconocido'}`,
+      );
     }
     return new BadRequestException(fallback);
   }
