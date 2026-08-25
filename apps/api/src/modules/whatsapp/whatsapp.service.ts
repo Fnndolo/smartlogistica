@@ -972,6 +972,27 @@ export class WhatsappService {
   ];
 
   /**
+   * Plantilla por TRANSPORTADORA: cada una lleva su propio link de rastreo, que
+   * es lo unico que cambia entre ellas. Se prueba primero la de la
+   * transportadora del envio y, si aun no esta aprobada en la WABA, se cae a la
+   * general (Coordinadora) para que la guia salga igual.
+   */
+  private static readonly GUIDE_TEMPLATE_BY_CARRIER: Array<{ match: RegExp; name: string }> = [
+    { match: /inter\s*rapid/i, name: 'guia_envio_inter' },
+    { match: /servientrega/i, name: 'guia_envio_servientrega' },
+    { match: /envia/i, name: 'guia_envio_envia' },
+  ];
+
+  /** Orden de plantillas a probar para un envio de esta transportadora. */
+  private guideTemplatesFor(carrier?: string | null): string[] {
+    const c = (carrier ?? '').trim();
+    const own = c
+      ? WhatsappService.GUIDE_TEMPLATE_BY_CARRIER.filter((t) => t.match.test(c)).map((t) => t.name)
+      : [];
+    return [...own, ...WhatsappService.GUIDE_TEMPLATE_PRIORITY];
+  }
+
+  /**
    * Envia la GUIA al cliente: UN mensaje de WhatsApp con el PDF del rotulo
    * arriba y el texto de seguimiento + pregunta de confirmacion abajo.
    * Best-effort total (se llama fire-and-forget desde el flujo de la guia);
@@ -984,6 +1005,8 @@ export class WhatsappService {
     order: { id: string; customerPhone: string | null; customerName: string | null },
     rotulo: Buffer,
     rotuloKey: string | null,
+    /** Transportadora del envio: decide el link de rastreo de la plantilla. */
+    carrier?: string | null,
   ): Promise<void> {
     try {
       const phone = order.customerPhone ? tenDigits(order.customerPhone) : '';
@@ -991,9 +1014,9 @@ export class WhatsappService {
       const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
       if (!d360 || d360.mode !== 'production') return;
       const list = await this.cachedTemplates(tenantId, d360.http).catch(() => []);
-      const tpl = WhatsappService.GUIDE_TEMPLATE_PRIORITY.map((n) =>
-        list.find((x) => x.name === n && x.status === 'approved'),
-      ).find(Boolean);
+      const tpl = this.guideTemplatesFor(carrier)
+        .map((n) => list.find((x) => x.name === n && x.status === 'approved'))
+        .find(Boolean);
       if (!tpl) {
         this.logger.warn('Guia por WhatsApp: sin plantilla de guia APROBADA en la WABA aun');
         return;

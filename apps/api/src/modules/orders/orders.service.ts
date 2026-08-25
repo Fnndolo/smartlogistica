@@ -2058,6 +2058,10 @@ export class OrdersService {
       if (o.guideNumber === o.skydropxShipmentId) {
         await this.backfillSkydropxLabel(tenantId, prisma, o.id, o.skydropxShipmentId as string);
       }
+      // La RELACION DE DESPACHO se comprueba aparte del rotulo: los pedidos
+      // rescatados antes de que existiera (o cuya generacion fallo) ya no
+      // entran por la rama de arriba y se quedarian sin ella.
+      await this.ensureDispatchRelation(prisma, o.id, o.skydropxShipmentId as string);
       const t = await this.skydropx.tracking(o.skydropxShipmentId as string);
       if (!t) continue;
       const statusText = t.carrier ? `${t.carrier} · ${t.statusText}` : t.statusText;
@@ -2453,6 +2457,7 @@ export class OrdersService {
           { id: orderId, customerPhone: order.customerPhone, customerName: order.customerName },
           label,
           rotuloKey,
+          carrier,
         )
         .catch(() => null);
     }
@@ -2612,6 +2617,8 @@ export class OrdersService {
           { id: orderId, customerPhone: order.customerPhone, customerName: order.customerName },
           rotulo,
           rotuloKey,
+          // Guia directa: siempre Coordinadora (su plantilla es la general).
+          'coordinadora',
         )
         .catch(() => null);
     }
@@ -2692,8 +2699,37 @@ export class OrdersService {
         { id: orderId, customerPhone: order.customerPhone, customerName: order.customerName },
         label,
         rotuloKey,
+        docs.carrier,
       )
       .catch(() => null);
+  }
+
+  /** Marcador del adjunto de la relacion, para no duplicarla. */
+  private static readonly DISPATCH_PREFIX = 'RELACION-DESPACHO-';
+
+  /**
+   * Se asegura de que el pedido TENGA su relacion de despacho. Idempotente: si
+   * ya hay un adjunto con el prefijo, no hace nada. Corre en el refresco de
+   * envios, asi que tambien alcanza a los pedidos anteriores a esta funcion.
+   */
+  private async ensureDispatchRelation(
+    prisma: PrismaClient,
+    orderId: string,
+    shipmentId: string,
+  ): Promise<void> {
+    const already = await prisma.orderMessage.findFirst({
+      where: { orderId, kind: 'document', body: { startsWith: OrdersService.DISPATCH_PREFIX } },
+      select: { id: true },
+    });
+    if (already) return;
+    const order = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
+    if (!order) return;
+    const rel = await this.skydropx.shipmentRelation(shipmentId).catch(() => null);
+    if (!rel?.carrier) return;
+    await this.attachDispatchRelation(orderId, order, shipmentId, rel.carrier, {
+      userId: 'system',
+      name: 'Sistema',
+    } as unknown as AuthContext);
   }
 
   /**
@@ -2728,7 +2764,7 @@ export class OrdersService {
         packages: 1,
       });
       const { tenantId, prisma } = getTenantContext();
-      const fileName = `RELACION-DESPACHO-${rel.trackingNumber}.pdf`;
+      const fileName = `${OrdersService.DISPATCH_PREFIX}${rel.trackingNumber}.pdf`;
       const key = `tenants/${tenantId}/orders/${orderId}/${slugForKey(fileName)}-${randomUUID()}.pdf`;
       await this.storage.put(key, pdf, 'application/pdf', contentDisposition(fileName));
       await prisma.orderMessage.create({

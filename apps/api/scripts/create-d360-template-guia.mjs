@@ -17,17 +17,48 @@ const stripSsl = (u) => { const x = new URL(u); x.searchParams.delete('sslmode')
 const pgSsl = () => (process.env.TENANT_DB_SSLMODE ?? 'require') === 'disable' ? undefined : { rejectUnauthorized: false };
 const adminDb = (u, db) => { const x = new URL(u); x.pathname = `/${db}`; return x.toString(); };
 
-const NAME = process.argv[2] ?? 'guia_envio_pedido';
+/**
+ * Una plantilla POR TRANSPORTADORA: el texto es identico, lo unico que cambia
+ * es el link de rastreo. El nombre debe coincidir con
+ * GUIDE_TEMPLATE_BY_CARRIER de whatsapp.service.ts.
+ *   node --env-file=.env.local scripts/create-d360-template-guia.mjs           -> crea TODAS
+ *   node --env-file=.env.local scripts/create-d360-template-guia.mjs inter     -> solo esa
+ */
+const CARRIERS = {
+  coordinadora: {
+    name: 'guia_envio_pedido',
+    link: 'https://coordinadora.com/rastreo/rastreo-de-guia/',
+  },
+  inter: {
+    name: 'guia_envio_inter',
+    link: 'https://siguetuenvio.interrapidisimo.com/',
+  },
+  envia: {
+    name: 'guia_envio_envia',
+    link: 'https://envia.co/',
+  },
+  servientrega: {
+    name: 'guia_envio_servientrega',
+    link: 'https://www.servientrega.com/wps/portal/rastreo-envio',
+  },
+};
 
 // El mensaje EXACTO del negocio + la pregunta de confirmacion al final (la
 // plantilla es UN solo mensaje: PDF del rotulo arriba + texto abajo).
-const BODY =
+const bodyFor = (link) =>
   'Le comparto la guía para el seguimiento de su pedido que estará disponible hoy después de las 6 pm⏱️,\n\n' +
-  '📡Puedes rastrear tu envío en:➡️ https://coordinadora.com/rastreo/rastreo-de-guia/ ingresando el numero de guía que esta en el archivo adjunto.\n\n' +
+  `📡Puedes rastrear tu envío en:➡️ ${link} ingresando el numero de guía que esta en el archivo adjunto.\n\n` +
   '⚠️Al momento de recibir su pedido es importante revisar que el paquete este SELLADO y nos confirme cuando llegue a la dirección indicada.⚠️\n\n' +
   '✅¡NO OLVIDES REGISTRAR TU EQUIPO EN TU OPERADOR CON LA FACTURA!📲🤗\n\n' +
   '¡Que tenga un excelente día lleno de bendiciones!💙\n\n' +
   'Por favor me confirma si la guía está correcta 🫶🏻';
+
+const ONLY = process.argv[2];
+const TARGETS = ONLY ? [CARRIERS[ONLY]].filter(Boolean) : Object.values(CARRIERS);
+if (TARGETS.length === 0) {
+  console.log(`Transportadora desconocida. Opciones: ${Object.keys(CARRIERS).join(', ')}`);
+  process.exit(1);
+}
 
 async function main() {
   const kek = Buffer.from(process.env.KEK_V1 ?? '', 'base64');
@@ -45,24 +76,26 @@ async function main() {
   // Timeout LARGO: 360dialog baja la muestra y la sube a Meta en la misma llamada.
   const http = axios.create({ baseURL: 'https://waba-v2.360dialog.io', timeout: 180000, headers: { 'D360-API-KEY': apiKey, 'Content-Type': 'application/json' } });
 
-  console.log(`Creando plantilla ${NAME} (es, UTILITY, encabezado DOCUMENTO)...`);
-  try {
-    const res = (await http.post('/v1/configs/templates', {
-      name: NAME,
-      language: 'es',
-      category: 'UTILITY',
-      components: [
-        {
-          type: 'HEADER',
-          format: 'DOCUMENT',
-          example: { header_handle: ['https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf'] },
-        },
-        { type: 'BODY', text: BODY },
-      ],
-    })).data;
-    console.log('OK:', JSON.stringify(res).slice(0, 800));
-  } catch (e) {
-    console.log('error:', e.response?.status, JSON.stringify(e.response?.data ?? e.message).slice(0, 800));
+  for (const c of TARGETS) {
+    console.log(`\nCreando ${c.name} (es, UTILITY, encabezado DOCUMENTO) -> ${c.link}`);
+    try {
+      const res = (await http.post('/v1/configs/templates', {
+        name: c.name,
+        language: 'es',
+        category: 'UTILITY',
+        components: [
+          {
+            type: 'HEADER',
+            format: 'DOCUMENT',
+            example: { header_handle: ['https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf'] },
+          },
+          { type: 'BODY', text: bodyFor(c.link) },
+        ],
+      })).data;
+      console.log('  OK:', JSON.stringify(res).slice(0, 400));
+    } catch (e) {
+      console.log('  error:', e.response?.status, JSON.stringify(e.response?.data ?? e.message).slice(0, 400));
+    }
   }
 }
 main().catch((e) => { console.error(e); process.exit(1); });
