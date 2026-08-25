@@ -62,6 +62,7 @@ import { postalCodeForCity, postalCodeForDane } from '../marketplaces/skydropx/c
 import type { RastreoResult } from '../marketplaces/coordinadora/coordinadora-client.service';
 import { MktDocumentService } from '../marketplaces/vtex/mkt-document.service';
 import { VtexClient } from '../marketplaces/vtex/vtex-client.service';
+import { DispatchRelationService } from '../marketplaces/skydropx/dispatch-relation.service';
 import { SkydropxService } from '../marketplaces/skydropx/skydropx.service';
 import { WaUpsellService } from '../whatsapp/wa-upsell.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
@@ -154,6 +155,7 @@ export class OrdersService {
     private readonly whatsapp: WhatsappService,
     private readonly upsell: WaUpsellService,
     private readonly skydropx: SkydropxService,
+    private readonly dispatchRelation: DispatchRelationService,
   ) {}
 
   async list(query: ListOrdersQuery, auth: AuthContext): Promise<ListOrdersResponse> {
@@ -2454,6 +2456,10 @@ export class OrdersService {
         )
         .catch(() => null);
     }
+    // Inter Rapidisimo pide ADEMAS la relacion de despacho (la que firma el
+    // recolector). Solo va al chat interno: es un documento operativo, no del
+    // cliente. Best-effort, nunca tumba la guia.
+    await this.attachDispatchRelation(orderId, order, ship.shipmentId, carrier, auth);
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
     return {
       id: ship.shipmentId || ship.trackingNumber,
@@ -2666,6 +2672,10 @@ export class OrdersService {
       },
     });
 
+    const sysAuth = { userId: 'system', name: 'Sistema' } as unknown as AuthContext;
+    // La relacion de despacho tambien se rescata (Inter Rapidisimo).
+    await this.attachDispatchRelation(orderId, order, shipmentId, docs.carrier ?? '', sysAuth);
+
     const label = docs.labelUrl ? await this.skydropx.downloadLabel(docs.labelUrl) : null;
     if (!label) return;
     const rotuloKey = await this.attachRotulo(
@@ -2673,7 +2683,7 @@ export class OrdersService {
       order,
       { number: docs.trackingNumber },
       label,
-      { userId: 'system', name: 'Sistema' } as unknown as AuthContext,
+      sysAuth,
     );
     await this.whatsapp
       .sendGuideByWhatsApp(
@@ -2684,6 +2694,58 @@ export class OrdersService {
         rotuloKey,
       )
       .catch(() => null);
+  }
+
+  /**
+   * RELACION DE DESPACHO al chat interno. Solo Inter Rapidisimo la exige (es el
+   * comprobante que firma el recolector); las demas transportadoras no la usan.
+   * El PDF lo generamos nosotros calcado del que emite el panel de Skydropx,
+   * porque su API no lo expone. Best-effort: nunca tumba la guia.
+   */
+  private async attachDispatchRelation(
+    orderId: string,
+    order: OrderWithItems,
+    shipmentId: string,
+    carrier: string,
+    auth: AuthContext,
+  ): Promise<void> {
+    if (!/inter\s*rapid/i.test(carrier) || !shipmentId) return;
+    if (!this.storage.isConfigured()) return;
+    try {
+      const rel = await this.skydropx.shipmentRelation(shipmentId);
+      if (!rel?.trackingNumber || !rel.from || !rel.to || !rel.parcel) return;
+      const pdf = await this.dispatchRelation.build({
+        // Skydropx numera las suyas SKD-xxxx; la nuestra se identifica con la guia.
+        relationNumber: `SKD-${rel.trackingNumber}`,
+        trackingNumber: rel.trackingNumber,
+        from: rel.from,
+        to: rel.to,
+        content: rel.parcel.content,
+        weightKg: rel.parcel.weight,
+        length: rel.parcel.length,
+        width: rel.parcel.width,
+        height: rel.parcel.height,
+        packages: 1,
+      });
+      const { tenantId, prisma } = getTenantContext();
+      const fileName = `RELACION-DESPACHO-${rel.trackingNumber}.pdf`;
+      const key = `tenants/${tenantId}/orders/${orderId}/${slugForKey(fileName)}-${randomUUID()}.pdf`;
+      await this.storage.put(key, pdf, 'application/pdf', contentDisposition(fileName));
+      await prisma.orderMessage.create({
+        data: {
+          orderId,
+          authorId: auth.userId,
+          authorName: displayName(auth),
+          kind: 'document',
+          body: fileName,
+          attachmentKey: key,
+          attachmentMime: 'application/pdf',
+          imeis: [],
+        },
+      });
+    } catch {
+      // Documento operativo: si falla, la guia y el rotulo siguen su curso.
+    }
   }
 
   /** Sube el rotulo (sticker) a storage y lo adjunta al chat. Best-effort.

@@ -24,6 +24,20 @@ import {
 
 type Creds = { apiKey: string; apiSecret: string; mode: SkydropxMode };
 
+/** Direccion tal como la guarda Skydropx (para la relacion de despacho). */
+export interface SkydropxRelationAddress {
+  company: string | null;
+  name: string | null;
+  taxId: string | null;
+  street: string | null;
+  extra: string | null;
+  city: string | null;
+  state: string | null;
+  postalCode: string | null;
+  email: string | null;
+  phone: string | null;
+}
+
 /**
  * SKYDROPX: credenciales cifradas (una conexion por tenant) + cotizacion +
  * creacion de envio + rastreo. La logica DE PEDIDO (armar remitente/
@@ -395,6 +409,75 @@ export class SkydropxService {
       };
     } catch (err) {
       this.logger.warn(`No se pudieron leer los documentos del envio ${shipmentId}: ${String(err)}`);
+      return null;
+    }
+  }
+
+  /**
+   * Datos del envio para la RELACION DE DESPACHO (Inter Rapidisimo): las dos
+   * direcciones tal como las guardo Skydropx y el paquete. Asi el documento
+   * sale con exactamente lo mismo que imprime su panel.
+   */
+  async shipmentRelation(shipmentId: string): Promise<{
+    trackingNumber: string | null;
+    carrier: string | null;
+    from: SkydropxRelationAddress | null;
+    to: SkydropxRelationAddress | null;
+    parcel: { content: string; weight: number; length: number; width: number; height: number } | null;
+  } | null> {
+    const creds = await this.credsOrNull();
+    if (!creds) return null;
+    try {
+      const raw = await this.client.getShipmentWithPackages(creds, shipmentId);
+      const data = (raw.data ?? raw) as Record<string, unknown>;
+      const attrs = ((data.attributes ?? data) ?? {}) as Record<string, unknown>;
+      const included = Array.isArray(raw.included)
+        ? (raw.included as Array<Record<string, unknown>>)
+        : [];
+      const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+      const num = (v: unknown): number => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : 0;
+      };
+      const addrOf = (type: 'from' | 'to'): SkydropxRelationAddress | null => {
+        const hit = included.find((i) => {
+          const a = (i.attributes ?? i) as Record<string, unknown>;
+          return i.type === 'address' && a.address_type === type;
+        });
+        if (!hit) return null;
+        const a = (hit.attributes ?? hit) as Record<string, unknown>;
+        return {
+          company: str(a.company),
+          name: str(a.name),
+          taxId: str(a.tax_id_number),
+          street: str(a.street1),
+          extra: str(a.area_level3) ?? str(a.apartment_number),
+          city: str(a.area_level2),
+          state: str(a.area_level1),
+          postalCode: str(a.postal_code),
+          email: str(a.email),
+          phone: str(a.phone),
+        };
+      };
+      const pkg = included.find((i) => i.type === 'package');
+      const p = ((pkg?.attributes ?? pkg) ?? {}) as Record<string, unknown>;
+      return {
+        trackingNumber: str(p.tracking_number) ?? str(attrs.master_tracking_number),
+        carrier: str(attrs.carrier_name),
+        from: addrOf('from'),
+        to: addrOf('to'),
+        parcel: pkg
+          ? {
+              content: str(p.package_content) ?? '',
+              weight: num(p.weight),
+              length: num(p.length),
+              width: num(p.width),
+              height: num(p.height),
+            }
+          : null,
+      };
+    } catch (err) {
+      this.logger.warn(`No se pudo leer el envio ${shipmentId} para la relacion: ${String(err)}`);
       return null;
     }
   }
