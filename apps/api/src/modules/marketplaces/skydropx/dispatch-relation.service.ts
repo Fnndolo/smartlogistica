@@ -4,13 +4,16 @@ import PDFDocument from 'pdfkit';
 import { code128Widths } from './code128';
 
 /**
- * RELACION DE DESPACHO de Inter Rapidisimo, calcada del PDF que emite el panel
- * de Skydropx (su API no lo expone: probado endpoint por endpoint). Es el
- * comprobante que FIRMA el recolector al recibir el paquete, uno por guia, y
- * solo aplica a Inter Rapidisimo.
+ * RELACION DE DESPACHO de Inter Rapidisimo. Es el comprobante que FIRMA el
+ * recolector al recibir el paquete: uno por guia, y solo esa transportadora lo
+ * exige. Su API no lo expone (probado endpoint por endpoint), asi que se
+ * reconstruye igual que el MKT de VTEX.
  *
- * El layout replica la muestra: horizontal, tres bloques con cabecera gris
- * (ORIGEN / PAQUETES / DETALLES) y las casillas de firma abajo.
+ * La geometria NO esta a ojo: se extrajeron las coordenadas, tamaños y fuentes
+ * del PDF original con pdfjs y se reproducen aqui en puntos absolutos sobre A4
+ * horizontal (842x595). Detalle clave del original: en las celdas de la fila
+ * del paquete el texto NO va centrado verticalmente — se ancla ABAJO y crece
+ * hacia arriba, asi que la ultima linea queda pegada al borde inferior.
  */
 
 export interface DispatchAddress {
@@ -18,7 +21,6 @@ export interface DispatchAddress {
   name: string | null;
   taxId: string | null;
   street: string | null;
-  /** Complemento (interior, oficina, referencia). */
   extra: string | null;
   city: string | null;
   state: string | null;
@@ -28,7 +30,6 @@ export interface DispatchAddress {
 }
 
 export interface DispatchRelationInput {
-  /** Numero de la relacion (arriba a la derecha). */
   relationNumber: string;
   trackingNumber: string;
   from: DispatchAddress;
@@ -41,97 +42,95 @@ export interface DispatchRelationInput {
   packages: number;
 }
 
-// Paleta y metricas de la muestra.
-const HEAD_BG = '#d9d9d9';
+const PAGE_W = 842;
+const PAGE_H = 595;
+const L = 26; // borde izquierdo de las tablas
+const R = 816; // borde derecho
+
+const BAND_BG = '#d9d9d9';
 const CELL_BG = '#f2f2f2';
-const LINE = '#7f7f7f';
+const STROKE = '#808080';
 const INK = '#000000';
+
+/** Ascendente de Helvetica: convierte una LINEA BASE del original al eje de
+ *  pdfkit, que posiciona por el borde superior del texto. */
+const ASC = 0.718;
 
 @Injectable()
 export class DispatchRelationService {
-  /** Arma el PDF. Devuelve el buffer listo para adjuntar al chat. */
-  async build(input: DispatchRelationInput): Promise<Buffer> {
-    const doc = new PDFDocument({ size: 'LETTER', layout: 'landscape', margin: 0 });
+  async build(i: DispatchRelationInput): Promise<Buffer> {
+    const doc = new PDFDocument({ size: [PAGE_W, PAGE_H], margin: 0 });
     const chunks: Buffer[] = [];
     doc.on('data', (c: Buffer) => chunks.push(c));
-    const done = new Promise<Buffer>((resolve) => {
-      doc.on('end', () => resolve(Buffer.concat(chunks)));
-    });
+    const done = new Promise<Buffer>((resolve) => doc.on('end', () => resolve(Buffer.concat(chunks))));
 
-    const M = 26; // margen
-    const W = doc.page.width - M * 2;
-    /** Anchos como FRACCION del ancho util: la muestra se midio en pixeles y
-     *  asi el documento escala exacto a la hoja (carta horizontal). */
-    const w = (frac: number): number => Math.round(W * frac * 100) / 100;
-    let y = 34;
+    // ===== Titulo =====
+    this.text(doc, 'Relación de despachos Inter Rapidísimo', 127, 550.3, 10.8, true);
 
-    // ===== Titulo + caja del numero de relacion =====
-    doc
-      .font('Helvetica-Bold')
-      .fontSize(13)
-      .fillColor(INK)
-      .text('Relación de despachos Inter Rapidísimo', M + w(0.1), y, { width: w(0.42) });
-
-    const boxX = M + w(0.547);
-    const boxLabel = w(0.269);
-    const boxVal = W - w(0.547) - boxLabel;
-    this.cell(doc, boxX, y - 6, boxLabel, 16, 'Relación de despachos núm.', { bold: true, bg: null, size: 7 });
-    this.cell(doc, boxX + boxLabel, y - 6, boxVal, 16, input.relationNumber, { size: 7 });
-    this.cell(doc, boxX, y + 10, boxLabel, 16, 'Fecha', { bold: true, bg: null, size: 7 });
-    this.cell(doc, boxX + boxLabel, y + 10, boxVal, 16, '', {});
-    y += 40;
+    // ===== Caja del numero de relacion (arriba a la derecha) =====
+    const boxLabelX = 463;
+    const boxValX = 677.9;
+    this.box(doc, boxLabelX, 548.5, boxValX - boxLabelX, 10.2, CELL_BG);
+    this.box(doc, boxValX, 548.5, R - boxValX, 10.2, null);
+    this.text(doc, 'Relación de despachos núm.', 466.8, 553.3, 5.4, true);
+    this.text(doc, i.relationNumber, 681.7, 553.3, 5.4, false);
+    this.box(doc, boxLabelX, 538.3, boxValX - boxLabelX, 10.2, CELL_BG);
+    this.box(doc, boxValX, 538.3, R - boxValX, 10.2, null);
+    this.text(doc, 'Fecha', 466.8, 543.1, 5.4, true);
 
     // ===== INFORMACION DE ORIGEN =====
-    this.band(doc, M, y, W, 'INFORMACIÓN DE ORIGEN');
-    y += 15;
+    this.band(doc, 523.7, 11.5, 'INFORMACIÓN DE ORIGEN', 527.5);
+    const f = i.from;
+    // Limites de columna de esta seccion (del original).
+    const cA = 128.1; // fin etiqueta izquierda
+    const cB = 285.4; // fin valor 1
+    const cC = 379.6; // fin etiqueta 2
+    const cD = 481.7; // fin valor 2
+    const cE = 614.9; // fin etiqueta 3
+    const rowH = 16.2;
 
-    const f = input.from;
-    const r1 = 22;
-    const LBL = w(0.131); // ancho de las etiquetas de la izquierda
-    // Compañia | valor | Nombre | valor | Num. de identificacion | valor
-    let x = M;
-    this.cell(doc, x, y, LBL, r1, 'Compañía', { bold: true, bg: CELL_BG, size: 7.5 });
-    x += LBL;
-    this.cell(doc, x, y, w(0.2), r1, f.company ?? '', { size: 7.5 });
-    x += w(0.2);
-    this.cell(doc, x, y, w(0.086), r1, 'Nombre', { bold: true, bg: CELL_BG, size: 7.5 });
-    x += w(0.086);
-    this.cell(doc, x, y, w(0.167), r1, f.name ?? '', { size: 7.5 });
-    x += w(0.167);
-    this.cell(doc, x, y, w(0.166), r1, 'Num. de identificación', { bold: true, bg: CELL_BG, size: 7.5 });
-    x += w(0.166);
-    this.cell(doc, x, y, M + W - x, r1, f.taxId ?? '', { size: 7.5 });
-    y += r1;
+    // Fila 1: Compañia | Nombre | Num. de identificacion
+    let bottom = 507.5;
+    this.box(doc, L, bottom, cA - L, rowH, CELL_BG);
+    this.box(doc, cA, bottom, cB - cA, rowH, null);
+    this.box(doc, cB, bottom, cC - cB, rowH, CELL_BG);
+    this.box(doc, cC, bottom, cD - cC, rowH, null);
+    this.box(doc, cD, bottom, cE - cD, rowH, CELL_BG);
+    this.box(doc, cE, bottom, R - cE, rowH, null);
+    this.text(doc, 'Compañía', 32.1, 513.1, 5.4, true);
+    this.text(doc, f.company ?? '', 134.2, 513.1, 5.4, false, cB - 134.2 - 3);
+    this.text(doc, 'Nombre', 291.5, 513.1, 5.4, true);
+    this.text(doc, f.name ?? '', 385.7, 513.1, 5.4, false, cD - 385.7 - 3);
+    this.text(doc, 'Num. de identificación', 487.8, 513.1, 5.4, true);
+    this.text(doc, f.taxId ?? '', 621.0, 513.1, 5.4, false, R - 621 - 3);
 
-    // Direccion | valor (ancho) | Codigo postal | valor
-    x = M;
-    this.cell(doc, x, y, LBL, r1, 'Dirección', { bold: true, bg: CELL_BG, size: 7.5 });
-    x += LBL;
-    this.cell(doc, x, y, w(0.441), r1, this.fullAddress(f), { size: 6.8 });
-    x += w(0.441);
-    this.cell(doc, x, y, w(0.178), r1, 'Código postal', { bold: true, bg: CELL_BG, size: 7.5 });
-    x += w(0.178);
-    this.cell(doc, x, y, M + W - x, r1, f.postalCode ?? '', { size: 7.5 });
-    y += r1;
+    // Fila 2: Direccion (celda ancha) | Codigo postal
+    bottom = 491.3;
+    this.box(doc, L, bottom, cA - L, rowH, CELL_BG);
+    this.box(doc, cA, bottom, cD - cA, rowH, null);
+    this.box(doc, cD, bottom, cE - cD, rowH, CELL_BG);
+    this.box(doc, cE, bottom, R - cE, rowH, null);
+    this.text(doc, 'Dirección', 32.1, 496.9, 5.4, true);
+    this.text(doc, this.fullAddress(f), 134.2, 496.9, 5.4, false, cD - 134.2 - 3);
+    this.text(doc, 'Código postal', 487.8, 496.9, 5.4, true);
+    this.text(doc, f.postalCode ?? '', 621.0, 496.9, 5.4, false, R - 621 - 3);
 
-    // Correo | valor | Telefono | valor
-    x = M;
-    this.cell(doc, x, y, LBL, r1, 'Correo electrónico', { bold: true, bg: CELL_BG, size: 7.5 });
-    x += LBL;
-    this.cell(doc, x, y, w(0.2), r1, f.email ?? '', { size: 7.5 });
-    x += w(0.2);
-    this.cell(doc, x, y, w(0.116), r1, 'Número de teléfono', { bold: true, bg: CELL_BG, size: 7.5 });
-    x += w(0.116);
-    this.cell(doc, x, y, M + W - x, r1, f.phone ?? '', { size: 7.5 });
-    y += r1 + 5;
+    // Fila 3: Correo | Telefono (celda ancha)
+    bottom = 475.1;
+    this.box(doc, L, bottom, cA - L, rowH, CELL_BG);
+    this.box(doc, cA, bottom, cB - cA, rowH, null);
+    this.box(doc, cB, bottom, cC - cB, rowH, CELL_BG);
+    this.box(doc, cC, bottom, R - cC, rowH, null);
+    this.text(doc, 'Correo electrónico', 32.1, 480.7, 5.4, true);
+    this.text(doc, f.email ?? '', 134.2, 480.7, 5.4, false, cB - 134.2 - 3);
+    this.text(doc, 'Número de teléfono', 291.5, 480.7, 5.4, true);
+    this.text(doc, f.phone ?? '', 385.7, 480.7, 5.4, false, R - 385.7 - 3);
 
     // ===== INFORMACION DE LOS PAQUETES =====
-    this.band(doc, M, y, W, 'INFORMACIÓN DE LOS PAQUETES');
-    y += 15;
+    this.band(doc, 462.3, 11.5, 'INFORMACIÓN DE LOS PAQUETES', 466.2);
 
-    // Anchos de columna, en las mismas proporciones de la muestra (suman W).
-    const cols = [w(0.2), w(0.202), w(0.196), w(0.196), w(0.103)];
-    cols.push(W - cols.reduce((s, n) => s + n, 0));
+    // Columnas del original (limites deducidos de los encabezados centrados).
+    const P = [L, 186, 343, 500, 657, 736, R];
     const heads = [
       'Referencia',
       'Destino',
@@ -140,152 +139,189 @@ export class DispatchRelationService {
       'Cantidad de paquetes',
       'Marca X si fue recolectado',
     ];
-    let cx = M;
-    for (let i = 0; i < cols.length; i++) {
-      this.cell(doc, cx, y, cols[i], 16, heads[i], { bold: true, bg: CELL_BG, center: true, size: 7 });
-      cx += cols[i];
+    for (let k = 0; k < heads.length; k++) {
+      this.box(doc, P[k], 448.5, P[k + 1] - P[k], 13.8, CELL_BG);
+      this.centered(doc, heads[k], P[k], P[k + 1], 454.2, 4.8, true);
     }
-    y += 16;
 
-    // Fila del paquete (alta: cabe el codigo de barras y la direccion larga)
-    const rowH = 78;
-    cx = M;
-    for (const w of cols) {
-      doc.rect(cx, y, w, rowH).lineWidth(0.5).strokeColor(LINE).stroke();
-      cx += w;
+    // Fila del paquete: alta, y con el texto ANCLADO ABAJO.
+    const rowBottom = 400;
+    const rowTop = 448.5;
+    for (let k = 0; k < heads.length; k++) {
+      this.box(doc, P[k], rowBottom, P[k + 1] - P[k], rowTop - rowBottom, null);
     }
-    // 1) Referencia: codigo de barras + numero
-    this.barcode(doc, input.trackingNumber, M + 22, y + 12, cols[0] - 44, 34);
-    doc
-      .font('Helvetica')
-      .fontSize(7)
-      .fillColor(INK)
-      .text(input.trackingNumber, M, y + 52, { width: cols[0], align: 'center' });
-    // 2) Destino
-    doc
-      .font('Helvetica')
-      .fontSize(7)
-      .text(this.destinationLine(input.to), M + cols[0] + 6, y + 14, {
-        width: cols[1] - 12,
-        align: 'center',
-      });
-    // 3) Descripcion
-    doc
-      .fontSize(7.5)
-      .text(input.content, M + cols[0] + cols[1], y + rowH / 2 - 4, { width: cols[2], align: 'center' });
-    // 4) Peso y dimensiones
-    const dims = `${this.n(input.weightKg)}kg, ${this.n(input.length)}x${this.n(input.width)}x${this.n(input.height)}`;
-    doc.text(dims, M + cols[0] + cols[1] + cols[2], y + rowH / 2 - 4, { width: cols[3], align: 'center' });
-    // 5) Cantidad
-    doc.text(String(input.packages), M + cols[0] + cols[1] + cols[2] + cols[3], y + rowH / 2 - 4, {
-      width: cols[4],
-      align: 'center',
-    });
-    // 6) Casilla de recolectado
-    const chkX = M + cols[0] + cols[1] + cols[2] + cols[3] + cols[4] + cols[5] / 2 - 7;
-    doc.rect(chkX, y + rowH / 2 - 7, 14, 14).lineWidth(1).strokeColor('#3f3f3f').stroke();
-    y += rowH + 6;
+    // Referencia: codigo de barras + numero debajo
+    this.barcode(doc, i.trackingNumber, P[0], P[1], 412, 32);
+    this.centered(doc, i.trackingNumber, P[0], P[1], 406.2, 4.8, false);
+    // Destino: multilinea de ABAJO hacia arriba (ultima linea pegada al borde)
+    this.bottomLines(doc, this.destinationLine(i.to), P[1], P[2], 405.0, 6.6, 5.4);
+    // Descripcion / peso / cantidad: una linea, tambien abajo
+    this.centered(doc, i.content, P[2], P[3], 405.6, 5.4, false);
+    const dims = `${this.n(i.weightKg)}kg, ${this.n(i.length)}x${this.n(i.width)}x${this.n(i.height)}`;
+    this.centered(doc, dims, P[3], P[4], 405.6, 5.4, false);
+    this.centered(doc, String(i.packages), P[4], P[5], 405.6, 5.4, false);
+    // Casilla de recolectado, centrada en su columna
+    const chkC = (P[5] + P[6]) / 2;
+    this.box(doc, chkC - 5.5, (rowBottom + rowTop) / 2 - 5.5, 11, 11, null, '#3f3f3f');
 
-    // ===== DETALLES =====
-    this.band(doc, M, y, W, 'DETALLES DE RELACIÓN DE DESPACHOS');
-    y += 15;
-
-    const dCols = [w(0.241), w(0.257), w(0.249)];
-    dCols.push(W - dCols.reduce((s, n) => s + n, 0));
+    // ===== DETALLES DE RELACION DE DESPACHOS =====
+    this.band(doc, 387.9, 11.5, 'DETALLES DE RELACIÓN DE DESPACHOS', 391.8);
+    const D = [L, 220, 419, 620, R];
     const dHeads = ['Descripción de los valores', 'Observaciones', 'Cliente', 'Recolector'];
-    cx = M;
-    for (let i = 0; i < dCols.length; i++) {
-      this.cell(doc, cx, y, dCols[i], 16, dHeads[i], { bold: true, bg: CELL_BG, center: true, size: 7 });
-      cx += dCols[i];
+    for (let k = 0; k < dHeads.length; k++) {
+      this.box(doc, D[k], 372.3, D[k + 1] - D[k], 15.6, CELL_BG);
+      this.centered(doc, dHeads[k], D[k], D[k + 1], 378.0, 5.4, true);
     }
-    y += 16;
 
-    // Mini-tabla de totales (izquierda)
-    const volume = (input.length * input.width * input.height) / 2000;
+    // Mini-tabla de totales: 5 filas de 15pt, base 297.3
+    const volume = (i.length * i.width * i.height) / 2000;
     const rows: Array<[string, string]> = [
-      ['Total en peso', `${this.n(input.weightKg)} kg`],
+      ['Total en peso', `${this.n(i.weightKg)} kg`],
       ['Total en volumen', this.n(volume)],
-      ['Total de paquetes', String(input.packages)],
+      ['Total de paquetes', String(i.packages)],
       ['Creado por', 'Skydropx'],
       ['Número de placa', ''],
     ];
-    const rh = 21;
-    const blockH = rh * rows.length;
-    const miniLbl = w(0.122);
-    let ry = y;
-    for (const [k, v] of rows) {
-      this.cell(doc, M, ry, miniLbl, rh, k, { bold: true, bg: CELL_BG, size: 7.5 });
-      this.cell(doc, M + miniLbl, ry, dCols[0] - miniLbl, rh, v, { size: 7.5 });
-      ry += rh;
+    const miniSplit = 120.3;
+    const baselines = [363.0, 348.0, 333.0, 318.0, 302.9];
+    for (let k = 0; k < rows.length; k++) {
+      const b = baselines[k] - 5.6; // borde inferior de la fila
+      this.box(doc, D[0], b, miniSplit - D[0], 15, CELL_BG);
+      this.box(doc, miniSplit, b, D[1] - miniSplit, 15, null);
+      this.text(doc, rows[k][0], 32.1, baselines[k], 5.4, true);
+      this.text(doc, rows[k][1], 126.4, baselines[k], 5.4, false, D[1] - 126.4 - 3);
     }
-    // Celdas grandes: observaciones y las dos firmas
-    let dx = M + dCols[0];
-    for (let i = 1; i < dCols.length; i++) {
-      doc.rect(dx, y, dCols[i], blockH).lineWidth(0.5).strokeColor(LINE).stroke();
-      if (i >= 2) {
-        doc
-          .font('Helvetica')
-          .fontSize(7)
-          .fillColor('#404040')
-          .text('Nombre / Firma / fecha', dx, y + blockH - 14, { width: dCols[i], align: 'center' });
-      }
-      dx += dCols[i];
+    // Celdas grandes: Observaciones, Cliente y Recolector (con la linea de firma)
+    const blockBottom = 297.3;
+    const blockH = 372.3 - blockBottom;
+    for (let k = 1; k < D.length - 1; k++) {
+      this.box(doc, D[k], blockBottom, D[k + 1] - D[k], blockH, null);
+      if (k >= 2) this.centered(doc, 'Nombre / Firma / fecha', D[k], D[k + 1], 300.5, 4.8, false, '#404040');
     }
 
     doc.end();
     return done;
   }
 
-  /** Banda gris de seccion, con el titulo centrado. */
-  private band(doc: PDFKit.PDFDocument, x: number, y: number, w: number, title: string): void {
-    doc.rect(x, y, w, 15).fill(HEAD_BG);
-    doc.rect(x, y, w, 15).lineWidth(0.5).strokeColor(LINE).stroke();
-    doc
-      .font('Helvetica-Bold')
-      .fontSize(7.5)
-      .fillColor(INK)
-      .text(title, x, y + 4, { width: w, align: 'center' });
-  }
+  // ===== primitivas (todo en coordenadas del PDF original: y desde abajo) =====
 
-  /** Celda con borde, relleno opcional y texto centrado verticalmente. */
-  private cell(
+  /** Rectangulo con relleno opcional; `stroke` permite un borde distinto. */
+  private box(
     doc: PDFKit.PDFDocument,
     x: number,
-    y: number,
+    yBottom: number,
     w: number,
     h: number,
-    text: string,
-    opts: { bold?: boolean; bg?: string | null; center?: boolean; size?: number },
+    bg: string | null,
+    stroke = STROKE,
   ): void {
-    if (opts.bg) doc.rect(x, y, w, h).fill(opts.bg);
-    doc.rect(x, y, w, h).lineWidth(0.5).strokeColor(LINE).stroke();
-    const size = opts.size ?? 8;
-    doc
-      .font(opts.bold ? 'Helvetica-Bold' : 'Helvetica')
-      .fontSize(size)
-      .fillColor(INK);
-    const th = doc.heightOfString(text || ' ', { width: w - 10 });
-    doc.text(text || '', x + 5, y + Math.max(2, (h - th) / 2), {
-      width: w - 10,
-      align: opts.center ? 'center' : 'left',
-      lineGap: 0,
-    });
+    const y = PAGE_H - yBottom - h;
+    if (bg) doc.rect(x, y, w, h).fill(bg);
+    doc.rect(x, y, w, h).lineWidth(0.5).strokeColor(stroke).stroke();
   }
 
-  /** Code 128 dibujado como barras (sin dependencias). */
-  private barcode(
+  /** Banda gris de seccion con su titulo centrado. */
+  private band(doc: PDFKit.PDFDocument, yBottom: number, h: number, title: string, baseline: number): void {
+    this.box(doc, L, yBottom, R - L, h, BAND_BG);
+    this.centered(doc, title, L, R, baseline, 5.4, true);
+  }
+
+  /** Texto por LINEA BASE (como venia en el original). */
+  private text(
     doc: PDFKit.PDFDocument,
     value: string,
     x: number,
-    y: number,
-    maxW: number,
+    baseline: number,
+    size: number,
+    bold: boolean,
+    maxW?: number,
+  ): void {
+    if (!value) return;
+    doc
+      .font(bold ? 'Helvetica-Bold' : 'Helvetica')
+      .fontSize(size)
+      .fillColor(INK)
+      .text(value, x, PAGE_H - baseline - size * ASC, {
+        width: maxW,
+        lineBreak: false,
+        ellipsis: maxW ? true : false,
+      });
+  }
+
+  /** Texto centrado entre dos limites de columna. */
+  private centered(
+    doc: PDFKit.PDFDocument,
+    value: string,
+    x0: number,
+    x1: number,
+    baseline: number,
+    size: number,
+    bold: boolean,
+    color = INK,
+  ): void {
+    if (!value) return;
+    doc
+      .font(bold ? 'Helvetica-Bold' : 'Helvetica')
+      .fontSize(size)
+      .fillColor(color)
+      .text(value, x0, PAGE_H - baseline - size * ASC, {
+        width: x1 - x0,
+        align: 'center',
+        lineBreak: false,
+      });
+  }
+
+  /**
+   * Multilinea ANCLADA ABAJO: se parte el texto al ancho de la columna y se
+   * dibuja de la ultima linea hacia arriba, que es como lo hace el original.
+   */
+  private bottomLines(
+    doc: PDFKit.PDFDocument,
+    value: string,
+    x0: number,
+    x1: number,
+    lastBaseline: number,
+    lineGap: number,
+    size: number,
+  ): void {
+    if (!value) return;
+    doc.font('Helvetica').fontSize(size);
+    const maxW = x1 - x0 - 8;
+    const words = value.split(/\s+/).filter(Boolean);
+    const lines: string[] = [];
+    let cur = '';
+    for (const word of words) {
+      const next = cur ? `${cur} ${word}` : word;
+      if (doc.widthOfString(next) <= maxW || !cur) cur = next;
+      else {
+        lines.push(cur);
+        cur = word;
+      }
+    }
+    if (cur) lines.push(cur);
+    // La ULTIMA linea va en lastBaseline; las anteriores suben lineGap cada una.
+    for (let k = 0; k < lines.length; k++) {
+      const baseline = lastBaseline + (lines.length - 1 - k) * lineGap;
+      this.centered(doc, lines[k], x0, x1, baseline, size, false);
+    }
+  }
+
+  /** Code 128 dibujado con barras, centrado en su columna. */
+  private barcode(
+    doc: PDFKit.PDFDocument,
+    value: string,
+    x0: number,
+    x1: number,
+    yBottom: number,
     h: number,
   ): void {
     const widths = code128Widths(value);
     const modules = widths.reduce((s, n) => s + n, 0);
-    const unit = maxW / modules;
-    let cx = x;
-    let isBar = true; // el patron arranca en barra y alterna
+    const drawW = Math.min((x1 - x0) * 0.78, 130);
+    const unit = drawW / modules;
+    let cx = x0 + (x1 - x0 - drawW) / 2;
+    const y = PAGE_H - yBottom - h;
+    let isBar = true;
     doc.fillColor(INK);
     for (const w of widths) {
       if (isBar) doc.rect(cx, y, unit * w, h).fill(INK);
@@ -294,7 +330,6 @@ export class DispatchRelationService {
     }
   }
 
-  /** "CALLE 1 # 2-3, OFICINA 4, CIUDAD, DEPTO, 050015, Colombia" */
   private fullAddress(a: DispatchAddress): string {
     return [a.street, a.extra, a.city, a.state, a.postalCode, 'Colombia']
       .map((p) => (p ?? '').trim())
@@ -302,7 +337,6 @@ export class DispatchRelationService {
       .join(', ');
   }
 
-  /** "NOMBRE / CORREO / TELEFONO / direccion completa" (como la muestra). */
   private destinationLine(a: DispatchAddress): string {
     return [a.name, a.email, a.phone, this.fullAddress(a)]
       .map((p) => (p ?? '').trim())
@@ -310,7 +344,6 @@ export class DispatchRelationService {
       .join(' / ');
   }
 
-  /** Numeros como en la muestra: un decimal siempre (1 -> "1.0"). */
   private n(v: number): string {
     return Number.isFinite(v) ? v.toFixed(1) : '0.0';
   }
