@@ -2056,12 +2056,18 @@ export class OrdersService {
       // los documentos, el pedido quedo con el UUID del envio como "guia" y sin
       // rotulo en el chat. Aqui se rellena en cuanto la paqueteria los publica.
       if (o.guideNumber === o.skydropxShipmentId) {
-        await this.backfillSkydropxLabel(tenantId, prisma, o.id, o.skydropxShipmentId as string);
+        // Adjuntar documentos TAMBIEN cuenta como cambio: si no, el chat
+        // abierto no se entera y hay que recargar para ver el rotulo.
+        if (await this.backfillSkydropxLabel(tenantId, prisma, o.id, o.skydropxShipmentId as string)) {
+          updated++;
+        }
       }
       // La RELACION DE DESPACHO se comprueba aparte del rotulo: los pedidos
       // rescatados antes de que existiera (o cuya generacion fallo) ya no
       // entran por la rama de arriba y se quedarian sin ella.
-      await this.ensureDispatchRelation(prisma, o.id, o.skydropxShipmentId as string);
+      if (await this.ensureDispatchRelation(prisma, o.id, o.skydropxShipmentId as string)) {
+        updated++;
+      }
       const t = await this.skydropx.tracking(o.skydropxShipmentId as string);
       if (!t) continue;
       const statusText = t.carrier ? `${t.carrier} · ${t.statusText}` : t.statusText;
@@ -2641,12 +2647,13 @@ export class OrdersService {
     prisma: PrismaClient,
     orderId: string,
     shipmentId: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const docs = await this.skydropx.shipmentDocs(shipmentId).catch(() => null);
-    if (!docs?.trackingNumber || docs.trackingNumber === shipmentId) return;
+    if (!docs?.trackingNumber || docs.trackingNumber === shipmentId) return false;
 
     const order = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
-    if (!order || order.guideNumber !== shipmentId) return; // ya lo rescato otra pasada
+    if (!order || order.guideNumber !== shipmentId) return false; // ya lo rescato otra pasada
+    const actor = await this.guideActor(prisma, orderId);
 
     await prisma.order.update({
       where: { id: orderId },
@@ -2671,6 +2678,8 @@ export class OrdersService {
     await prisma.orderMessage.create({
       data: {
         orderId,
+        // El aviso SI es del sistema (lo confirmo la transportadora); los
+        // documentos van a nombre de quien genero la guia.
         authorId: 'system',
         authorName: 'Sistema',
         kind: 'system',
@@ -2679,18 +2688,17 @@ export class OrdersService {
       },
     });
 
-    const sysAuth = { userId: 'system', name: 'Sistema' } as unknown as AuthContext;
     // La relacion de despacho tambien se rescata (Inter Rapidisimo).
-    await this.attachDispatchRelation(orderId, order, shipmentId, docs.carrier ?? '', sysAuth);
+    await this.attachDispatchRelation(orderId, order, shipmentId, docs.carrier ?? '', actor);
 
     const label = docs.labelUrl ? await this.skydropx.downloadLabel(docs.labelUrl) : null;
-    if (!label) return;
+    if (!label) return true;
     const rotuloKey = await this.attachRotulo(
       orderId,
       order,
       { number: docs.trackingNumber },
       label,
-      sysAuth,
+      actor,
     );
     await this.whatsapp
       .sendGuideByWhatsApp(
@@ -2702,10 +2710,35 @@ export class OrdersService {
         docs.carrier,
       )
       .catch(() => null);
+    return true;
   }
 
   /** Marcador del adjunto de la relacion, para no duplicarla. */
   private static readonly DISPATCH_PREFIX = 'RELACION-DESPACHO-';
+
+  /**
+   * Quien "firma" los documentos que se adjuntan DESPUES de generar la guia
+   * (rotulo y relacion). No es el sistema: es la MISMA persona que genero la
+   * guia — que Skydropx tarde en emitir el PDF es un detalle tecnico, no
+   * cambia de quien es el trabajo. Se toma del evento de la guia; si no
+   * estuviera, cae a quien tiene el pedido y por ultimo a Sistema.
+   */
+  private async guideActor(prisma: PrismaClient, orderId: string): Promise<AuthContext> {
+    const ev = await prisma.orderEvent.findFirst({
+      where: { orderId, type: 'guide_generated', actorId: { not: null } },
+      orderBy: { createdAt: 'asc' },
+      select: { actorId: true, actorName: true },
+    });
+    const order = ev
+      ? null
+      : await prisma.order.findUnique({
+          where: { id: orderId },
+          select: { claimedById: true, claimedByName: true },
+        });
+    const userId = ev?.actorId ?? order?.claimedById ?? 'system';
+    const name = ev?.actorName ?? order?.claimedByName ?? 'Sistema';
+    return { userId, name } as unknown as AuthContext;
+  }
 
   /**
    * Se asegura de que el pedido TENGA su relacion de despacho. Idempotente: si
@@ -2716,20 +2749,24 @@ export class OrdersService {
     prisma: PrismaClient,
     orderId: string,
     shipmentId: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const already = await prisma.orderMessage.findFirst({
       where: { orderId, kind: 'document', body: { startsWith: OrdersService.DISPATCH_PREFIX } },
       select: { id: true },
     });
-    if (already) return;
+    if (already) return false;
     const order = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
-    if (!order) return;
+    if (!order) return false;
     const rel = await this.skydropx.shipmentRelation(shipmentId).catch(() => null);
-    if (!rel?.carrier) return;
-    await this.attachDispatchRelation(orderId, order, shipmentId, rel.carrier, {
-      userId: 'system',
-      name: 'Sistema',
-    } as unknown as AuthContext);
+    if (!rel?.carrier) return false;
+    await this.attachDispatchRelation(
+      orderId,
+      order,
+      shipmentId,
+      rel.carrier,
+      await this.guideActor(prisma, orderId),
+    );
+    return true;
   }
 
   /**
