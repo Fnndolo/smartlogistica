@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import * as pdfjsLib from 'pdfjs-dist';
 import {
   Hand,
   Loader2,
@@ -24,8 +23,29 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, api } from '@/lib/api-client';
 
-// Worker servido desde /public (mas confiable en Next que el bundling con import.meta.url).
-pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+/**
+ * pdf.js se carga SOLO en el navegador y SOLO cuando hace falta.
+ *
+ * Con `import * as pdfjsLib from 'pdfjs-dist'` arriba, Next evaluaba el modulo
+ * tambien al renderizar esta pagina en el servidor — y la build moderna de
+ * pdf.js toca DOMMatrix, que en Node no existe. Resultado: "ReferenceError:
+ * DOMMatrix is not defined" + unhandledRejection en cada despliegue.
+ *
+ * De paso, pdf.js pesa lo suyo: asi no entra en el bundle de nadie que no abra
+ * el diseñador del certificado.
+ */
+type PdfjsModule = typeof import('pdfjs-dist');
+let pdfjsPromise: Promise<PdfjsModule> | null = null;
+
+function loadPdfjs(): Promise<PdfjsModule> {
+  pdfjsPromise ??= import('pdfjs-dist').then((mod) => {
+    // Worker servido desde /public (mas confiable en Next que el bundling con
+    // import.meta.url).
+    mod.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+    return mod;
+  });
+  return pdfjsPromise;
+}
 
 const RENDER_W = 640; // px CSS del render base de la factura (a zoom 100%)
 const QUALITY = 2.5; // resolucion interna del canvas (nitidez al hacer zoom)
@@ -152,6 +172,7 @@ export function CertificateEditor({
         .catch(() => null);
       if (cancelled) return;
       try {
+        const pdfjsLib = await loadPdfjs();
         const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
         const page = await pdf.getPage(1);
         const unscaled = page.getViewport({ scale: 1 });
@@ -307,7 +328,8 @@ export function CertificateEditor({
     if (spaceRef.current || e.button === 1) {
       e.preventDefault();
       const vp = viewportRef.current;
-      if (vp) panRef.current = { x: e.clientX, y: e.clientY, left: vp.scrollLeft, top: vp.scrollTop };
+      if (vp)
+        panRef.current = { x: e.clientX, y: e.clientY, left: vp.scrollLeft, top: vp.scrollTop };
       return;
     }
     setSelected(null);
@@ -328,7 +350,9 @@ export function CertificateEditor({
     if (selected == null) return;
     recordCoalesced(`f:${selected}:${field}`);
     setElements((prev) =>
-      prev.map((el, idx) => (idx === selected ? ({ ...el, [field]: value } as CertificateElement) : el)),
+      prev.map((el, idx) =>
+        idx === selected ? ({ ...el, [field]: value } as CertificateElement) : el,
+      ),
     );
   };
 
@@ -341,7 +365,14 @@ export function CertificateEditor({
     pushHistory();
     setElements((prev) => [
       ...prev,
-      { type: 'cover', x: round(pageW / 2 - 60), y: round(pageH / 2), width: 120, height: 16, color: '#ffffff' },
+      {
+        type: 'cover',
+        x: round(pageW / 2 - 60),
+        y: round(pageH / 2),
+        width: 120,
+        height: 16,
+        color: '#ffffff',
+      },
     ]);
     setSelected(elements.length);
   };
@@ -349,7 +380,15 @@ export function CertificateEditor({
     pushHistory();
     setElements((prev) => [
       ...prev,
-      { type: 'text', x: round(pageW / 2 - 60), y: round(pageH / 2), text: 'Texto', size: 9, bold: false, color: '#000000' },
+      {
+        type: 'text',
+        x: round(pageW / 2 - 60),
+        y: round(pageH / 2),
+        text: 'Texto',
+        size: 9,
+        bold: false,
+        color: '#000000',
+      },
     ]);
     setSelected(elements.length);
   };
@@ -480,7 +519,12 @@ export function CertificateEditor({
               <div style={{ width: baseW * zoom, height: baseH * zoom }}>
                 <div
                   className="relative shadow-lg"
-                  style={{ width: baseW, height: baseH, transform: `scale(${zoom})`, transformOrigin: '0 0' }}
+                  style={{
+                    width: baseW,
+                    height: baseH,
+                    transform: `scale(${zoom})`,
+                    transformOrigin: '0 0',
+                  }}
                 >
                   <canvas ref={canvasRef} className="block bg-white" />
                   {loading ? (
@@ -503,14 +547,19 @@ export function CertificateEditor({
                               width: el.width * scale,
                               height: el.height * scale,
                               background: el.color,
-                              outline: active ? '2px solid #2563eb' : '1px dashed rgba(37,99,235,0.5)',
+                              outline: active
+                                ? '2px solid #2563eb'
+                                : '1px dashed rgba(37,99,235,0.5)',
                             }}
                           >
                             {active ? (
                               <span
                                 onPointerDown={(e) => startDrag(e, i, 'resize')}
                                 className="absolute -bottom-1 -right-1 h-2.5 w-2.5 cursor-se-resize rounded-sm border border-white bg-blue-600"
-                                style={{ transform: `scale(${1 / zoom})`, transformOrigin: 'bottom right' }}
+                                style={{
+                                  transform: `scale(${1 / zoom})`,
+                                  transformOrigin: 'bottom right',
+                                }}
                               />
                             ) : null}
                           </div>
@@ -529,7 +578,9 @@ export function CertificateEditor({
                             color: el.color,
                             fontWeight: el.bold ? 700 : 400,
                             fontFamily: 'Helvetica, Arial, sans-serif',
-                            outline: active ? '2px solid #2563eb' : '1px dashed rgba(37,99,235,0.35)',
+                            outline: active
+                              ? '2px solid #2563eb'
+                              : '1px dashed rgba(37,99,235,0.35)',
                           }}
                         >
                           {el.text || ' '}
@@ -547,7 +598,8 @@ export function CertificateEditor({
           {sel == null ? (
             <div className="space-y-3">
               <p className="text-sm text-muted-foreground">
-                Selecciona un elemento para editarlo, o agrega uno con <strong>Tapar</strong> / <strong>Texto</strong>.
+                Selecciona un elemento para editarlo, o agrega uno con <strong>Tapar</strong> /{' '}
+                <strong>Texto</strong>.
               </p>
               <div className="rounded-lg border border-border bg-muted/30 p-3 text-[11px] text-muted-foreground">
                 <p className="font-medium text-foreground">Datos dinamicos (en textos):</p>
@@ -559,8 +611,8 @@ export function CertificateEditor({
                 Manten Espacio y arrastra para moverte por la hoja.
               </div>
               <p className="text-[11px] text-muted-foreground">
-                {elements.length} elemento(s). Las cajas blancas tapan (se ven por el borde punteado); en la
-                factura final quedan solidas.
+                {elements.length} elemento(s). Las cajas blancas tapan (se ven por el borde
+                punteado); en la factura final quedan solidas.
               </p>
             </div>
           ) : (
@@ -609,7 +661,11 @@ export function CertificateEditor({
                     </Field>
                   </div>
                   <label className="flex items-center gap-2 text-sm">
-                    <input type="checkbox" checked={sel.bold} onChange={(e) => edit('bold', e.target.checked)} />
+                    <input
+                      type="checkbox"
+                      checked={sel.bold}
+                      onChange={(e) => edit('bold', e.target.checked)}
+                    />
                     Negrita
                   </label>
                 </>
