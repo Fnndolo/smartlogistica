@@ -4,7 +4,7 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { ArrowRight, CheckCircle2, Eye, EyeOff, KeyRound, Loader2 } from 'lucide-react';
+import { ArrowRight, Check, CheckCircle2, Eye, EyeOff, KeyRound } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   vtexAccountNameSchema,
@@ -16,10 +16,17 @@ import { Button } from '@/components/ui/button';
 import { FieldError } from '@/components/ui/field-error';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Stepper } from '@/components/ui/stepper';
 import { ApiError, api } from '@/lib/api-client';
+import { cn } from '@/lib/utils';
+
+import { BTN_GHOST, BTN_PRIMARY, BTN_QUIET, LABEL_MICRO } from '../../connection-ui';
 
 const STEPS = ['Cuenta', 'Credenciales', 'Confirmar'];
+
+// En el asistente los botones van a tamaño normal (no .btn-sm), para que la
+// fila de acciones quede pareja con el primario.
+const BTN_GHOST_LG = `${BTN_GHOST} px-[15px] py-2 text-[13px]`;
+const BTN_QUIET_LG = `${BTN_QUIET} px-[15px] py-2 text-[13px]`;
 
 type TestResult = { ok: true; sampleOrderCount: number } | null;
 
@@ -45,7 +52,7 @@ export function VtexConnectWizard() {
     const valid = vtexAccountNameSchema.safeParse(accountName);
     if (!valid.success) {
       const issue = valid.error.issues[0];
-      form.setError('accountName', { message: issue?.message ?? 'Invalido' });
+      form.setError('accountName', { message: issue?.message ?? 'Inválido' });
       return;
     }
     form.clearErrors('accountName');
@@ -63,7 +70,7 @@ export function VtexConnectWizard() {
         getValues(),
       );
       setTestResult(result);
-      toast.success(`Conexion verificada (${result.sampleOrderCount} pedidos en cuenta)`);
+      toast.success(`Conexión verificada (${result.sampleOrderCount} pedidos en cuenta)`);
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'No se pudo conectar a VTEX';
       toast.error(message);
@@ -76,11 +83,11 @@ export function VtexConnectWizard() {
     startTransition(async () => {
       try {
         await api.post('/v1/connections/vtex', getValues());
-        toast.success('Conexion VTEX creada — sincronizando pedidos...');
+        toast.success('Conexión VTEX creada — sincronizando pedidos...');
         router.push('/connections');
         router.refresh();
       } catch (err) {
-        const message = err instanceof ApiError ? err.message : 'No se pudo crear la conexion';
+        const message = err instanceof ApiError ? err.message : 'No se pudo crear la conexión';
         toast.error(message);
       }
     });
@@ -88,9 +95,9 @@ export function VtexConnectWizard() {
 
   return (
     <div className="space-y-6">
-      <Stepper steps={STEPS} current={step} />
+      <WizardSteps steps={STEPS} current={step} />
 
-      <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
+      <div className="rounded-[14px] border border-border bg-card p-6">
         {step === 0 ? (
           <StepAccountName
             value={accountName}
@@ -131,6 +138,48 @@ export function VtexConnectWizard() {
   );
 }
 
+/** Pasos del asistente en el lenguaje Cobalto (paso hecho = cobalto solido). */
+function WizardSteps({ steps, current }: { steps: string[]; current: number }) {
+  return (
+    <ol className="flex items-center gap-2.5" aria-label="Progreso">
+      {steps.map((label, index) => {
+        const done = index < current;
+        const active = index === current;
+        const isLast = index === steps.length - 1;
+        return (
+          <li key={label} className="flex min-w-0 flex-1 items-center gap-2.5">
+            <div className="flex min-w-0 items-center gap-2">
+              <span
+                aria-current={active ? 'step' : undefined}
+                className={cn(
+                  'grid h-7 w-7 shrink-0 place-items-center rounded-full border text-[11.5px] font-extrabold tabular-nums transition-colors [transition-duration:140ms]',
+                  done &&
+                    'border-transparent bg-gradient-to-b from-accent to-accent-deep text-accent-foreground',
+                  active && 'border-accent bg-wash text-accent-ink ring-4 ring-accent/15',
+                  !done && !active && 'border-border bg-card text-hint',
+                )}
+              >
+                {done ? <Check className="h-3.5 w-3.5" /> : index + 1}
+              </span>
+              <span
+                className={cn(
+                  'truncate text-[12.5px] font-bold transition-colors [transition-duration:140ms]',
+                  active || done ? 'text-foreground' : 'text-hint',
+                )}
+              >
+                {label}
+              </span>
+            </div>
+            {!isLast ? (
+              <span aria-hidden className={cn('h-px flex-1', done ? 'bg-accent' : 'bg-border')} />
+            ) : null}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 function StepAccountName({
   value,
   register,
@@ -151,25 +200,32 @@ function StepAccountName({
       className="space-y-4"
     >
       <div className="space-y-1.5">
-        <Label htmlFor="accountName">Account name VTEX</Label>
-        <div className="flex items-stretch overflow-hidden rounded-md border border-input">
-          <span className="flex items-center bg-muted px-3 text-xs text-muted-foreground">https://</span>
+        <Label htmlFor="accountName" className={LABEL_MICRO}>
+          Account name VTEX
+        </Label>
+        {/* Envuelve en pantallas chicas: el dominio nunca empuja la pagina. */}
+        <div className="flex flex-wrap items-stretch overflow-hidden rounded-[10px] border border-input bg-card">
+          <span className="flex items-center whitespace-nowrap bg-surface px-3 text-[11.5px] text-hint">
+            https://
+          </span>
           <Input
             id="accountName"
-            className="border-0 shadow-none focus-visible:ring-0"
+            className="min-w-[8rem] flex-1 rounded-none border-0 bg-transparent shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
             placeholder="smartgadgetsonline767"
             aria-invalid={Boolean(error)}
             {...register}
           />
-          <span className="flex items-center bg-muted px-3 text-xs text-muted-foreground">.vtexcommercestable.com.br</span>
+          <span className="flex items-center whitespace-nowrap bg-surface px-3 text-[11.5px] text-hint">
+            .vtexcommercestable.com.br
+          </span>
         </div>
         <FieldError message={error} />
       </div>
 
       <div className="flex justify-end">
-        <Button type="submit" disabled={!value}>
+        <Button type="submit" className={BTN_PRIMARY} disabled={!value}>
           Siguiente
-          <ArrowRight className="h-3.5 w-3.5" />
+          <ArrowRight />
         </Button>
       </div>
     </form>
@@ -225,26 +281,29 @@ function StepCredentials({
       />
 
       {testResult ? (
-        <div className="flex items-center gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm">
-          <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-          <span className="text-foreground">
-            Conexion verificada · <span className="text-muted-foreground">{testResult.sampleOrderCount} pedidos visibles</span>
+        <div className="flex items-center gap-2 rounded-[10px] border border-emerald-500/30 bg-emerald-500/5 p-3 text-[12.5px]">
+          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-700 dark:text-emerald-400" />
+          <span className="min-w-0 text-foreground">
+            Conexión verificada ·{' '}
+            <span className="text-muted-foreground">
+              {testResult.sampleOrderCount} pedidos visibles
+            </span>
           </span>
         </div>
       ) : null}
 
-      <div className="flex items-center justify-between gap-3">
-        <Button variant="ghost" onClick={onBack}>
-          Atras
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Button variant="ghost" className={BTN_QUIET_LG} onClick={onBack}>
+          Atrás
         </Button>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={onTest} loading={testing}>
-            <KeyRound className="h-4 w-4" />
-            Probar conexion
+        <div className="flex flex-wrap gap-2">
+          <Button variant="ghost" className={BTN_GHOST_LG} onClick={onTest} loading={testing}>
+            <KeyRound />
+            Probar conexión
           </Button>
-          <Button onClick={onNext} disabled={!testResult}>
+          <Button className={BTN_PRIMARY} onClick={onNext} disabled={!testResult}>
             Siguiente
-            <ArrowRight className="h-3.5 w-3.5" />
+            <ArrowRight />
           </Button>
         </div>
       </div>
@@ -273,7 +332,9 @@ function SecretField({
 }) {
   return (
     <div className="space-y-1.5">
-      <Label htmlFor={id}>{label}</Label>
+      <Label htmlFor={id} className={LABEL_MICRO}>
+        {label}
+      </Label>
       <div className="relative">
         <Input
           id={id}
@@ -281,13 +342,13 @@ function SecretField({
           placeholder={placeholder}
           autoComplete={autoComplete}
           aria-invalid={Boolean(error)}
-          className="pr-10"
+          className="rounded-[10px] pr-10"
           {...register}
         />
         <button
           type="button"
           onClick={onToggle}
-          className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="absolute right-2 top-1/2 -translate-y-1/2 rounded-[7px] p-1.5 text-hint transition-colors [transition-duration:140ms] hover:bg-wash hover:text-accent-ink"
           aria-label={type === 'password' ? 'Mostrar' : 'Ocultar'}
         >
           {type === 'password' ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
@@ -311,24 +372,23 @@ function StepConfirm({
 }) {
   return (
     <div className="space-y-5">
-      <div className="space-y-3">
+      <div className="space-y-2">
         <SummaryRow label="Account" value={values.accountName} />
         <SummaryRow label="App Key" value={maskMiddle(values.appKey)} />
         <SummaryRow label="App Token" value={maskMiddle(values.appToken)} />
       </div>
 
-      <div className="rounded-md border border-border bg-muted/40 p-3 text-xs text-muted-foreground">
+      <div className="rounded-[10px] border border-border bg-surface p-3 text-[12px] text-muted-foreground">
         Al confirmar registramos un webhook seguro en tu cuenta VTEX para los estados
         ready-for-handling y handling. Tus credenciales se cifran con AES-256-GCM antes de almacenarse.
       </div>
 
-      <div className="flex items-center justify-between gap-3">
-        <Button variant="ghost" onClick={onBack} disabled={submitting}>
-          Atras
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Button variant="ghost" className={BTN_QUIET_LG} onClick={onBack} disabled={submitting}>
+          Atrás
         </Button>
-        <Button onClick={onConfirm} loading={submitting}>
-          {submitting ? null : <Loader2 className="hidden" />}
-          Crear conexion
+        <Button className={BTN_PRIMARY} onClick={onConfirm} loading={submitting}>
+          Crear conexión
         </Button>
       </div>
     </div>
@@ -337,9 +397,9 @@ function StepConfirm({
 
 function SummaryRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2">
-      <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</span>
-      <span className="max-w-[60%] truncate font-mono text-xs text-foreground">{value}</span>
+    <div className="flex items-center justify-between gap-3 rounded-[10px] border border-border bg-surface px-3 py-2">
+      <span className={LABEL_MICRO}>{label}</span>
+      <span className="max-w-[60%] truncate font-mono text-[11.5px] text-foreground">{value}</span>
     </div>
   );
 }
@@ -351,12 +411,14 @@ function maskMiddle(value: string): string {
 
 function HelperBlock() {
   return (
-    <div className="rounded-md border border-dashed border-border bg-background p-4 text-xs text-muted-foreground">
-      <p className="font-medium text-foreground">Como obtener tu App Key + App Token</p>
+    <div className="rounded-[14px] border border-dashed border-input bg-card p-4 text-[12px] text-muted-foreground">
+      <p className="text-[11px] font-extrabold uppercase tracking-[0.08em] text-hint">
+        Cómo obtener tu App Key + App Token
+      </p>
       <ol className="mt-2 list-decimal space-y-1 pl-4">
-        <li>Entra al admin de VTEX: Cuenta → Gestion de aplicaciones → Llaves de aplicacion.</li>
+        <li>Entra al admin de VTEX: Cuenta → Gestión de aplicaciones → Llaves de aplicación.</li>
         <li>Crea una nueva llave con permisos sobre OMS (Orders).</li>
-        <li>Copia el App Key y el App Token generados — guardalos en un lugar seguro.</li>
+        <li>Copia el App Key y el App Token generados — guárdalos en un lugar seguro.</li>
       </ol>
     </div>
   );

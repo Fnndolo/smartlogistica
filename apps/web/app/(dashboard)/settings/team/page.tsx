@@ -22,16 +22,7 @@ export default async function TeamPage() {
   if (!canManageMembers(me?.role)) redirect('/settings');
   const members = await initialMembers();
 
-  return (
-    <div className="space-y-8">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight">Equipo</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Quien tiene acceso a este workspace y que sedes ve cada quien.
-        </p>
-      </header>
-
-      <TeamList initial={members} />
-    </div>
-  );
+  // La cabecera (.phead del mockup) vive dentro de TeamList: su boton primario
+  // "Agregar miembro" abre el formulario en linea, que es estado de cliente.
+  return <TeamList initial={members} />;
 }

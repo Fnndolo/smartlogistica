@@ -14,17 +14,29 @@ import {
 } from '@smartlogistica/shared';
 
 import { useCurrentUser } from '@/components/providers/current-user-provider';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 
-const PROVIDERS = aiProviderSchema.options;
+import {
+  BTN_GHOST,
+  BTN_ICON,
+  BTN_PRIMARY,
+  BTN_QUIET,
+  CONN_CARD,
+  ErrorLine,
+  LABEL_MICRO,
+  Pill,
+  SEG_ITEM,
+  SEG_OFF,
+  SEG_ON,
+  SEG_WRAP,
+  Tile,
+} from './connection-ui';
 
-const ICON_TILE =
-  'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-violet-500/20 bg-violet-500/10 text-violet-600 dark:text-violet-400';
+const PROVIDERS = aiProviderSchema.options;
 
 /**
  * `initial` llega `undefined` cuando el servidor no pudo consultar el API (que
@@ -56,7 +68,8 @@ export function AiConnectionCard({ initial }: { initial?: AiConnectionSummary | 
   };
 
   const disconnect = async () => {
-    if (!confirm('Desconectar el proveedor de IA? Tendras que volver a ingresar la API key.')) return;
+    if (!confirm('¿Desconectar el proveedor de IA? Tendrás que volver a ingresar la API key.'))
+      return;
     setDisconnecting(true);
     try {
       await api.delete('/v1/connections/ai');
@@ -70,75 +83,80 @@ export function AiConnectionCard({ initial }: { initial?: AiConnectionSummary | 
   };
 
   return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-3">
-          <div className={ICON_TILE}>
-            <Sparkles className="h-4 w-4" />
-          </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-semibold">Inteligencia Artificial</h3>
-              {isPending ? (
-                <Badge variant="outline">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Consultando
-                </Badge>
-              ) : error ? (
-                <Badge variant="outline" className="border-amber-500/30 text-amber-600 dark:text-amber-400">
-                  <AlertTriangle className="h-3 w-3" />
-                  No se pudo consultar
-                </Badge>
-              ) : connection ? (
-                <Badge variant="success">
-                  <Check className="h-3 w-3" />
-                  Conectado
-                </Badge>
-              ) : (
-                <Badge variant="outline">Sin conexion</Badge>
-              )}
-            </div>
+    <div className={CONN_CARD}>
+      <div className="flex flex-wrap items-start gap-[13px]">
+        <Tile tone="violet">
+          <Sparkles className="h-[18px] w-[18px]" />
+        </Tile>
 
-            {connection ? (
-              <p className="mt-0.5 truncate text-sm text-muted-foreground">
-                <span className="text-foreground">{AI_PROVIDER_LABELS[connection.provider]}</span>
-                <span className="px-1.5 text-border">·</span>
-                <span className="font-mono text-xs">{connection.model}</span>
-              </p>
+        <div className="min-w-0 flex-1 basis-[220px]">
+          <div className="flex flex-wrap items-center gap-2">
+            <b className="text-[13.5px] font-extrabold">Inteligencia Artificial</b>
+            {isPending ? (
+              <Pill tone="muted" icon={<Loader2 className="h-3 w-3 animate-spin" />}>
+                Consultando
+              </Pill>
             ) : error ? (
-              <p className="mt-0.5 text-sm text-muted-foreground">
-                El servidor no respondio. Si tenias un proveedor conectado, sigue guardado.
-              </p>
-            ) : isPending ? null : (
-              <p className="mt-0.5 text-sm text-muted-foreground">
-                {canManage
-                  ? 'Conecta un modelo de IA con vision para leer el IMEI de las fotos.'
-                  : 'Aun no hay un proveedor de IA conectado.'}
-              </p>
+              <Pill tone="warn" icon={<AlertTriangle className="h-3 w-3" />}>
+                No se pudo consultar
+              </Pill>
+            ) : connection ? (
+              <Pill tone="ok" dot>
+                Conectado
+              </Pill>
+            ) : (
+              <Pill tone="muted" dot>
+                Sin conexión
+              </Pill>
             )}
           </div>
+
+          {connection ? (
+            <p className="mt-[3px] max-w-[64ch] truncate text-[12px] text-muted-foreground">
+              <span className="font-semibold text-foreground">
+                {AI_PROVIDER_LABELS[connection.provider]}
+              </span>
+              <span className="px-1.5 text-border">·</span>
+              <span className="font-mono text-[11.5px]">{connection.model}</span>
+            </p>
+          ) : error ? (
+            <p className="mt-[3px] max-w-[64ch] text-[12px] text-muted-foreground">
+              El servidor no respondió. Si tenías un proveedor conectado, sigue guardado.
+            </p>
+          ) : isPending ? null : (
+            <p className="mt-[3px] max-w-[64ch] text-[12px] text-muted-foreground">
+              {canManage
+                ? 'Conecta un modelo de IA con visión para leer el IMEI de las fotos.'
+                : 'Aún no hay un proveedor de IA conectado.'}
+            </p>
+          )}
+
+          {/* Ultimo error del proveedor (p. ej. sin saldo): la conexion existe, pero no responde. */}
+          {connection?.lastError ? <ErrorLine>{connection.lastError}</ErrorLine> : null}
         </div>
 
         {canManage && !formOpen ? (
           connection ? (
-            <div className="flex shrink-0 items-center gap-1.5">
-              <Button variant="outline" size="sm" onClick={() => setFormOpen(true)}>
-                <Pencil className="h-3.5 w-3.5" />
+            <div className="flex shrink-0 flex-wrap items-center gap-[7px]">
+              <Button variant="ghost" size="sm" className={BTN_GHOST} onClick={() => setFormOpen(true)}>
+                <Pencil />
                 Editar
               </Button>
               <Button
                 variant="ghost"
-                size="sm"
+                size="icon"
+                className={BTN_ICON}
                 onClick={disconnect}
                 loading={disconnecting}
-                className="text-muted-foreground hover:text-destructive"
+                title="Desconectar"
+                aria-label="Desconectar"
               >
-                <Trash2 className="h-3.5 w-3.5" />
+                {disconnecting ? null : <Trash2 />}
               </Button>
             </div>
           ) : (
-            <Button size="sm" className="shrink-0" onClick={() => setFormOpen(true)}>
-              <Plug className="h-3.5 w-3.5" />
+            <Button size="sm" className={`${BTN_PRIMARY} shrink-0`} onClick={() => setFormOpen(true)}>
+              <Plug />
               Conectar IA
             </Button>
           )
@@ -189,8 +207,8 @@ function AiForm({
     try {
       const r = await api.post<AiTestResult>('/v1/connections/ai/test', body());
       const suffix = r.modelCount != null ? ` (${r.modelCount} modelos disponibles)` : '';
-      setVerified(`Credenciales validas${suffix}`);
-      toast.success(`Conexion exitosa con ${AI_PROVIDER_LABELS[provider]}`);
+      setVerified(`Credenciales válidas${suffix}`);
+      toast.success(`Conexión exitosa con ${AI_PROVIDER_LABELS[provider]}`);
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'No se pudo conectar al proveedor');
     } finally {
@@ -206,7 +224,7 @@ function AiForm({
       toast.success('Proveedor de IA conectado');
       onDone();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'No se pudo guardar la conexion');
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo guardar la conexión');
     } finally {
       setSaving(false);
     }
@@ -216,8 +234,8 @@ function AiForm({
     <div className="mt-4 space-y-3 border-t border-border pt-4">
       {/* Proveedor (segmentado) */}
       <div className="space-y-1.5">
-        <Label>Proveedor</Label>
-        <div className="grid grid-cols-3 gap-1 rounded-lg border border-input bg-background p-1">
+        <Label className={LABEL_MICRO}>Proveedor</Label>
+        <div className={cn(SEG_WRAP, 'grid-cols-3')}>
           {PROVIDERS.map((p) => (
             <button
               key={p}
@@ -226,12 +244,7 @@ function AiForm({
                 setProvider(p);
                 setVerified(null);
               }}
-              className={cn(
-                'rounded-md px-2 py-1.5 text-xs font-medium transition-colors',
-                provider === p
-                  ? 'bg-foreground text-background'
-                  : 'text-muted-foreground hover:text-foreground',
-              )}
+              className={cn(SEG_ITEM, provider === p ? SEG_ON : SEG_OFF)}
             >
               {AI_PROVIDER_LABELS[p]}
             </button>
@@ -241,7 +254,9 @@ function AiForm({
 
       <div className="grid gap-3 sm:grid-cols-2">
         <div className="space-y-1.5">
-          <Label htmlFor="ai-model">Modelo</Label>
+          <Label htmlFor="ai-model" className={LABEL_MICRO}>
+            Modelo
+          </Label>
           <Input
             id="ai-model"
             value={model}
@@ -250,11 +265,13 @@ function AiForm({
               setVerified(null);
             }}
             placeholder={AI_DEFAULT_MODELS[provider]}
-            className="font-mono text-xs"
+            className="rounded-[10px] font-mono text-xs"
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="ai-key">API Key</Label>
+          <Label htmlFor="ai-key" className={LABEL_MICRO}>
+            API Key
+          </Label>
           <Input
             id="ai-key"
             type="password"
@@ -265,38 +282,53 @@ function AiForm({
               setVerified(null);
             }}
             placeholder="Pega tu API key"
+            className="rounded-[10px]"
           />
         </div>
       </div>
 
-      <p className="text-xs text-muted-foreground">
-        Si dejas el modelo vacio usamos <span className="font-mono">{AI_DEFAULT_MODELS[provider]}</span>.
-        La key se guarda cifrada; nunca se muestra de vuelta.
+      <p className="text-[12px] text-muted-foreground">
+        Si dejas el modelo vacío usamos{' '}
+        <span className="font-mono text-[11.5px]">{AI_DEFAULT_MODELS[provider]}</span>. La key se
+        guarda cifrada; nunca se muestra de vuelta.
       </p>
 
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-xs text-emerald-600 dark:text-emerald-400">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2 text-[12px] font-semibold text-emerald-700 dark:text-emerald-400">
           {verified ? (
             <>
-              <Check className="h-3.5 w-3.5" />
+              <Check className="h-3.5 w-3.5 shrink-0" />
               <span className="truncate">{verified}</span>
             </>
           ) : null}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={onCancel} disabled={testing || saving}>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className={BTN_QUIET}
+            onClick={onCancel}
+            disabled={testing || saving}
+          >
             Cancelar
           </Button>
           <Button
-            variant="outline"
+            variant="ghost"
             size="sm"
+            className={BTN_GHOST}
             onClick={test}
             loading={testing}
             disabled={!valid || saving}
           >
-            Probar conexion
+            Probar conexión
           </Button>
-          <Button size="sm" onClick={save} loading={saving} disabled={!valid || testing}>
+          <Button
+            size="sm"
+            className={BTN_PRIMARY}
+            onClick={save}
+            loading={saving}
+            disabled={!valid || testing}
+          >
             {initialModel ? 'Guardar' : 'Conectar'}
           </Button>
         </div>

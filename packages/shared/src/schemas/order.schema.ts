@@ -12,7 +12,12 @@ export type MarketplaceProvider = z.infer<typeof marketplaceProviderSchema>;
  * Estado del envio (derivado del rastreo de Coordinadora, guardado en el pedido
  * para poder listar/filtrar sin llamar a la transportadora por fila).
  */
-export const shippingStateSchema = z.enum(['sin_movimientos', 'en_transito', 'novedad', 'entregado']);
+export const shippingStateSchema = z.enum([
+  'sin_movimientos',
+  'en_transito',
+  'novedad',
+  'entregado',
+]);
 
 /** Confirmacion de direccion por WhatsApp: confirmada tal cual, o modificada por el cliente. */
 export const addressStatusSchema = z.enum(['confirmed', 'modified']);
@@ -84,6 +89,10 @@ export const orderSummarySchema = z.object({
   shippingState: shippingStateSchema.nullable(),
   shippingStatus: z.string().nullable(),
   shippingUpdatedAt: z.string().datetime().nullable(),
+  /** Como sale el envio: 'coordinadora' | 'skydropx' | 'domicilio' | null
+   *  (legado). En 'domicilio' NO hay guideNumber ni link de rastreo. Texto
+   *  libre a proposito: un valor inesperado no debe tumbar el listado entero. */
+  shippingProvider: z.string().nullable().default(null),
   // Confirmacion de direccion por WhatsApp: null = sin responder.
   addressStatus: addressStatusSchema.nullable(),
   confirmedAddress: z.string().nullable(),
@@ -135,6 +144,50 @@ export const ordersPulseSchema = z.object({
   deltaToday: z.number().int().nullable(),
 });
 export type OrdersPulse = z.infer<typeof ordersPulseSchema>;
+
+/** Carga de una sede en el Resumen: cuantos pedidos tiene por preparar. */
+export const dashboardWarehouseLoadSchema = z.object({
+  id: z.string(),
+  slug: z.string(),
+  name: z.string(),
+  /** Pedidos por preparar (sin finalizar) — mismo conteo que el badge del sidebar. */
+  pending: z.number().int(),
+});
+export type DashboardWarehouseLoad = z.infer<typeof dashboardWarehouseLoadSchema>;
+
+/**
+ * Datos del Resumen (portada). Un solo viaje para las 3 metricas de arriba, las
+ * alertas de "Necesitan atencion" y la carga por sede.
+ *
+ * Alcances (los mismos criterios que la tabla de pedidos, no invenciones):
+ * - "sin asignar" = espejo de generales (sin sede + status ready-for-handling);
+ *   los facturados POR FUERA quedan fuera porque son solo trazabilidad.
+ * - "por preparar" = pedidos de sede sin evento finalizador (VTEX cerrado /
+ *   completado a mano) — la suma de los badges de las sedes.
+ * - "vivos" (direccion sin confirmar / sin tomar) = generales + por preparar.
+ * - "hoy" = dia de Colombia (GMT-5), igual que el pulso de generales.
+ */
+export const ordersDashboardSchema = z.object({
+  /** Pedidos de generales esperando sede. */
+  unassigned: z.number().int(),
+  /** De los anteriores, los que llevan mas de 24 h esperando. */
+  unassignedOver24h: z.number().int(),
+  /** Por preparar en TODAS las sedes accesibles. */
+  pending: z.number().int(),
+  /** De los anteriores, los que ya tienen factura de Alegra (falta cerrar). */
+  pendingInvoiced: z.number().int(),
+  /** Pedidos cuya guia se genero hoy. */
+  dispatchedToday: z.number().int(),
+  /** Envios con novedad reportada por la transportadora. */
+  shippingIssues: z.number().int(),
+  /** Pedidos vivos sin respuesta del cliente a la confirmacion de direccion. */
+  addressPending: z.number().int(),
+  /** Pedidos vivos que nadie del equipo ha tomado. */
+  unclaimed: z.number().int(),
+  /** Carga por sede (solo las sedes accesibles y sin archivar). */
+  perWarehouse: z.array(dashboardWarehouseLoadSchema),
+});
+export type OrdersDashboard = z.infer<typeof ordersDashboardSchema>;
 
 /**
  * "Montar pedido": pedido EXTERNO a las plataformas, escrito a mano en una sede

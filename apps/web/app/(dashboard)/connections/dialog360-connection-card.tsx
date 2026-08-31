@@ -10,15 +10,27 @@ import type {
 } from '@smartlogistica/shared';
 
 import { useCurrentUser } from '@/components/providers/current-user-provider';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 
-const ICON_TILE =
-  'flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-sky-500/20 bg-sky-500/10 text-sky-600 dark:text-sky-400';
+import {
+  BTN_GHOST,
+  BTN_ICON,
+  BTN_PRIMARY,
+  BTN_QUIET,
+  CONN_CARD,
+  ErrorLine,
+  LABEL_MICRO,
+  Pill,
+  SEG_ITEM,
+  SEG_OFF,
+  SEG_ON,
+  SEG_WRAP,
+  Tile,
+} from './connection-ui';
 
 /**
  * Conexion a 360dialog (Cloud API de Meta, api-first): EL canal de WhatsApp.
@@ -64,73 +76,77 @@ export function Dialog360ConnectionCard({ initial }: { initial?: Dialog360Connec
   };
 
   return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-3">
-          <div className={ICON_TILE}>
-            <Cloud className="h-4 w-4" />
-          </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-semibold">WhatsApp Cloud API (360dialog)</h3>
-              {isPending ? (
-                <Badge variant="outline">
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                  Consultando
-                </Badge>
-              ) : error ? (
-                <Badge variant="outline" className="border-amber-500/30 text-amber-600 dark:text-amber-400">
-                  <AlertTriangle className="h-3 w-3" />
-                  No se pudo consultar
-                </Badge>
-              ) : connection ? (
-                <Badge variant="success">
-                  <Check className="h-3 w-3" />
-                  {connection.mode === 'sandbox' ? 'Sandbox conectado' : 'Conectado'}
-                </Badge>
-              ) : (
-                <Badge variant="outline">Sin conexion</Badge>
-              )}
-            </div>
+    <div className={CONN_CARD}>
+      <div className="flex flex-wrap items-start gap-[13px]">
+        <Tile tone="sky">
+          <Cloud className="h-[18px] w-[18px]" />
+        </Tile>
 
-            {connection ? (
-              <p className="mt-0.5 text-sm text-muted-foreground">
-                Webhook configurado automáticamente: todo lo del número entra directo al hilo del
-                pedido{connection.mode === 'sandbox' ? ' (modo pruebas)' : ''}.
-              </p>
+        <div className="min-w-0 flex-1 basis-[220px]">
+          <div className="flex flex-wrap items-center gap-2">
+            <b className="text-[13.5px] font-extrabold">WhatsApp Cloud API</b>
+            <Pill tone="muted">360dialog</Pill>
+            {isPending ? (
+              <Pill tone="muted" icon={<Loader2 className="h-3 w-3 animate-spin" />}>
+                Consultando
+              </Pill>
             ) : error ? (
-              <p className="mt-0.5 text-sm text-muted-foreground">
-                El servidor no respondió. Si ya estaba conectado, sigue guardado.
-              </p>
-            ) : isPending ? null : (
-              <p className="mt-0.5 text-sm text-muted-foreground">
-                El API crudo de Meta: mensajes, medios y lo enviado desde el celular, sin
-                intermediarios. Empieza con el sandbox para probar.
-              </p>
+              <Pill tone="warn" icon={<AlertTriangle className="h-3 w-3" />}>
+                No se pudo consultar
+              </Pill>
+            ) : connection ? (
+              <Pill tone="ok" dot>
+                {connection.mode === 'sandbox' ? 'Sandbox conectado' : 'Conectado'}
+              </Pill>
+            ) : (
+              <Pill tone="muted" dot>
+                Sin conexión
+              </Pill>
             )}
           </div>
+
+          {connection ? (
+            <p className="mt-[3px] max-w-[64ch] text-[12px] text-muted-foreground">
+              Webhook configurado automáticamente: todo lo del número entra directo al hilo del
+              pedido{connection.mode === 'sandbox' ? ' (modo pruebas)' : ''}.
+            </p>
+          ) : error ? (
+            <p className="mt-[3px] max-w-[64ch] text-[12px] text-muted-foreground">
+              El servidor no respondió. Si ya estaba conectado, sigue guardado.
+            </p>
+          ) : isPending ? null : (
+            <p className="mt-[3px] max-w-[64ch] text-[12px] text-muted-foreground">
+              El API crudo de Meta: mensajes, medios y lo enviado desde el celular, sin
+              intermediarios. Empieza con el sandbox para probar.
+            </p>
+          )}
+
+          {/* Ultimo error reportado por 360dialog: sigue conectado, pero algo fallo. */}
+          {connection?.lastError ? <ErrorLine>{connection.lastError}</ErrorLine> : null}
         </div>
 
         {!formOpen ? (
           connection ? (
-            <div className="flex shrink-0 items-center gap-1.5">
-              <Button variant="outline" size="sm" onClick={() => setFormOpen(true)}>
-                <Pencil className="h-3.5 w-3.5" />
+            <div className="flex shrink-0 flex-wrap items-center gap-[7px]">
+              <Button variant="ghost" size="sm" className={BTN_GHOST} onClick={() => setFormOpen(true)}>
+                <Pencil />
                 Editar
               </Button>
               <Button
                 variant="ghost"
-                size="sm"
+                size="icon"
+                className={BTN_ICON}
                 onClick={disconnect}
                 loading={disconnecting}
-                className="text-muted-foreground hover:text-destructive"
+                title="Desconectar"
+                aria-label="Desconectar"
               >
-                <Trash2 className="h-3.5 w-3.5" />
+                {disconnecting ? null : <Trash2 />}
               </Button>
             </div>
           ) : (
-            <Button size="sm" className="shrink-0" onClick={() => setFormOpen(true)}>
-              <Plug className="h-3.5 w-3.5" />
+            <Button size="sm" className={`${BTN_PRIMARY} shrink-0`} onClick={() => setFormOpen(true)}>
+              <Plug />
               Conectar
             </Button>
           )
@@ -195,7 +211,7 @@ function Dialog360Form({
       toast.success('360dialog conectado y webhook configurado');
       onDone();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'No se pudo guardar la conexion');
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo guardar la conexión');
     } finally {
       setSaving(false);
     }
@@ -204,8 +220,8 @@ function Dialog360Form({
   return (
     <div className="mt-4 space-y-3 border-t border-border pt-4">
       <div className="space-y-1.5">
-        <Label>Modo</Label>
-        <div className="grid grid-cols-2 gap-1 rounded-lg border border-input bg-background p-1">
+        <Label className={LABEL_MICRO}>Modo</Label>
+        <div className={cn(SEG_WRAP, 'grid-cols-2')}>
           {(['sandbox', 'production'] as const).map((m) => (
             <button
               key={m}
@@ -214,10 +230,7 @@ function Dialog360Form({
                 setMode(m);
                 setVerified(false);
               }}
-              className={cn(
-                'rounded-md px-2 py-1.5 text-xs font-medium transition-colors',
-                mode === m ? 'bg-foreground text-background' : 'text-muted-foreground hover:text-foreground',
-              )}
+              className={cn(SEG_ITEM, mode === m ? SEG_ON : SEG_OFF)}
             >
               {m === 'sandbox' ? 'Sandbox (pruebas)' : 'Producción'}
             </button>
@@ -226,7 +239,9 @@ function Dialog360Form({
       </div>
 
       <div className="space-y-1.5">
-        <Label htmlFor="d360-key">API key (D360-API-KEY)</Label>
+        <Label htmlFor="d360-key" className={LABEL_MICRO}>
+          API key (D360-API-KEY)
+        </Label>
         <Input
           id="d360-key"
           type="password"
@@ -237,31 +252,51 @@ function Dialog360Form({
             setVerified(false);
           }}
           placeholder={mode === 'sandbox' ? 'La key que muestra el demo de 360dialog' : 'La key del número en el hub de 360dialog'}
+          className="rounded-[10px]"
         />
       </div>
 
-      <p className="text-xs text-muted-foreground">
+      <p className="text-[12px] text-muted-foreground">
         Al conectar, el webhook del número queda apuntando automáticamente a esta plataforma. La key
         se guarda cifrada; nunca se muestra de vuelta.
       </p>
 
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-xs text-emerald-600 dark:text-emerald-400">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2 text-[12px] font-semibold text-emerald-700 dark:text-emerald-400">
           {verified ? (
             <>
-              <Check className="h-3.5 w-3.5" />
+              <Check className="h-3.5 w-3.5 shrink-0" />
               <span>API key válida</span>
             </>
           ) : null}
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={onCancel} disabled={testing || saving}>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className={BTN_QUIET}
+            onClick={onCancel}
+            disabled={testing || saving}
+          >
             Cancelar
           </Button>
-          <Button variant="outline" size="sm" onClick={test} loading={testing} disabled={!valid || saving}>
-            Probar conexion
+          <Button
+            variant="ghost"
+            size="sm"
+            className={BTN_GHOST}
+            onClick={test}
+            loading={testing}
+            disabled={!valid || saving}
+          >
+            Probar conexión
           </Button>
-          <Button size="sm" onClick={save} loading={saving} disabled={!valid || testing}>
+          <Button
+            size="sm"
+            className={BTN_PRIMARY}
+            onClick={save}
+            loading={saving}
+            disabled={!valid || testing}
+          >
             {isEdit ? 'Guardar' : 'Conectar'}
           </Button>
         </div>

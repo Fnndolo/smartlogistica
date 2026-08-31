@@ -9,6 +9,16 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, api } from '@/lib/api-client';
+import { cn } from '@/lib/utils';
+
+import {
+  BTN_GHOST_CLS,
+  BTN_PRIMARY_CLS,
+  BTN_SM_CLS,
+  SET_CARD_CLS,
+  SET_ROW_CLS,
+  SettingsRowBody,
+} from './settings-ui';
 
 export function ChangePasswordCard() {
   const [open, setOpen] = useState(false);
@@ -36,28 +46,25 @@ export function ChangePasswordCard() {
   const valid = currentPassword.length > 0 && newPassword.length >= 8 && newPassword === repeat;
 
   return (
-    <div className="rounded-xl border border-border bg-card p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border bg-muted">
-            <KeyRound className="h-4 w-4" />
-          </div>
-          <div>
-            <h3 className="text-sm font-semibold">Clave de acceso</h3>
-            <p className="mt-0.5 text-sm text-muted-foreground">
-              Cambia la clave con la que entras a la plataforma.
-            </p>
-          </div>
-        </div>
-        {open ? null : (
-          <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
-            Cambiar
-          </Button>
-        )}
-      </div>
+    <div className={SET_CARD_CLS}>
+      {/* Misma fila navegable (.set) que "Equipo" y "Conexiones": aqui no lleva
+          a otra pagina, despliega el formulario debajo. */}
+      <button
+        type="button"
+        onClick={() => (open ? reset() : setOpen(true))}
+        aria-expanded={open}
+        className={cn(SET_ROW_CLS, 'focus-visible:ring-offset-card')}
+      >
+        <SettingsRowBody
+          icon={<KeyRound />}
+          title="Clave de acceso"
+          description="Cambia la clave con la que entras a la plataforma."
+          expanded={open}
+        />
+      </button>
 
       {open ? (
-        <div className="mt-4 space-y-3 border-t border-border pt-4">
+        <div className="space-y-3 border-t border-border px-4 pb-4 pt-[13px]">
           <div className="space-y-1.5">
             <Label htmlFor="cur-pass">Clave actual</Label>
             <Input
@@ -76,7 +83,7 @@ export function ChangePasswordCard() {
                 type="password"
                 value={newPassword}
                 onChange={(e) => setNew(e.target.value)}
-                placeholder="Minimo 8 caracteres"
+                placeholder="Mínimo 8 caracteres"
                 autoComplete="new-password"
               />
             </div>
@@ -89,15 +96,22 @@ export function ChangePasswordCard() {
                 onChange={(e) => setRepeat(e.target.value)}
                 autoComplete="new-password"
               />
-              {mismatch ? <p className="text-[11px] text-destructive">Las claves no coinciden.</p> : null}
+              {mismatch ? (
+                <p className="text-[11px] font-semibold text-destructive">Las claves no coinciden.</p>
+              ) : null}
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Button size="sm" onClick={() => change.mutate()} loading={change.isPending} disabled={!valid}>
-              <Check className="h-3.5 w-3.5" />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              className={cn(BTN_PRIMARY_CLS, BTN_SM_CLS)}
+              onClick={() => change.mutate()}
+              loading={change.isPending}
+              disabled={!valid}
+            >
+              <Check />
               Guardar
             </Button>
-            <Button variant="ghost" size="sm" onClick={reset}>
+            <Button variant="outline" className={cn(BTN_GHOST_CLS, BTN_SM_CLS)} onClick={reset}>
               Cancelar
             </Button>
           </div>

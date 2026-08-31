@@ -8,6 +8,8 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { ApiError, api } from '@/lib/api-client';
 
+import { BTN_GHOST } from './connection-ui';
+
 interface SyncButtonProps {
   connectionId: string;
 }
@@ -20,10 +22,10 @@ export function SyncButton({ connectionId }: SyncButtonProps) {
     setSyncing(true);
     try {
       await api.post(`/v1/connections/vtex/${connectionId}/sync`);
-      toast.success('Sincronizacion iniciada — el backfill corre en background');
+      toast.success('Sincronización iniciada — el backfill corre en segundo plano');
       router.refresh();
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : 'No se pudo iniciar la sincronizacion';
+      const message = err instanceof ApiError ? err.message : 'No se pudo iniciar la sincronización';
       toast.error(message);
     } finally {
       setSyncing(false);
@@ -31,8 +33,8 @@ export function SyncButton({ connectionId }: SyncButtonProps) {
   }
 
   return (
-    <Button variant="outline" size="sm" onClick={handleSync} loading={syncing}>
-      <RefreshCw className="h-3.5 w-3.5" />
+    <Button variant="ghost" size="sm" className={BTN_GHOST} onClick={handleSync} loading={syncing}>
+      <RefreshCw />
       Sincronizar
     </Button>
   );

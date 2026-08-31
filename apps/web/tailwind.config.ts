@@ -58,6 +58,14 @@ const config: Config = {
           strong: 'hsl(var(--wash-strong))',
         },
         scrim: 'hsl(var(--scrim))',
+        /* Barra lateral (azul marino): fondo, borde y sus dos niveles de texto. */
+        rail: {
+          DEFAULT: 'hsl(var(--rail))',
+          2: 'hsl(var(--rail-2))',
+          line: 'hsl(var(--rail-line))',
+          ink: 'hsl(var(--rail-ink))',
+          'ink-2': 'hsl(var(--rail-ink-2))',
+        },
         popover: {
           DEFAULT: 'hsl(var(--popover))',
           foreground: 'hsl(var(--popover-foreground))',

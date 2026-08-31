@@ -17,17 +17,17 @@ export default async function VtexConnectPage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-6">
-      <div>
+      <div className="border-b border-border pb-4">
         <Link
           href="/connections"
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+          className="inline-flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-[0.08em] text-hint transition-colors hover:text-accent-ink"
         >
           <ArrowLeft className="h-3.5 w-3.5" />
           Volver a conexiones
         </Link>
-        <h1 className="mt-3 text-2xl font-semibold tracking-tight">Conectar VTEX / Addi</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Genera unas credenciales de API en VTEX y conectalas en menos de un minuto.
+        <h1 className="mt-3 text-[21px] font-extrabold tracking-[-0.025em]">Conectar VTEX / Addi</h1>
+        <p className="mt-0.5 max-w-[62ch] text-[13px] text-muted-foreground">
+          Genera unas credenciales de API en VTEX y conéctalas en menos de un minuto.
         </p>
       </div>
 

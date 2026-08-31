@@ -12,8 +12,10 @@ import type {
 import { Button } from '@/components/ui/button';
 import { canManageConnections } from '@/lib/rbac';
 import { getSessionUser, serverFetchResult } from '@/lib/server-api';
+import { cn } from '@/lib/utils';
 
 import { AiConnectionCard } from './ai-connection-card';
+import { BTN_PRIMARY, BTN_SM, SectionHeading } from './connection-ui';
 import { ConnectionsList } from './connections-list';
 import { Dialog360ConnectionCard } from './dialog360-connection-card';
 import { SkydropxConnectionCard } from './skydropx-connection-card';
@@ -61,37 +63,42 @@ export default async function ConnectionsPage() {
   ]);
 
   return (
-    <div className="space-y-8">
-      <header className="flex items-end justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Conexiones</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Conecta cada marketplace una vez. Los pedidos llegan automaticamente.
+    <div>
+      <header className="mb-[18px] flex flex-wrap items-start gap-3.5 border-b border-border pb-4">
+        <div className="min-w-0">
+          <h1 className="text-[21px] font-extrabold tracking-[-0.025em]">Conexiones</h1>
+          <p className="mt-0.5 max-w-[62ch] text-[13px] text-muted-foreground">
+            Conecta cada marketplace una vez. Los pedidos llegan automáticamente.
           </p>
         </div>
-        <Button asChild>
-          <Link href="/connections/vtex/new">
-            <Plus className="h-4 w-4" />
-            Conectar VTEX
-          </Link>
-        </Button>
+        <div className="ml-auto flex flex-wrap gap-2">
+          {/* Las acciones de la cabecera van en la medida compacta del mockup. */}
+          <Button asChild className={cn(BTN_PRIMARY, BTN_SM)}>
+            <Link href="/connections/vtex/new">
+              <Plus />
+              Conectar VTEX
+            </Link>
+          </Button>
+        </div>
       </header>
 
-      <section className="space-y-3">
-        <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Marketplaces
-        </h2>
+      <section className="space-y-[10px]">
+        <SectionHeading>Marketplaces</SectionHeading>
         <ConnectionsList initial={connections} />
       </section>
 
-      <section className="space-y-3">
-        <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Servicios
-        </h2>
+      <section className="mt-[22px] space-y-[10px]">
+        <SectionHeading>Servicios</SectionHeading>
         <AiConnectionCard initial={aiConnection} />
         <Dialog360ConnectionCard initial={dialog360} />
         <SkydropxConnectionCard initial={skydropx} />
       </section>
+
+      <p className="mt-3.5 text-[12px] text-hint">
+        Alegra, Coordinadora y el Certificado de Garantía se configuran{' '}
+        <b className="font-bold text-muted-foreground">dentro de cada sede</b>, porque cada una tiene
+        sus propias credenciales.
+      </p>
     </div>
   );
 }

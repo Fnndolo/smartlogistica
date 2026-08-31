@@ -51,6 +51,15 @@
     /* Velo detras del drawer. */
     --scrim: 225 64% 8%;
 
+    /* RAIL: la barra lateral va en azul marino profundo — el "chrome" de la
+       app, no la mesa de trabajo. Es lo que separa la navegacion del
+       contenido y hace que el shell no se confunda con el drawer. */
+    --rail: 225 65% 11%; /* #0b1430 */
+    --rail-2: 225 60% 15%; /* #101c40 */
+    --rail-line: 226 48% 23%; /* #1e2b55 */
+    --rail-ink: 224 76% 95%; /* #e7ecfb */
+    --rail-ink-2: 226 28% 67%; /* #8f9dc7 */
+
     --destructive: 357 72% 56%; /* #df3d45 */
     --destructive-foreground: 210 40% 98%;
 
@@ -95,6 +104,13 @@
     --wash: 226 53% 18%; /* #141f45 */
     --wash-strong: 226 55% 23%; /* #1b2a5c */
     --scrim: 226 60% 3%;
+
+    /* En oscuro el rail se hunde un poco mas que el lienzo. */
+    --rail: 226 66% 7%; /* #060c1e */
+    --rail-2: 225 65% 11%; /* #0b1430 */
+    --rail-line: 226 47% 19%; /* #1a2547 */
+    --rail-ink: 224 76% 95%;
+    --rail-ink-2: 226 25% 60%; /* #7d8bb5 */
 
     --destructive: 357 82% 67%; /* #f0666d */
     --destructive-foreground: 226 60% 7%;
@@ -157,6 +173,46 @@
   }
   .scrollbar-none::-webkit-scrollbar {
     display: none;
+  }
+  /**
+   * Barra de scroll SUPERPUESTA: invisible en reposo, se muestra mientras se
+   * scrollea (la clase .is-scrolling la pone el componente) y al pasar el
+   * mouse. No ocupa ancho, asi que el contenido NO se mueve al aparecer —
+   * por eso el pulgar se pinta sobre el borde, no en un canal propio.
+   */
+  .scrollbar-overlay {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 0.25s ease;
+  }
+  .scrollbar-overlay:hover,
+  .scrollbar-overlay.is-scrolling {
+    scrollbar-color: hsl(var(--rail-ink-2) / 0.45) transparent;
+  }
+  /* WebKit no anima scrollbar-color: se anima el pulgar directamente. */
+  .scrollbar-overlay::-webkit-scrollbar {
+    width: 6px;
+  }
+  .scrollbar-overlay::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-overlay::-webkit-scrollbar-thumb {
+    background-color: transparent;
+    border-radius: 999px;
+    transition: background-color 0.25s ease;
+  }
+  .scrollbar-overlay:hover::-webkit-scrollbar-thumb,
+  .scrollbar-overlay.is-scrolling::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--rail-ink-2) / 0.45);
+  }
+  .scrollbar-overlay::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--rail-ink-2) / 0.7);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .scrollbar-overlay,
+    .scrollbar-overlay::-webkit-scrollbar-thumb {
+      transition: none;
+    }
   }
   /* Menu contextual de WhatsApp: mini pop casi imperceptible (como el real). */
   .wa-pop {

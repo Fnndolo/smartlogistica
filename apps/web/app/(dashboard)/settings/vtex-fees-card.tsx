@@ -10,6 +10,9 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, api } from '@/lib/api-client';
+import { cn } from '@/lib/utils';
+
+import { BTN_PRIMARY_CLS, BTN_SM_CLS, CARD_CLS, CardHead, EMPTY_CLS, FOCUS_RING } from './settings-ui';
 
 interface Form {
   commissionPct: string;
@@ -84,29 +87,25 @@ export function VtexFeesCard({ initial }: { initial: VtexFees | null }) {
   const EXAMPLE = 1_000_000;
 
   return (
-    <div className="rounded-xl border border-border bg-card p-4 sm:p-5">
-      <div className="flex items-start gap-3">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border bg-muted">
-          <Percent className="h-4 w-4" />
-        </div>
-        <div className="min-w-0">
-          <h3 className="text-sm font-semibold">Neto VTEX (clic en el precio)</h3>
-          <p className="mt-0.5 text-sm text-muted-foreground">
-            Al hacer clic en el precio de un pedido VTEX, la tabla muestra entre paréntesis lo que
-            realmente queda: precio − comisión − IVA sobre esa comisión − valor fijo. Solo visual.
-          </p>
-        </div>
-      </div>
+    <div className={CARD_CLS}>
+      <CardHead
+        icon={<Percent />}
+        title="Neto VTEX (clic en el precio)"
+        description="Al hacer clic en el precio de un pedido VTEX, la tabla muestra entre paréntesis lo que realmente queda: precio − comisión − IVA sobre esa comisión − valor fijo. Solo visual."
+      />
 
       {form === null ? (
-        <div className="mt-4 rounded-lg border border-dashed border-border px-3 py-4 text-center text-sm text-muted-foreground">
+        <div className={cn(EMPTY_CLS, 'mt-4')}>
           {fallback.isError ? (
             <>
               No se pudo cargar la configuración.{' '}
               <button
                 type="button"
                 onClick={() => fallback.refetch()}
-                className="font-medium text-foreground underline underline-offset-2"
+                className={cn(
+                  'rounded font-bold text-accent-ink underline underline-offset-2',
+                  FOCUS_RING,
+                )}
               >
                 Reintentar
               </button>
@@ -148,12 +147,17 @@ export function VtexFeesCard({ initial }: { initial: VtexFees | null }) {
           </div>
 
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[11px] text-muted-foreground tabular-nums">
+            <p className="min-w-0 text-[11px] tabular-nums text-hint">
               {parsed
                 ? `Ejemplo: un pedido de ${cop(EXAMPLE)} quedaría en ${cop(vtexNetValue(EXAMPLE, parsed))}.`
                 : 'Revisa los valores: porcentajes entre 0 y 100.'}
             </p>
-            <Button size="sm" onClick={() => save.mutate()} disabled={!dirty || !parsed} loading={save.isPending}>
+            <Button
+              className={cn(BTN_PRIMARY_CLS, BTN_SM_CLS)}
+              onClick={() => save.mutate()}
+              disabled={!dirty || !parsed}
+              loading={save.isPending}
+            >
               Guardar
             </Button>
           </div>

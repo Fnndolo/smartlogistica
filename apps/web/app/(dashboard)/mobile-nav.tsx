@@ -52,13 +52,19 @@ const TABS = [
   },
 ] as const;
 
-/** Barra superior (solo movil): logo + workspace + campana de notificaciones. */
+/**
+ * Barra superior (solo movil): logo + workspace + campana de notificaciones.
+ *
+ * En movil NO existe el rail oscuro: estas dos barras son el borde del LIENZO,
+ * asi que van en la superficie clara (card) con la tinta del contenido. Lo
+ * unico que se trae del rail es el mosaico cobalto de la marca.
+ */
 export function MobileTopBar() {
   const user = useCurrentUser();
   return (
-    <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-border bg-background/90 px-4 py-2.5 backdrop-blur md:hidden">
-      <Link href="/dashboard" className="flex min-w-0 items-center gap-2">
-        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-foreground text-background">
+    <header className="sticky top-0 z-30 flex items-center justify-between gap-2 border-b border-border bg-card/90 px-4 py-2.5 backdrop-blur md:hidden">
+      <Link href="/dashboard" className="flex min-w-0 items-center gap-2.5">
+        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-[9px] bg-gradient-to-br from-accent to-accent-deep text-white shadow-[0_4px_14px_-4px_hsl(var(--ring))]">
           <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" aria-hidden>
             <path
               d="M4 7l8-4 8 4M4 7v10l8 4 8-4V7M4 7l8 4m0 0l8-4m-8 4v10"
@@ -70,8 +76,8 @@ export function MobileTopBar() {
           </svg>
         </span>
         <span className="flex min-w-0 flex-col leading-tight">
-          <span className="truncate text-sm font-semibold tracking-tight">SmartLogistica</span>
-          <span className="truncate text-[11px] text-muted-foreground">
+          <span className="truncate text-[13px] font-bold tracking-[-0.01em]">SmartLogística</span>
+          <span className="truncate font-mono text-[11px] text-muted-foreground">
             {user?.activeTenantSlug ?? '...'}
           </span>
         </span>
@@ -93,7 +99,7 @@ export function MobileBottomNav() {
   return (
     <nav
       className={cn(
-        'fixed inset-x-0 bottom-0 z-30 grid border-t border-border bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden',
+        'fixed inset-x-0 bottom-0 z-30 grid border-t border-border bg-card/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden',
         tabs.length >= 5 ? 'grid-cols-5' : tabs.length === 4 ? 'grid-cols-4' : 'grid-cols-3',
       )}
       aria-label="Navegacion principal"
@@ -106,20 +112,25 @@ export function MobileBottomNav() {
             key={tab.href}
             href={tab.href}
             prefetch
+            aria-current={active ? 'page' : undefined}
             className={cn(
-              'flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] font-medium transition-colors',
-              active ? 'text-foreground' : 'text-muted-foreground',
+              'relative flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] transition-colors [transition-duration:140ms]',
+              active ? 'font-bold text-accent-ink' : 'font-medium text-muted-foreground',
             )}
           >
+            {/* Eco del riel del sidebar: barra de acento en la pestaña activa. */}
+            {active ? (
+              <span className="absolute inset-x-5 top-0 h-[2.5px] rounded-b-[3px] bg-accent" aria-hidden />
+            ) : null}
             <span className="relative">
-              <Icon className={cn('h-5 w-5', active ? 'text-foreground' : 'text-muted-foreground')} />
+              <Icon className={cn('h-5 w-5', active ? 'text-accent' : 'text-muted-foreground')} />
               {tab.href === '/mentions' && unread > 0 ? (
-                <span className="absolute -right-2 -top-1.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-accent px-1 text-[9px] font-bold leading-none text-accent-foreground">
+                <span className="absolute -right-2 -top-1.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-accent px-1 text-[9px] font-extrabold tabular-nums leading-none text-white">
                   {unread > 99 ? '99+' : unread}
                 </span>
               ) : null}
             </span>
-            {tab.label}
+            <span className="max-w-full truncate px-1">{tab.label}</span>
           </Link>
         );
       })}
