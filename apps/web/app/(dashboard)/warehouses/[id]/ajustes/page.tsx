@@ -8,13 +8,18 @@ import type {
 import { canManageConnections } from '@/lib/rbac';
 import { getSessionUser, getWarehouses, serverFetch } from '@/lib/server-api';
 import { AlegraConnectionCard } from '../alegra-connection-card';
+import { AlegraFixedClientCard } from '../alegra-fixed-client-card';
 import { AlegraSellerCard } from '../alegra-seller-card';
 import { CertificateCard } from '../certificate-card';
 import { CoordinadoraConnectionCard } from '../coordinadora-connection-card';
 import { SkydropxSedeCard } from '../skydropx-sede-card';
 
 /** Ajustes de la sede: conexiones (Alegra/Coordinadora) + Certificado. */
-export default async function WarehouseSettingsPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function WarehouseSettingsPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
   const { id } = await params;
   // Los Ajustes de la sede son conexiones/configuracion: solo administradores.
   // Quien no lo sea vuelve a los pedidos de la sede (el gestor si entra ahi).
@@ -45,10 +50,15 @@ export default async function WarehouseSettingsPage({ params }: { params: Promis
       </header>
       <div className="grid gap-4 lg:grid-cols-2">
         <AlegraConnectionCard warehouseId={id} warehouseName={name} initial={alegra ?? null} />
-        <CoordinadoraConnectionCard warehouseId={id} warehouseName={name} initial={coordinadora ?? null} />
+        <CoordinadoraConnectionCard
+          warehouseId={id}
+          warehouseName={name}
+          initial={coordinadora ?? null}
+        />
         {/* Remitente Skydropx: gestion SEPARADA de Coordinadora. */}
         <SkydropxSedeCard warehouseId={id} initial={skydropxSede ?? null} />
       </div>
+      <AlegraFixedClientCard warehouseId={id} />
       <AlegraSellerCard warehouseId={id} />
       <CertificateCard warehouseId={id} warehouseName={name} />
     </div>

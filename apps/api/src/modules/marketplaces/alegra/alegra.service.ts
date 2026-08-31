@@ -3,7 +3,9 @@ import { BadRequestException } from '@nestjs/common';
 import { isAxiosError, type AxiosInstance } from 'axios';
 import type {
   AlegraConnectionSummary,
+  AlegraContact,
   AlegraCredentialsInput,
+  AlegraFixedClient,
   AlegraImeiMatch,
   AlegraItem,
   AlegraPaymentAccount,
@@ -15,6 +17,8 @@ import type {
   InvoicePaymentInput,
   InvoiceResult,
 } from '@smartlogistica/shared';
+import { alegraFixedClientSchema } from '@smartlogistica/shared';
+import { Prisma } from '.prisma/tenant-client';
 
 import { canManageOrders, isAdmin } from '../../../common/rbac';
 import type { AuthContext } from '../../../common/types/authenticated-request';
@@ -59,7 +63,11 @@ interface ImeiRecord {
 }
 
 /** Ejecuta fn sobre items con concurrencia acotada. */
-async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+async function mapLimit<T>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<void>,
+): Promise<void> {
   const queue = [...items];
   const workers = Array.from({ length: Math.min(limit, queue.length) }, async () => {
     for (let item = queue.shift(); item !== undefined; item = queue.shift()) {
@@ -277,9 +285,12 @@ export class AlegraService {
     // 2. Extraer IMEIs de cada linea (detalle si el list no trae items).
     const records = new Map<string, ImeiRecord>();
     await mapLimit(bills, DETAIL_CONCURRENCY, async (bill) => {
-      const detail = bill.purchases?.items ? bill : await this.client.getBill(http, String(bill.id));
+      const detail = bill.purchases?.items
+        ? bill
+        : await this.client.getBill(http, String(bill.id));
       const items = detail.purchases?.items ?? detail.items ?? [];
-      const billNumber = detail.numberTemplate?.fullNumber ?? detail.billNumber ?? String(detail.id);
+      const billNumber =
+        detail.numberTemplate?.fullNumber ?? detail.billNumber ?? String(detail.id);
       const billDate = detail.date ? new Date(detail.date) : null;
       const providerName = detail.provider?.name ?? null;
       for (const line of items) {
@@ -381,14 +392,15 @@ export class AlegraService {
    * Cuentas de banco de Alegra de la sede (para elegir los pagos de una factura
    * de pedido MONTADO a mano). Cualquier miembro con acceso a la sede.
    */
-  async listPaymentAccounts(warehouseId: string, auth: AuthContext): Promise<AlegraPaymentAccount[]> {
+  async listPaymentAccounts(
+    warehouseId: string,
+    auth: AuthContext,
+  ): Promise<AlegraPaymentAccount[]> {
     await this.assertWarehouseAccess(warehouseId, auth);
     const { tenantId } = getTenantContext();
     const http = await this.client.forWarehouse(tenantId, warehouseId);
     const accounts = await this.listBankAccountsCached(warehouseId, http);
-    return accounts
-      .filter((a) => a.name)
-      .map((a) => ({ id: String(a.id), name: String(a.name) }));
+    return accounts.filter((a) => a.name).map((a) => ({ id: String(a.id), name: String(a.name) }));
   }
 
   /** Busca items del catalogo de Alegra (selector manual de producto). */
@@ -487,6 +499,81 @@ export class AlegraService {
     );
   }
 
+  // === CLIENTE FIJO de la sede ===
+
+  /**
+   * A quien factura esta sede en Alegra. null = al comprador, lo de siempre.
+   * Lee la columna sin validar contra Alegra: es un dato ya elegido, y una
+   * llamada de red aqui estaria en el camino critico de CADA factura.
+   */
+  async getFixedClient(warehouseId: string): Promise<AlegraFixedClient | null> {
+    const { prisma } = getTenantContext();
+    const wh = await prisma.warehouse.findUnique({
+      where: { id: warehouseId },
+      select: { alegraFixedClient: true },
+    });
+    if (!wh?.alegraFixedClient) return null;
+    const parsed = alegraFixedClientSchema.safeParse(wh.alegraFixedClient);
+    return parsed.success ? parsed.data : null;
+  }
+
+  /** Igual que getFixedClient pero comprobando acceso a la sede (para el API). */
+  async getFixedClientFor(
+    warehouseId: string,
+    auth: AuthContext,
+  ): Promise<AlegraFixedClient | null> {
+    await this.assertWarehouseAccess(warehouseId, auth);
+    return this.getFixedClient(warehouseId);
+  }
+
+  /** Fija (o quita, con null) el cliente al que factura la sede. Solo admin. */
+  async setFixedClient(
+    warehouseId: string,
+    client: AlegraFixedClient | null,
+    auth: AuthContext,
+  ): Promise<AlegraFixedClient | null> {
+    if (!isAdmin(auth)) {
+      throw new ForbiddenException('Solo administradores cambian a quién factura la sede');
+    }
+    await this.assertWarehouseAccess(warehouseId, auth);
+    const { prisma } = getTenantContext();
+    await prisma.warehouse.update({
+      where: { id: warehouseId },
+      data: {
+        alegraFixedClient: client ? (client as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
+      },
+    });
+    return client;
+  }
+
+  /**
+   * Busca contactos en la cuenta de Alegra de la sede (selector del cliente
+   * fijo). Se re-filtra en memoria: si Alegra ignorara el parametro `query`
+   * devolveria los primeros sin filtrar y el buscador mentiria.
+   */
+  async searchContacts(
+    warehouseId: string,
+    query: string,
+    auth: AuthContext,
+  ): Promise<AlegraContact[]> {
+    if (!isAdmin(auth)) {
+      throw new ForbiddenException('Solo administradores gestionan la facturación de la sede');
+    }
+    await this.assertWarehouseAccess(warehouseId, auth);
+    const { tenantId } = getTenantContext();
+    const http = await this.client.forWarehouse(tenantId, warehouseId);
+    const rows = await this.client.searchContacts(http, query);
+
+    const fold = (v: string): string => v.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const term = fold(query.trim());
+
+    return rows
+      .map((r) => toContact(r))
+      .filter((c): c is AlegraContact => c !== null)
+      .filter((c) => !term || fold(`${c.name} ${c.identification ?? ''}`).includes(term))
+      .slice(0, 30);
+  }
+
   /**
    * Crea la factura de venta en Alegra. Solo admin.
    *
@@ -523,9 +610,15 @@ export class AlegraService {
       // 1. Contacto + cuenta "MARKETPLACE ADDI": son independientes -> en paralelo.
       //    (En pedidos montados a mano no hay ADDI: las cuentas ya las eligio el
       //    usuario, solo se valida que existan.)
+      // CLIENTE FIJO de la sede: si esta puesto, la factura contable sale a su
+      // nombre y NO se busca ni se crea el contacto del comprador (de paso se
+      // ahorra la llamada lenta a la IA que formatea la direccion para la DIAN).
+      const fixed = await this.getFixedClient(warehouseId);
       const identification = (client.identification ?? '').trim();
       const [existing, accounts] = await Promise.all([
-        identification ? this.client.findContactByIdentification(http, identification) : null,
+        !fixed && identification
+          ? this.client.findContactByIdentification(http, identification)
+          : null,
         this.listBankAccountsCached(warehouseId, http),
       ]);
 
@@ -546,7 +639,9 @@ export class AlegraService {
       // 2. Contacto: si ya existe (por cedula) se usa tal cual (ya tiene su data);
       //    si no, se crea con todos los datos. Alegra exige nameObject + kindOfPerson.
       let clientId: number | string;
-      if (existing?.id != null) {
+      if (fixed) {
+        clientId = Number(fixed.id) || fixed.id;
+      } else if (existing?.id != null) {
         clientId = existing.id;
       } else {
         // La direccion en nomenclatura DIAN (llamada a la IA, lenta) SOLO hace
@@ -680,7 +775,11 @@ export class AlegraService {
     id: number | string;
     name?: string;
     reference?: string | null;
-    price?: number | string | Array<{ price?: number | string; idPriceList?: number | string }> | null;
+    price?:
+      | number
+      | string
+      | Array<{ price?: number | string; idPriceList?: number | string }>
+      | null;
   }): AlegraItem {
     return {
       id: String(raw.id),
@@ -691,7 +790,11 @@ export class AlegraService {
   }
 
   private itemSalePrice(raw: {
-    price?: number | string | Array<{ price?: number | string; idPriceList?: number | string }> | null;
+    price?:
+      | number
+      | string
+      | Array<{ price?: number | string; idPriceList?: number | string }>
+      | null;
   }): string | null {
     const p = raw.price;
     if (p == null) return null;
@@ -711,7 +814,9 @@ export class AlegraService {
           : typeof data === 'string'
             ? data
             : null;
-      return new BadRequestException(msg ? `Alegra: ${msg}` : `${fallback} (HTTP ${err.response?.status ?? '?'})`);
+      return new BadRequestException(
+        msg ? `Alegra: ${msg}` : `${fallback} (HTTP ${err.response?.status ?? '?'})`,
+      );
     }
     return new BadRequestException(fallback);
   }
@@ -764,4 +869,33 @@ export class AlegraService {
     }
     return new BadRequestException(fallback);
   }
+}
+
+/**
+ * Normaliza un contacto crudo de Alegra. Su API devuelve `name` como string o
+ * como {firstName,lastName}, e `identification` como string o {type,number} —
+ * las dos formas conviven segun el tipo de contacto.
+ */
+function toContact(raw: Record<string, unknown>): AlegraContact | null {
+  const id = raw.id;
+  if (id == null) return null;
+
+  const rawName = raw.name;
+  let name = '';
+  if (typeof rawName === 'string') name = rawName;
+  else if (rawName && typeof rawName === 'object') {
+    const n = rawName as { firstName?: unknown; lastName?: unknown };
+    name = [n.firstName, n.lastName].filter((v) => typeof v === 'string' && v).join(' ');
+  }
+  if (!name.trim()) return null;
+
+  const rawId = raw.identification;
+  let identification: string | null = null;
+  if (typeof rawId === 'string' && rawId.trim()) identification = rawId.trim();
+  else if (rawId && typeof rawId === 'object') {
+    const o = rawId as { number?: unknown };
+    if (typeof o.number === 'string' && o.number.trim()) identification = o.number.trim();
+  }
+
+  return { id: String(id), name: name.trim(), identification };
 }

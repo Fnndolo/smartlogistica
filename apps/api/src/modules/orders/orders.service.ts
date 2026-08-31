@@ -1853,12 +1853,17 @@ export class OrdersService {
       throw new BadRequestException('Asigna el pedido a una sede para poder facturar.');
     }
 
+    // A quien factura esta sede en Alegra (null = al comprador). El panel lo
+    // avisa: la factura contable puede ir a otro nombre que el del documento.
+    const billedTo = await this.alegra.getFixedClient(order.warehouseId);
+
     // Si ya se facturo, no preparamos lineas: el front muestra la factura emitida.
     const invoice = await this.existingInvoice(orderId);
     if (invoice) {
       const c = extractInvoiceClient(order);
       return {
         invoice,
+        billedTo,
         lines: [],
         client: {
           name: c.name,
@@ -1879,6 +1884,7 @@ export class OrdersService {
       const client = extractInvoiceClient(order);
       return {
         invoice: null,
+        billedTo,
         lines: order.items.map((i) => ({
           codes: [],
           itemId: i.sku,
@@ -1931,6 +1937,7 @@ export class OrdersService {
     const client = extractInvoiceClient(order);
     return {
       invoice: null,
+      billedTo,
       // Se factura el TOTAL del pedido (envio/recargos incluidos), no solo el
       // valor de los productos: el excedente se reparte entre las lineas.
       lines: prorateToOrderTotal(withVerdict, Number(order.totalValue)),
@@ -2055,18 +2062,52 @@ export class OrdersService {
         // Certificado: si la sede tiene plantilla, la factura se transforma
         // (nunca se envia la factura cruda). Si no hay plantilla, va la original.
         const clientNameRaw = (client.name ?? '').trim().toUpperCase();
-        const certificate = await this.warranty
-          .certificateFor(warehouseId, pdf, {
-            moneda: 'COP',
-            fecha: new Date().toISOString().slice(0, 10),
-            cliente: clientNameRaw,
-            numeroFactura: result.number,
-            // Forma/medio de pago REALES de la factura de Alegra.
-            formaPago: payment.formaPago,
-            medioPago: payment.medioPago,
-          })
-          .catch(() => null);
-        const finalPdf = certificate ?? pdf;
+        // Si la sede factura a un CLIENTE FIJO, el PDF que baja de Alegra lleva
+        // el nombre de ESE contacto. Mandarlo crudo al chat seria enseñarle al
+        // comprador a nombre de quien se facturo de verdad: con cliente fijo la
+        // plantilla es OBLIGATORIA y, si falla, no se adjunta nada.
+        const fixedClient = await this.alegra.getFixedClient(warehouseId).catch(() => null);
+        let finalPdf: Buffer;
+        try {
+          const certificate = await this.warranty.certificateFor(
+            warehouseId,
+            pdf,
+            {
+              moneda: 'COP',
+              fecha: new Date().toISOString().slice(0, 10),
+              // SIEMPRE el comprador: es el que recibe el documento.
+              cliente: clientNameRaw,
+              identificacion: client.identification ?? '',
+              telefono: client.phone ?? '',
+              email: client.email ?? '',
+              direccion: client.address?.street ?? '',
+              ciudad: client.address?.city ?? '',
+              numeroFactura: result.number,
+              // Forma/medio de pago REALES de la factura de Alegra.
+              formaPago: payment.formaPago,
+              medioPago: payment.medioPago,
+            },
+            { required: Boolean(fixedClient) },
+          );
+          finalPdf = certificate ?? pdf;
+        } catch (err) {
+          await prisma.orderMessage.create({
+            data: {
+              orderId,
+              authorId: auth.userId,
+              authorName: displayName(auth),
+              kind: 'system',
+              body:
+                `La factura ${result.number} quedó emitida en Alegra, pero NO se pudo generar el ` +
+                `documento a nombre del cliente, así que no se adjuntó nada (habría salido a nombre ` +
+                `de ${fixedClient?.name ?? 'el cliente fijo'}). Revisa la plantilla del certificado ` +
+                `en los Ajustes de la sede. Detalle: ${(err as Error).message}`.slice(0, 500),
+              imeis: [],
+            },
+          });
+          await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+          return;
+        }
 
         // Nombre del archivo: FACTURA-<NOMBRE CLIENTE EN MAYUSCULA>.
         const clientName = clientNameRaw || `FACTURA ${result.number}`;

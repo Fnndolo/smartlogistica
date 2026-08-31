@@ -2,7 +2,10 @@ import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query } from
 import {
   alegraCredentialsSchema,
   saveSellerPrefSchema,
+  setAlegraFixedClientSchema,
   type AlegraConnectionSummary,
+  type AlegraContact,
+  type AlegraFixedClient,
   type AlegraCredentialsInput,
   type AlegraImeiMatch,
   type AlegraItem,
@@ -10,6 +13,7 @@ import {
   type AlegraSyncResult,
   type AlegraTestResult,
   type SaveSellerPrefInput,
+  type SetAlegraFixedClientInput,
 } from '@smartlogistica/shared';
 
 import { CurrentUser } from '../../../common/decorators/current-user.decorator';
@@ -105,6 +109,38 @@ export class AlegraController {
     @CurrentUser() user: AuthContext,
   ): Promise<{ seller: AlegraSeller | null }> {
     return { seller: await this.alegra.saveSellerPref(warehouseId, body.seller, user) };
+  }
+
+  // === CLIENTE FIJO de la sede ===
+
+  /** A quien factura esta sede (null = a cada comprador, lo de siempre). */
+  @Get('fixed-client')
+  async getFixedClient(
+    @Param('warehouseId') warehouseId: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ client: AlegraFixedClient | null }> {
+    return { client: await this.alegra.getFixedClientFor(warehouseId, user) };
+  }
+
+  /** Fija (o quita, con null) el cliente al que se facturan TODOS los pedidos. */
+  @Put('fixed-client')
+  async setFixedClient(
+    @Param('warehouseId') warehouseId: string,
+    @Body(new ZodValidationPipe(setAlegraFixedClientSchema)) body: SetAlegraFixedClientInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ client: AlegraFixedClient | null }> {
+    return { client: await this.alegra.setFixedClient(warehouseId, body.client, user) };
+  }
+
+  /** Buscador de contactos de Alegra para elegir el cliente fijo. */
+  @Get('contacts')
+  async contacts(
+    @Param('warehouseId') warehouseId: string,
+    @Query('q') q: string | string[] | undefined,
+    @CurrentUser() user: AuthContext,
+  ): Promise<AlegraContact[]> {
+    const one = typeof q === 'string' ? q : Array.isArray(q) ? String(q[0] ?? '') : '';
+    return this.alegra.searchContacts(warehouseId, one.trim().slice(0, 80), user);
   }
 
   /** Sincroniza las facturas de compra al indice por IMEI. Solo admin. */

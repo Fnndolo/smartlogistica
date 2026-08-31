@@ -28,7 +28,8 @@ export class WarrantyService {
    *  que sin este gate leeria la plantilla de cada una. (El uso INTERNO, al
    *  facturar, va por loadTemplate/certificateFor y no pasa por aqui.) */
   async getTemplate(warehouseId: string, auth: AuthContext): Promise<CertificateTemplate | null> {
-    if (!isAdmin(auth)) throw new ForbiddenException('Solo administradores pueden ver la plantilla');
+    if (!isAdmin(auth))
+      throw new ForbiddenException('Solo administradores pueden ver la plantilla');
     await this.assertAccess(warehouseId, auth);
     return this.loadTemplate(warehouseId);
   }
@@ -39,7 +40,8 @@ export class WarrantyService {
     template: CertificateTemplate,
     auth: AuthContext,
   ): Promise<CertificateTemplate> {
-    if (!isAdmin(auth)) throw new ForbiddenException('Solo administradores pueden editar la plantilla');
+    if (!isAdmin(auth))
+      throw new ForbiddenException('Solo administradores pueden editar la plantilla');
     await this.assertAccess(warehouseId, auth);
     const { prisma } = getTenantContext();
     const parsed = certificateTemplateSchema.parse(template);
@@ -69,20 +71,36 @@ export class WarrantyService {
   }
 
   /**
-   * Transforma la factura en Certificado de Garantia aplicando la plantilla de la
-   * sede. Devuelve null si la sede no tiene plantilla (el caller usa la factura cruda).
+   * Transforma la factura en Certificado de Garantia aplicando la plantilla de
+   * la sede. Devuelve null si no hay plantilla (el caller usa la factura cruda).
+   *
+   * `required` = la sede factura a un CLIENTE FIJO. Ahi la factura cruda NO se
+   * puede usar: lleva el nombre de ese contacto y el documento va al comprador.
+   * Con `required` no se devuelve null nunca — o sale la plantilla aplicada, o
+   * se lanza para que el caller decida no adjuntar nada.
    */
   async certificateFor(
     warehouseId: string,
     invoicePdf: Buffer,
     data: Record<string, string>,
+    opts?: { required?: boolean },
   ): Promise<Buffer | null> {
     const template = await this.loadTemplate(warehouseId);
-    if (!template || template.elements.length === 0) return null;
+    if (!template || template.elements.length === 0) {
+      if (opts?.required) {
+        throw new Error(
+          'la sede factura a un cliente fijo pero no tiene plantilla de certificado configurada',
+        );
+      }
+      return null;
+    }
     try {
       return await this.applyTemplate(invoicePdf, template, data);
     } catch (err) {
-      this.logger.warn(`No se pudo aplicar la plantilla del certificado: ${(err as Error).message}`);
+      if (opts?.required) throw err;
+      this.logger.warn(
+        `No se pudo aplicar la plantilla del certificado: ${(err as Error).message}`,
+      );
       return null;
     }
   }
@@ -135,7 +153,13 @@ export class WarrantyService {
           const safe = sanitize(line);
           if (safe) {
             try {
-              page.drawText(safe, { x: el.x, y: yy, size: el.size, color: rgb(c.r, c.g, c.b), font });
+              // Si el elemento declara ancho, la letra se ENCOGE hasta caber:
+              // sin esto un nombre largo se sale del hueco y pisa lo de al lado.
+              let size = el.size;
+              if (el.maxWidth) {
+                while (size > 5.5 && font.widthOfTextAtSize(safe, size) > el.maxWidth) size -= 0.25;
+              }
+              page.drawText(safe, { x: el.x, y: yy, size, color: rgb(c.r, c.g, c.b), font });
             } catch {
               /* char no soportado por WinAnsi -> se omite la linea */
             }
@@ -172,14 +196,27 @@ function fillPlaceholders(text: string, data: Record<string, string>): string {
   return text.replace(/\{(\w+)\}/g, (_, k: string) => data[k] ?? '');
 }
 
-/** Quita caracteres de control / reemplazo que romperian pdf-lib (WinAnsi). */
+/**
+ * Deja solo lo que las fuentes estandar (WinAnsi) saben dibujar.
+ *
+ * Antes solo quitaba controles, y cualquier otro caracter hacia que `drawText`
+ * lanzara: el catch se comia la LINEA ENTERA y donde iba el nombre del cliente
+ * quedaba un hueco en blanco, en silencio. Ahora se prueba el caracter tal cual
+ * (para conservar N-tilde y las tildes, que si son WinAnsi) y, si no lo es, se
+ * translitera; lo intransliterable se cae caracter a caracter.
+ */
 function sanitize(text: string): string {
   let out = '';
   for (const ch of text) {
     const code = ch.codePointAt(0) ?? 0;
     if (code === 0xfffd) continue; // caracter de reemplazo Unicode
     if (code < 0x20 || code === 0x7f) continue; // caracteres de control
-    out += ch;
+    if (code <= 0xff) {
+      out += ch; // WinAnsi cubre latin-1: acentos y N-tilde entran aqui
+      continue;
+    }
+    const plain = ch.normalize('NFD').replace(/[̀-ͯ]/g, '');
+    if (plain !== ch && [...plain].every((k) => (k.codePointAt(0) ?? 0) <= 0xff)) out += plain;
   }
   return out.trim();
 }

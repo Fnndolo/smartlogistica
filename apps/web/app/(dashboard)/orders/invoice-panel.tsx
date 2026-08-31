@@ -120,7 +120,10 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
     setLines((prev) => {
       if (prev === null) return fromPreview;
       const codesOf = (text: string) =>
-        text.split(/[\s,]+/).map((c) => c.trim()).filter(Boolean);
+        text
+          .split(/[\s,]+/)
+          .map((c) => c.trim())
+          .filter(Boolean);
       const have = new Set(prev.flatMap((p) => codesOf(p.codesText)));
       // Lineas del preview cuyos codigos NO estan todavia (fotos nuevas).
       const missing = fromPreview.filter((l) => {
@@ -136,8 +139,7 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
         const match = fromPreview.find((f) => f.codesText === p.codesText);
         return match && match.mismatch !== p.mismatch ? { ...p, mismatch: match.mismatch } : p;
       });
-      const changed =
-        missing.length > 0 || enriched.some((p, i) => p !== prev[i]);
+      const changed = missing.length > 0 || enriched.some((p, i) => p !== prev[i]);
       return changed ? [...enriched, ...missing] : prev;
     });
   }, [preview]);
@@ -172,7 +174,14 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
   const addLine = () =>
     setLines((ls) => [
       ...(ls ?? []),
-      { key: `m-${Date.now()}`, codesText: '', itemId: null, productName: null, price: '', quantity: 1 },
+      {
+        key: `m-${Date.now()}`,
+        codesText: '',
+        itemId: null,
+        productName: null,
+        price: '',
+        quantity: 1,
+      },
     ]);
 
   const current = lines ?? [];
@@ -190,7 +199,9 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
   const paidTotal = filledPayments.reduce((s, p) => s + Number(p.amount), 0);
   const paymentsValid =
     !manual ||
-    (payments.every((p) => (!p.accountId && !(Number(p.amount) > 0)) || (p.accountId && Number(p.amount) > 0)) &&
+    (payments.every(
+      (p) => (!p.accountId && !(Number(p.amount) > 0)) || (p.accountId && Number(p.amount) > 0),
+    ) &&
       paidTotal <= total + 0.01);
 
   const canInvoice =
@@ -201,7 +212,10 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
   /** Lineas listas para el API. Descripcion = solo el/los codigo(s), uno por linea. */
   const buildLines = () =>
     current.map((l) => {
-      const codes = l.codesText.split(/[,\s\n]+/).map((s) => s.trim()).filter(Boolean);
+      const codes = l.codesText
+        .split(/[,\s\n]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
       return {
         itemId: l.itemId!,
         price: Number(l.price),
@@ -260,11 +274,11 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
   // dato obligatorio hay que pasar por la pestana Guia y completarlo/verificarlo.
   const guideReady = Boolean(
     recip &&
-      recip.name.trim().length >= 2 &&
-      recip.address.trim().length >= 3 &&
-      recip.document &&
-      recip.cityCode &&
-      recip.phone,
+    recip.name.trim().length >= 2 &&
+    recip.address.trim().length >= 3 &&
+    recip.document &&
+    recip.cityCode &&
+    recip.phone,
   );
 
   const processAll = useMutation({
@@ -357,7 +371,9 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
               etiqueta arriba, el valor debajo) en vez de desbordarse. */}
           <dl className="grid grid-cols-1 [&>dd:last-of-type]:pb-0 [&>dd]:pb-2.5 min-[400px]:grid-cols-[110px_minmax(0,1fr)] min-[400px]:gap-y-[9px] min-[400px]:[&>dd]:pb-0 md:grid-cols-[130px_minmax(0,1fr)]">
             <dt className="min-w-0 self-start break-words font-semibold text-hint">Facturar a</dt>
-            <dd className="flex min-w-0 flex-wrap items-center gap-2 break-words font-semibold">{preview?.client.name}</dd>
+            <dd className="flex min-w-0 flex-wrap items-center gap-2 break-words font-semibold">
+              {preview?.client.name}
+            </dd>
 
             <dt className="min-w-0 self-start break-words font-semibold text-hint">Cédula</dt>
             <dd className="flex min-w-0 flex-wrap items-center gap-2 break-words font-semibold">
@@ -401,13 +417,29 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
             ) : null}
             {preview?.client.address ? (
               <>
-                <dt className="min-w-0 self-start break-words font-semibold text-hint">Dirección</dt>
+                <dt className="min-w-0 self-start break-words font-semibold text-hint">
+                  Dirección
+                </dt>
                 <dd className="flex min-w-0 flex-wrap items-center gap-2 break-words font-semibold">
                   {preview.client.address}
                 </dd>
               </>
             ) : null}
           </dl>
+
+          {/* La sede factura a un CLIENTE FIJO: hay que decirlo aqui o el
+              operador no entiende por que la factura de Alegra sale a otro
+              nombre. El documento del chat si va al del comprador. */}
+          {preview?.billedTo ? (
+            <p className="mt-3 flex items-start gap-2.5 rounded-xl bg-amber-500/10 px-3.5 py-[11px] text-[12.5px] leading-[1.45] text-amber-600 dark:text-amber-400">
+              <AlertTriangle className="mt-px h-[15px] w-[15px] shrink-0" aria-hidden />
+              <span className="min-w-0 break-words">
+                En Alegra se factura a <b>{preview.billedTo.name}</b>
+                {preview.billedTo.identification ? ` (${preview.billedTo.identification})` : ''}. El
+                documento que se envía al chat sí lleva el nombre del comprador.
+              </span>
+            </p>
+          ) : null}
         </div>
       </section>
 
@@ -489,134 +521,136 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
           </div>
 
           <div className="space-y-3 rounded-[14px] border border-border bg-surface px-4 py-3.5">
-          {payments.map((p, i) => (
-            <div
-              key={p.key}
-              className={cn('space-y-2.5', i > 0 && 'border-t border-dashed border-input pt-3')}
-            >
-              <div className="flex items-end gap-2.5">
-                <div className="min-w-0 flex-1">
-                  {i === 0 ? (
-                    <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-[0.06em] text-hint">
-                      Cuenta
-                    </span>
-                  ) : null}
-                  <div className="relative">
-                    <select
-                      aria-label="Cuenta de Alegra"
-                      value={p.accountId}
+            {payments.map((p, i) => (
+              <div
+                key={p.key}
+                className={cn('space-y-2.5', i > 0 && 'border-t border-dashed border-input pt-3')}
+              >
+                <div className="flex items-end gap-2.5">
+                  <div className="min-w-0 flex-1">
+                    {i === 0 ? (
+                      <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-[0.06em] text-hint">
+                        Cuenta
+                      </span>
+                    ) : null}
+                    <div className="relative">
+                      <select
+                        aria-label="Cuenta de Alegra"
+                        value={p.accountId}
+                        onChange={(e) =>
+                          setPayments((ps) =>
+                            ps.map((x) =>
+                              x.key === p.key ? { ...x, accountId: e.target.value } : x,
+                            ),
+                          )
+                        }
+                        className="h-[38px] w-full min-w-0 max-w-full appearance-none rounded-[10px] border border-input bg-card px-3 pr-8 text-[13.5px] text-foreground outline-none transition-colors hover:border-accent focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none max-md:h-[42px]"
+                      >
+                        <option value="">Cuenta de Alegra...</option>
+                        {accounts.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.name}
+                          </option>
+                        ))}
+                      </select>
+                      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-hint" />
+                    </div>
+                  </div>
+                  <div className="w-24 shrink-0 min-[400px]:w-28">
+                    {i === 0 ? (
+                      <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-[0.06em] text-hint">
+                        Valor
+                      </span>
+                    ) : null}
+                    <Input
+                      aria-label="Valor del pago"
+                      inputMode="numeric"
+                      value={p.amount}
                       onChange={(e) =>
                         setPayments((ps) =>
-                          ps.map((x) => (x.key === p.key ? { ...x, accountId: e.target.value } : x)),
+                          ps.map((x) =>
+                            x.key === p.key
+                              ? { ...x, amount: e.target.value.replace(/[^\d.]/g, '') }
+                              : x,
+                          ),
                         )
                       }
-                      className="h-[38px] w-full min-w-0 max-w-full appearance-none rounded-[10px] border border-input bg-card px-3 pr-8 text-[13.5px] text-foreground outline-none transition-colors hover:border-accent focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none max-md:h-[42px]"
-                    >
-                      <option value="">Cuenta de Alegra...</option>
-                      {accounts.map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {a.name}
-                        </option>
-                      ))}
-                    </select>
-                    <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-hint" />
+                      placeholder="Valor"
+                      className="h-[38px] rounded-[10px] border-input bg-card text-[13.5px] font-semibold tabular-nums shadow-none transition-colors placeholder:text-hint hover:border-accent motion-reduce:transition-none max-md:h-[42px]"
+                    />
                   </div>
+                  {payments.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={() => setPayments((ps) => ps.filter((x) => x.key !== p.key))}
+                      className={cn(
+                        'grid h-[38px] w-[38px] shrink-0 place-items-center rounded-[10px] border border-input bg-card text-hint transition-colors hover:border-destructive hover:text-destructive motion-reduce:transition-none max-md:h-[42px] max-md:w-[42px]',
+                        FOCUS_RING,
+                      )}
+                      aria-label="Quitar pago"
+                    >
+                      <Trash2 className="h-[15px] w-[15px]" />
+                    </button>
+                  ) : null}
                 </div>
-                <div className="w-24 shrink-0 min-[400px]:w-28">
+
+                <div>
                   {i === 0 ? (
                     <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-[0.06em] text-hint">
-                      Valor
+                      Medio
                     </span>
                   ) : null}
-                  <Input
-                    aria-label="Valor del pago"
-                    inputMode="numeric"
-                    value={p.amount}
-                    onChange={(e) =>
-                      setPayments((ps) =>
-                        ps.map((x) =>
-                          x.key === p.key
-                            ? { ...x, amount: e.target.value.replace(/[^\d.]/g, '') }
-                            : x,
-                        ),
-                      )
-                    }
-                    placeholder="Valor"
-                    className="h-[38px] rounded-[10px] border-input bg-card text-[13.5px] font-semibold tabular-nums shadow-none transition-colors placeholder:text-hint hover:border-accent motion-reduce:transition-none max-md:h-[42px]"
-                  />
-                </div>
-                {payments.length > 1 ? (
-                  <button
-                    type="button"
-                    onClick={() => setPayments((ps) => ps.filter((x) => x.key !== p.key))}
-                    className={cn(
-                      'grid h-[38px] w-[38px] shrink-0 place-items-center rounded-[10px] border border-input bg-card text-hint transition-colors hover:border-destructive hover:text-destructive motion-reduce:transition-none max-md:h-[42px] max-md:w-[42px]',
-                      FOCUS_RING,
-                    )}
-                    aria-label="Quitar pago"
-                  >
-                    <Trash2 className="h-[15px] w-[15px]" />
-                  </button>
-                ) : null}
-              </div>
-
-              <div>
-                {i === 0 ? (
-                  <span className="mb-1.5 block text-[11px] font-bold uppercase tracking-[0.06em] text-hint">
-                    Medio
-                  </span>
-                ) : null}
-                <div className="flex flex-wrap gap-2" role="group" aria-label="Medio de pago">
-                  {PAYMENT_METHODS.map((m) => (
-                    <button
-                      key={m.value}
-                      type="button"
-                      aria-pressed={p.method === m.value}
-                      onClick={() =>
-                        setPayments((ps) =>
-                          ps.map((x) => (x.key === p.key ? { ...x, method: m.value } : x)),
-                        )
-                      }
-                      className={cn(
-                        'rounded-full border px-[15px] py-[7px] text-[12.5px] font-bold transition-all [transition-duration:130ms] motion-reduce:transition-none max-md:min-h-[40px] max-md:px-4',
-                        FOCUS_RING,
-                        p.method === m.value
-                          ? 'border-accent bg-accent text-accent-foreground shadow-[0_4px_12px_-4px_hsl(var(--accent)/0.35)]'
-                          : 'border-input bg-card text-muted-foreground hover:border-accent hover:text-accent',
-                      )}
-                    >
-                      {m.label}
-                    </button>
-                  ))}
+                  <div className="flex flex-wrap gap-2" role="group" aria-label="Medio de pago">
+                    {PAYMENT_METHODS.map((m) => (
+                      <button
+                        key={m.value}
+                        type="button"
+                        aria-pressed={p.method === m.value}
+                        onClick={() =>
+                          setPayments((ps) =>
+                            ps.map((x) => (x.key === p.key ? { ...x, method: m.value } : x)),
+                          )
+                        }
+                        className={cn(
+                          'rounded-full border px-[15px] py-[7px] text-[12.5px] font-bold transition-all [transition-duration:130ms] motion-reduce:transition-none max-md:min-h-[40px] max-md:px-4',
+                          FOCUS_RING,
+                          p.method === m.value
+                            ? 'border-accent bg-accent text-accent-foreground shadow-[0_4px_12px_-4px_hsl(var(--accent)/0.35)]'
+                            : 'border-input bg-card text-muted-foreground hover:border-accent hover:text-accent',
+                        )}
+                      >
+                        {m.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            ))}
 
-          {paidTotal > total + 0.01 ? (
-            <p className="flex items-start gap-2.5 rounded-xl bg-destructive/10 px-3.5 py-[11px] text-[12.5px] leading-[1.45] tabular-nums text-destructive">
-              <AlertTriangle className="mt-px h-[15px] w-[15px] shrink-0" />
-              <span>
-                Los pagos ({formatCOP(paidTotal)}) superan el total ({formatCOP(total)}).
-              </span>
-            </p>
-          ) : total - paidTotal > 0.01 ? (
-            <p className="flex items-start gap-2.5 rounded-xl bg-amber-500/10 px-3.5 py-[11px] text-[12.5px] leading-[1.45] tabular-nums text-amber-600 dark:text-amber-400">
-              <AlertTriangle className="mt-px h-[15px] w-[15px] shrink-0" />
-              <span>
-                Pagado {formatCOP(paidTotal)} de {formatCOP(total)} · quedan{' '}
-                <b className="font-extrabold">{formatCOP(total - paidTotal)}</b> — la factura sale
-                abierta por ese saldo (ej. recaudo contraentrega).
-              </span>
-            </p>
-          ) : (
-            <p className="flex items-start gap-2.5 rounded-xl bg-emerald-500/10 px-3.5 py-[11px] text-[12.5px] leading-[1.45] tabular-nums text-emerald-600 dark:text-emerald-400">
-              <CheckCircle2 className="mt-px h-[15px] w-[15px] shrink-0" />
-              <span>
-                Pagado {formatCOP(paidTotal)} de {formatCOP(total)} · queda cerrada/cobrada.
-              </span>
-            </p>
-          )}
+            {paidTotal > total + 0.01 ? (
+              <p className="flex items-start gap-2.5 rounded-xl bg-destructive/10 px-3.5 py-[11px] text-[12.5px] leading-[1.45] tabular-nums text-destructive">
+                <AlertTriangle className="mt-px h-[15px] w-[15px] shrink-0" />
+                <span>
+                  Los pagos ({formatCOP(paidTotal)}) superan el total ({formatCOP(total)}).
+                </span>
+              </p>
+            ) : total - paidTotal > 0.01 ? (
+              <p className="flex items-start gap-2.5 rounded-xl bg-amber-500/10 px-3.5 py-[11px] text-[12.5px] leading-[1.45] tabular-nums text-amber-600 dark:text-amber-400">
+                <AlertTriangle className="mt-px h-[15px] w-[15px] shrink-0" />
+                <span>
+                  Pagado {formatCOP(paidTotal)} de {formatCOP(total)} · quedan{' '}
+                  <b className="font-extrabold">{formatCOP(total - paidTotal)}</b> — la factura sale
+                  abierta por ese saldo (ej. recaudo contraentrega).
+                </span>
+              </p>
+            ) : (
+              <p className="flex items-start gap-2.5 rounded-xl bg-emerald-500/10 px-3.5 py-[11px] text-[12.5px] leading-[1.45] tabular-nums text-emerald-600 dark:text-emerald-400">
+                <CheckCircle2 className="mt-px h-[15px] w-[15px] shrink-0" />
+                <span>
+                  Pagado {formatCOP(paidTotal)} de {formatCOP(total)} · queda cerrada/cobrada.
+                </span>
+              </p>
+            )}
           </div>
         </section>
       ) : null}
@@ -773,7 +807,10 @@ function LineRow({
   // Al editar los codigos, re-buscar el producto con el primero (los de una foto
   // son el mismo equipo). Los codigos de una misma foto van juntos en la descripcion.
   const relookup = async () => {
-    const first = line.codesText.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean)[0];
+    const first = line.codesText
+      .split(/[,\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)[0];
     if (!first) {
       onPatch({ itemId: null, productName: null });
       return;
@@ -937,8 +974,8 @@ function LineRow({
           <div className="mt-[9px] flex items-start gap-2.5 rounded-xl bg-amber-500/10 px-3.5 py-[11px] text-[12.5px] leading-[1.45] text-amber-600 dark:text-amber-400">
             <AlertTriangle className="mt-px h-[15px] w-[15px] shrink-0" />
             <span className="min-w-0 break-words">
-              <b>Aviso de la IA:</b> el IMEI corresponde a «{line.mismatch.found}» y el pedido dice «
-              {line.mismatch.expected}».{line.mismatch.note ? ` ${line.mismatch.note}.` : ''}{' '}
+              <b>Aviso de la IA:</b> el IMEI corresponde a «{line.mismatch.found}» y el pedido dice
+              «{line.mismatch.expected}».{line.mismatch.note ? ` ${line.mismatch.note}.` : ''}{' '}
               Verifica antes de facturar (puedes facturar igual).
             </span>
           </div>
@@ -990,7 +1027,8 @@ function ItemPicker({
   const [q, setQ] = useState('');
   const { data: items = [], isFetching } = useQuery({
     queryKey: ['alegra-items', orderId, q.trim()],
-    queryFn: () => api.get<AlegraItem[]>(`/v1/orders/${orderId}/alegra-items?q=${encodeURIComponent(q.trim())}`),
+    queryFn: () =>
+      api.get<AlegraItem[]>(`/v1/orders/${orderId}/alegra-items?q=${encodeURIComponent(q.trim())}`),
     enabled: q.trim().length >= 2,
     staleTime: 30_000,
   });

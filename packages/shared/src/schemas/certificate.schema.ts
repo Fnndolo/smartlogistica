@@ -28,6 +28,10 @@ export const certificateElementSchema = z.discriminatedUnion('type', [
     size: z.number().positive().max(72).default(9),
     bold: z.boolean().default(false),
     color: z.string().default('#000000'),
+    /** Ancho util en puntos. Si el texto no cabe, la letra se encoge hasta que
+     *  quepa en vez de invadir lo que hay al lado. Vacio = sin limite (como
+     *  siempre): las plantillas que ya existen no cambian. */
+    maxWidth: z.number().positive().optional(),
   }),
 ]);
 export type CertificateElement = z.infer<typeof certificateElementSchema>;

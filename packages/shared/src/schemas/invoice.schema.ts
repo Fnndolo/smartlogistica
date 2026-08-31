@@ -57,6 +57,33 @@ export const existingInvoiceSchema = z.object({
 export type ExistingInvoice = z.infer<typeof existingInvoiceSchema>;
 
 /** Preview de factura: cliente completo (del pedido) + una linea por foto. */
+/**
+ * CLIENTE FIJO de Alegra de una sede: si esta configurado, todas las facturas
+ * de esa sede se emiten en Alegra a su nombre (es lo contable). El comprador no
+ * cambia en ningun otro sitio: la guia, el chat y el documento que se le envia
+ * siguen siendo suyos.
+ */
+export const alegraFixedClientSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  identification: z.string().nullable().default(null),
+});
+export type AlegraFixedClient = z.infer<typeof alegraFixedClientSchema>;
+
+/** Un contacto de Alegra en el buscador del cliente fijo. */
+export const alegraContactSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  identification: z.string().nullable().default(null),
+});
+export type AlegraContact = z.infer<typeof alegraContactSchema>;
+
+/** Fijar (o quitar, con null) el cliente al que factura una sede. */
+export const setAlegraFixedClientSchema = z.object({
+  client: alegraFixedClientSchema.nullable(),
+});
+export type SetAlegraFixedClientInput = z.infer<typeof setAlegraFixedClientSchema>;
+
 export const invoicePreviewSchema = z.object({
   client: z.object({
     name: z.string(),
@@ -66,6 +93,10 @@ export const invoicePreviewSchema = z.object({
     address: z.string().nullable(),
   }),
   lines: z.array(invoiceLinePreviewSchema),
+  /** Cliente FIJO de la sede (null = se factura al comprador, lo de siempre).
+   *  Se muestra en el panel para que nadie se lleve la sorpresa: la factura
+   *  contable sale a su nombre, el documento del chat al del comprador. */
+  billedTo: alegraFixedClientSchema.nullable().default(null),
   // Si el pedido ya se facturo, aqui va la factura -> el front no deja re-facturar.
   invoice: existingInvoiceSchema.nullable(),
 });

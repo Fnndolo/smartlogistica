@@ -32,6 +32,11 @@ model Warehouse {
   // width, length}]. Como los "empaques" del portal de Coordinadora (su API no
   // los expone), pero configurados por sede aqui.
   packagePresets Json?
+  // CLIENTE FIJO de Alegra: si esta puesto, TODAS las facturas de esta sede se
+  // emiten en Alegra a este contacto ({id, name, identification}), en vez de al
+  // comprador. Ojo: el documento que se le manda al comprador por el chat sigue
+  // llevando SU nombre — eso lo resuelve la plantilla del certificado.
+  alegraFixedClient Json?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

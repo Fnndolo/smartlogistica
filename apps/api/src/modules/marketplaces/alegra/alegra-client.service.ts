@@ -66,7 +66,9 @@ export class AlegraClient {
    * Alegra expone). 200 => validas; 401 => rechazadas. Devuelve el nombre de la
    * empresa para mostrarlo como confirmacion en la UI.
    */
-  async testCredentials(creds: AlegraCredentialsRaw): Promise<{ ok: true; companyName: string | null }> {
+  async testCredentials(
+    creds: AlegraCredentialsRaw,
+  ): Promise<{ ok: true; companyName: string | null }> {
     const http = this.buildHttp(creds);
     const res = await http.get<AlegraCompanyResponse>('/company');
     return { ok: true, companyName: res.data?.name ?? null };
@@ -117,7 +119,9 @@ export class AlegraClient {
   }
 
   /** Vendedores guardados en Alegra (para elegir el vendedor de la factura). */
-  async listSellers(http: AxiosInstance): Promise<Array<{ id: number | string; name: string; status?: string }>> {
+  async listSellers(
+    http: AxiosInstance,
+  ): Promise<Array<{ id: number | string; name: string; status?: string }>> {
     const res = await http.get('/sellers', { params: { limit: 30 } });
     return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
   }
@@ -151,6 +155,35 @@ export class AlegraClient {
     const res = await http.get('/contacts', { params: { identification, limit: 1 } });
     const list = Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
     return list[0] ?? null;
+  }
+
+  /**
+   * Busca contactos por texto (nombre o identificacion) para el selector del
+   * CLIENTE FIJO de la sede. `query` es el mismo parametro que ya usamos con
+   * exito en /items; si Alegra lo ignorara en /contacts devolveria los primeros
+   * sin filtrar, y el filtro de respaldo del servicio lo corrige.
+   */
+  async searchContacts(
+    http: AxiosInstance,
+    query: string,
+  ): Promise<Array<Record<string, unknown>>> {
+    const res = await http.get('/contacts', {
+      params: { ...(query ? { query } : {}), limit: 30, order_direction: 'ASC' },
+    });
+    return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
+  }
+
+  /** Un contacto por id (para releer el cliente fijo guardado). */
+  async getContact(
+    http: AxiosInstance,
+    id: string | number,
+  ): Promise<Record<string, unknown> | null> {
+    try {
+      const res = await http.get(`/contacts/${encodeURIComponent(String(id))}`);
+      return (res.data ?? null) as Record<string, unknown> | null;
+    } catch {
+      return null;
+    }
   }
 
   async createContact(
@@ -208,7 +241,11 @@ export interface AlegraRawItem {
   name?: string;
   reference?: string | null;
   // price puede ser numero, string, o array de listas de precio.
-  price?: number | string | Array<{ price?: number | string; idPriceList?: number | string }> | null;
+  price?:
+    | number
+    | string
+    | Array<{ price?: number | string; idPriceList?: number | string }>
+    | null;
 }
 
 export interface AlegraInvoiceResult {
@@ -226,7 +263,12 @@ export interface AlegraInvoiceResult {
 export interface AlegraContactPayload {
   name: string;
   // Alegra exige nameObject para personas (PERSON_ENTITY).
-  nameObject?: { firstName: string; secondName?: string; lastName: string; secondLastName?: string };
+  nameObject?: {
+    firstName: string;
+    secondName?: string;
+    lastName: string;
+    secondLastName?: string;
+  };
   identification?: string | null;
   identificationObject?: { type: string; number: string };
   kindOfPerson?: string;
