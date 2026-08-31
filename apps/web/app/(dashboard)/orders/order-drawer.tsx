@@ -38,6 +38,7 @@ import {
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { DEFAULT_VTEX_FEES, vtexNetValue, type VtexFees } from '@smartlogistica/shared';
 import type {
   CatalogMatch,
   DevicePhotoKind,
@@ -748,6 +749,14 @@ function DetalleTab({
   onDeleted?: () => void;
 }) {
   const items = detail?.items ?? order.items;
+  // Comisiones de VTEX (globales, configurables en Ajustes): alimentan el
+  // "neto" que se despliega al tocar un precio unitario.
+  const { data: fees = DEFAULT_VTEX_FEES } = useQuery({
+    queryKey: ['vtex-fees'],
+    queryFn: () => api.get<VtexFees>('/v1/vtex-fees'),
+    staleTime: 5 * 60_000,
+    enabled: order.provider === 'vtex',
+  });
   const external = !order.warehouseId && order.status !== 'ready-for-handling';
   const me = useCurrentUser();
   const isAdminRole = isAdmin(me?.role);
@@ -850,9 +859,13 @@ function DetalleTab({
                 <p className="text-[15px] font-extrabold tabular-nums tracking-[-0.01em]">
                   {formatCurrency(lineTotal(item.unitPrice, item.quantity), order.currency)}
                 </p>
-                <p className="text-[11px] tabular-nums text-hint">
-                  {item.quantity} &times; {formatCurrency(item.unitPrice, order.currency)}
-                </p>
+                <UnitPrice
+                  unitPrice={item.unitPrice}
+                  quantity={item.quantity}
+                  currency={order.currency}
+                  // El neto solo tiene sentido en VTEX: es su comision.
+                  fees={order.provider === 'vtex' ? fees : null}
+                />
               </div>
             </div>
           ))}
@@ -872,7 +885,9 @@ function DetalleTab({
           <SectionTitle
             icon={Truck}
             hint={
-              order.guideNumber ? (
+              order.shippingProvider === 'domicilio' ? (
+                'entrega a domicilio · sin rastreo'
+              ) : order.guideNumber ? (
                 <>
                   rastreo Coordinadora · guía{' '}
                   <span className="font-mono text-[0.92em] tracking-[0.02em]">
@@ -938,6 +953,16 @@ function ProductThumb({ src }: { src: string | null }) {
 
 /** Los 6 tramos del recorrido del pedido (mockup .route). */
 const ROUTE_LEGS = ['Pedido', 'Facturado', 'Guía', 'Origen', 'Reparto', 'Entregado'] as const;
+/** Mismos 6 tramos para el DOMICILIO propio, donde no hay guía ni terminales:
+ *  el documento es el soporte y el trayecto lo hace el mensajero. */
+const ROUTE_LEGS_DOM = [
+  'Pedido',
+  'Facturado',
+  'Soporte',
+  'Despacho',
+  'Reparto',
+  'Entregado',
+] as const;
 
 /**
  * Tramo ACTUAL (1..6): se lee del rastreo de Coordinadora cuando lo hay y, si
@@ -966,7 +991,8 @@ function routeStep(order: OrderSummary): number {
  */
 function ShipRoute({ order }: { order: OrderSummary }) {
   const step = routeStep(order);
-  const delivered = step === ROUTE_LEGS.length;
+  const legs = order.shippingProvider === 'domicilio' ? ROUTE_LEGS_DOM : ROUTE_LEGS;
+  const delivered = step === legs.length;
   return (
     /* Los 6 tramos necesitan ~55px cada uno para que la etiqueta («Entregado»)
        quepa en una linea. Por debajo de eso NO se estrujan ni se salen de la
@@ -976,7 +1002,7 @@ function ShipRoute({ order }: { order: OrderSummary }) {
         className="flex min-w-[330px] items-start px-[2px] pb-[2px] pt-1.5"
         title={order.shippingStatus ?? undefined}
       >
-        {ROUTE_LEGS.map((label, i) => {
+        {legs.map((label, i) => {
           const n = i + 1;
           const done = n < step || delivered;
           const now = n === step && !delivered;
@@ -1082,8 +1108,8 @@ function DeleteOrderZone({ order, onDeleted }: { order: OrderSummary; onDeleted?
                       ¿Eliminar el pedido {order.externalId}?
                     </h3>
                     <p className="mt-1.5 text-[12.5px] leading-relaxed text-muted-foreground">
-                      Se perderá <b className="text-foreground">todo</b>: la conversación, las fotos,
-                      los documentos y la actividad. Esta acción{' '}
+                      Se perderá <b className="text-foreground">todo</b>: la conversación, las
+                      fotos, los documentos y la actividad. Esta acción{' '}
                       <b className="text-foreground">no se puede deshacer</b>.
                     </p>
                   </div>
@@ -1180,7 +1206,9 @@ function ConversacionTab({
   // Responder/citar: el mensaje al que voy a responder (barra sobre el composer).
   const [replyTo, setReplyTo] = useState<OrderMessage | null>(null);
   // Picker de emojis abierto para un mensaje (con el punto donde se abrio).
-  const [pickerFor, setPickerFor] = useState<{ messageId: string; x: number; y: number } | null>(null);
+  const [pickerFor, setPickerFor] = useState<{ messageId: string; x: number; y: number } | null>(
+    null,
+  );
   // Acciones ancladas al mensaje long-presseado (el hover no existe en tactil).
   const [mobileActionsFor, setMobileActionsFor] = useState<string | null>(null);
   // "Esta escribiendo...": usuarios con señal viva (expira a los 4s).
@@ -1263,9 +1291,12 @@ function ConversacionTab({
       void qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
     }, 600);
   }, [qc, orderId]);
-  useEffect(() => () => {
-    if (reconcileTimer.current) clearTimeout(reconcileTimer.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (reconcileTimer.current) clearTimeout(reconcileTimer.current);
+    },
+    [],
+  );
 
   useOrdersStream(
     useCallback(
@@ -1374,7 +1405,8 @@ function ConversacionTab({
   ];
   const { data: matchList = [] } = useQuery({
     queryKey: ['catalog', orderId, photoCodes.slice().sort().join(',')],
-    queryFn: () => api.post<CatalogMatch[]>(`/v1/orders/${orderId}/catalog-lookup`, { codes: photoCodes }),
+    queryFn: () =>
+      api.post<CatalogMatch[]>(`/v1/orders/${orderId}/catalog-lookup`, { codes: photoCodes }),
     enabled: photoCodes.length > 0,
     staleTime: 60_000,
   });
@@ -1446,9 +1478,12 @@ function ConversacionTab({
       });
     }, 2500);
   }, []);
-  useEffect(() => () => {
-    if (jumpIdleTimer.current) clearTimeout(jumpIdleTimer.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (jumpIdleTimer.current) clearTimeout(jumpIdleTimer.current);
+    },
+    [],
+  );
 
   // Teclado del celular: cuando el viewport visual cambia (se abre/cierra el
   // teclado) y estaba en el fondo, mantener el ultimo mensaje a la vista.
@@ -1596,7 +1631,12 @@ function ConversacionTab({
             reactions = m.reactions
               .map((r) =>
                 r.emoji === emoji
-                  ? { ...r, count: r.count - 1, mine: false, users: r.users.filter((u) => u !== myName) }
+                  ? {
+                      ...r,
+                      count: r.count - 1,
+                      mine: false,
+                      users: r.users.filter((u) => u !== myName),
+                    }
                   : r,
               )
               .filter((r) => r.count > 0);
@@ -1796,9 +1836,7 @@ function ConversacionTab({
       void compressImage(it.file)
         .then((compact) => {
           const compactUrl = URL.createObjectURL(compact);
-          setStaged((s) =>
-            s.map((x) => (x.id === it.id ? { ...x, compact, compactUrl } : x)),
-          );
+          setStaged((s) => s.map((x) => (x.id === it.id ? { ...x, compact, compactUrl } : x)));
         })
         .catch(() => undefined);
     }
@@ -2052,46 +2090,50 @@ function ConversacionTab({
                     <span className="h-px flex-1 rounded bg-accent/30" />
                   </div>
                 ) : null}
-              <MessageBubble
-                message={m}
-                mine={m.authorId === me?.id}
-                grouped={grouped}
-                groupedWithNext={groupedWithNext}
-                quoted={
-                  m.replyToId ? (messages.find((x) => x.id === m.replyToId) ?? null) : undefined
-                }
-                matchByCode={matchByCode}
-                members={members}
-                canDelete={!isTemp && m.kind !== 'system' && (m.authorId === me?.id || canModerate)}
-                onDelete={() => setConfirmDelete([m.id])}
-                onReply={
-                  !isTemp && m.kind !== 'system'
-                    ? () => {
-                        setReplyTo(m);
-                        closeActions();
-                      }
-                    : undefined
-                }
-                onReact={
-                  !isTemp && m.kind !== 'system'
-                    ? (e) => setPickerFor({ messageId: m.id, x: e.clientX, y: e.clientY })
-                    : undefined
-                }
-                onToggleReaction={(emoji) => {
-                  react.mutate({ messageId: m.id, emoji });
-                  closeActions();
-                }}
-                onLongPress={!isTemp && m.kind !== 'system' ? () => onBubbleLongPress(m) : undefined}
-                actionsOpen={mobileActionsFor === m.id}
-                hoverActions={hoverCapable}
-                flash={flashId === m.id}
-                onDoubleTap={
-                  !isTemp && m.kind === 'text'
-                    ? () => react.mutate({ messageId: m.id, emoji: '👍' })
-                    : undefined
-                }
-                onPreview={openPreview}
-              />
+                <MessageBubble
+                  message={m}
+                  mine={m.authorId === me?.id}
+                  grouped={grouped}
+                  groupedWithNext={groupedWithNext}
+                  quoted={
+                    m.replyToId ? (messages.find((x) => x.id === m.replyToId) ?? null) : undefined
+                  }
+                  matchByCode={matchByCode}
+                  members={members}
+                  canDelete={
+                    !isTemp && m.kind !== 'system' && (m.authorId === me?.id || canModerate)
+                  }
+                  onDelete={() => setConfirmDelete([m.id])}
+                  onReply={
+                    !isTemp && m.kind !== 'system'
+                      ? () => {
+                          setReplyTo(m);
+                          closeActions();
+                        }
+                      : undefined
+                  }
+                  onReact={
+                    !isTemp && m.kind !== 'system'
+                      ? (e) => setPickerFor({ messageId: m.id, x: e.clientX, y: e.clientY })
+                      : undefined
+                  }
+                  onToggleReaction={(emoji) => {
+                    react.mutate({ messageId: m.id, emoji });
+                    closeActions();
+                  }}
+                  onLongPress={
+                    !isTemp && m.kind !== 'system' ? () => onBubbleLongPress(m) : undefined
+                  }
+                  actionsOpen={mobileActionsFor === m.id}
+                  hoverActions={hoverCapable}
+                  flash={flashId === m.id}
+                  onDoubleTap={
+                    !isTemp && m.kind === 'text'
+                      ? () => react.mutate({ messageId: m.id, emoji: '👍' })
+                      : undefined
+                  }
+                  onPreview={openPreview}
+                />
               </Fragment>
             );
           })
@@ -2169,7 +2211,10 @@ function ConversacionTab({
                     className="h-20 w-20 rounded-xl border border-border bg-muted object-cover"
                   />
                 ) : s.file.type.startsWith('video/') ? (
-                  <video src={s.url} className="h-20 w-20 rounded-xl border border-border bg-black object-cover" />
+                  <video
+                    src={s.url}
+                    className="h-20 w-20 rounded-xl border border-border bg-black object-cover"
+                  />
                 ) : (
                   <div className="flex h-20 w-20 flex-col items-center justify-center gap-1 rounded-xl border border-border bg-muted px-1.5 text-center">
                     <Paperclip className="h-4 w-4 text-muted-foreground" />
@@ -2213,8 +2258,16 @@ function ConversacionTab({
                   <p className="px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                     Leer código
                   </p>
-                  <AttachOption icon={ScanBarcode} label="Foto IMEI" onClick={() => pickPhoto('imei')} />
-                  <AttachOption icon={ScanLine} label="Foto serial" onClick={() => pickPhoto('serial')} />
+                  <AttachOption
+                    icon={ScanBarcode}
+                    label="Foto IMEI"
+                    onClick={() => pickPhoto('imei')}
+                  />
+                  <AttachOption
+                    icon={ScanLine}
+                    label="Foto serial"
+                    onClick={() => pickPhoto('serial')}
+                  />
                   <div className="my-1 h-px bg-border" />
                   <p className="px-2 pb-1 pt-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                     Adjuntar
@@ -2262,7 +2315,11 @@ function ConversacionTab({
                         label="Foto o video"
                         onClick={() => pickAttachment('image/*,video/*')}
                       />
-                      <SheetOption icon={Paperclip} label="Archivo" onClick={() => pickAttachment('*')} />
+                      <SheetOption
+                        icon={Paperclip}
+                        label="Archivo"
+                        onClick={() => pickAttachment('*')}
+                      />
                     </div>
                   </div>,
                   document.body,
@@ -2298,7 +2355,8 @@ function ConversacionTab({
             onChange={(e) => onAttachmentFile(e.target.files)}
           />
           <div className="relative flex-1">
-            {mention && (mentionMatches.length > 0 || 'todos'.startsWith(mention.query.toLowerCase())) ? (
+            {mention &&
+            (mentionMatches.length > 0 || 'todos'.startsWith(mention.query.toLowerCase())) ? (
               <div className="absolute bottom-full left-0 z-20 mb-2 w-64 max-w-full overflow-hidden rounded-lg border border-border bg-popover p-1 shadow-lg">
                 <p className="px-2 pb-1 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                   Mencionar
@@ -2333,7 +2391,9 @@ function ConversacionTab({
                     </span>
                     <span className="min-w-0">
                       <span className="block truncate font-medium">{mentionName(m)}</span>
-                      <span className="block truncate text-[11px] text-muted-foreground">{m.email}</span>
+                      <span className="block truncate text-[11px] text-muted-foreground">
+                        {m.email}
+                      </span>
                     </span>
                   </button>
                 ))}
@@ -3129,50 +3189,63 @@ function AttachmentCard({
   const ext = (/\.([a-z0-9]{1,6})$/i.exec(name)?.[1] ?? 'file').toUpperCase();
   return (
     <div className={cn('w-[230px] max-w-full overflow-hidden rounded-[14px] border', tone)}>
-    <a
-      href={url ?? undefined}
-      target="_blank"
-      rel="noreferrer"
-      className={cn(
-        'flex items-center gap-3 px-3 py-2.5 transition',
-        url
-          ? mine
-            ? 'hover:brightness-110'
-            : 'hover:bg-muted-foreground/10'
-          : 'pointer-events-none opacity-70',
-      )}
-    >
-      <span
+      <a
+        href={url ?? undefined}
+        target="_blank"
+        rel="noreferrer"
         className={cn(
-          'flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-[9px] font-bold tracking-wide',
-          mine ? 'bg-accent-foreground/20 text-accent-foreground' : 'bg-muted-foreground/15 text-muted-foreground',
+          'flex items-center gap-3 px-3 py-2.5 transition',
+          url
+            ? mine
+              ? 'hover:brightness-110'
+              : 'hover:bg-muted-foreground/10'
+            : 'pointer-events-none opacity-70',
         )}
       >
-        {ext.slice(0, 4)}
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium">{name}</p>
+        <span
+          className={cn(
+            'flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-[9px] font-bold tracking-wide',
+            mine
+              ? 'bg-accent-foreground/20 text-accent-foreground'
+              : 'bg-muted-foreground/15 text-muted-foreground',
+          )}
+        >
+          {ext.slice(0, 4)}
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium">{name}</p>
+          {pending ? (
+            <div className="mt-1.5">
+              <UploadBar value={progress} inverted={mine} />
+            </div>
+          ) : (
+            <p
+              className={cn(
+                'text-[11px]',
+                mine ? 'text-accent-foreground/70' : 'text-muted-foreground',
+              )}
+            >
+              Toca para abrir
+            </p>
+          )}
+        </div>
         {pending ? (
-          <div className="mt-1.5">
-            <UploadBar value={progress} inverted={mine} />
-          </div>
+          <Loader2
+            className={cn(
+              'h-4 w-4 shrink-0 animate-spin',
+              mine ? 'text-accent-foreground/80' : 'text-muted-foreground',
+            )}
+          />
         ) : (
-          <p className={cn('text-[11px]', mine ? 'text-accent-foreground/70' : 'text-muted-foreground')}>
-            Toca para abrir
-          </p>
+          <Download
+            className={cn(
+              'h-4 w-4 shrink-0',
+              mine ? 'text-accent-foreground/80' : 'text-muted-foreground',
+            )}
+          />
         )}
-      </div>
-      {pending ? (
-        <Loader2
-          className={cn('h-4 w-4 shrink-0 animate-spin', mine ? 'text-accent-foreground/80' : 'text-muted-foreground')}
-        />
-      ) : (
-        <Download
-          className={cn('h-4 w-4 shrink-0', mine ? 'text-accent-foreground/80' : 'text-muted-foreground')}
-        />
-      )}
-    </a>
-    {caption}
+      </a>
+      {caption}
     </div>
   );
 }
@@ -3299,7 +3372,9 @@ function CodeRow({
             </p>
           </div>
         ) : (
-          <p className="text-[12px] text-muted-foreground md:text-[11px]">Sin coincidencia en compras</p>
+          <p className="text-[12px] text-muted-foreground md:text-[11px]">
+            Sin coincidencia en compras
+          </p>
         )
       ) : null}
     </div>
@@ -3415,11 +3490,24 @@ function describeEvent(e: OrderEvent): string {
       return 'Cambio de estado';
     case 'created':
       // Los pedidos MONTADOS a mano nacen dentro de SmartLogistica (no de VTEX).
-      return e.data.manual === true ? 'Pedido montado a mano (externo a las plataformas)' : 'Pedido recibido';
+      return e.data.manual === true
+        ? 'Pedido montado a mano (externo a las plataformas)'
+        : 'Pedido recibido';
     case 'invoiced':
       return `Factura ${(e.data.number as string | undefined) ?? ''} emitida en Alegra`.trim();
     case 'guide_generated': {
-      const base = `Guía ${(e.data.number as string | undefined) ?? ''} generada en Coordinadora`.trim();
+      const number = (e.data.number as string | undefined) ?? '';
+      // El evento es el mismo para las tres formas de despachar; `via` dice
+      // cual fue (null = legado, es decir Coordinadora). Sin esto un domicilio
+      // quedaba en la bitacora como "generada en Coordinadora", que es falso.
+      if (e.data.via === 'domicilio') {
+        return `Soporte de entrega ${number} emitido · domicilio propio`.trim();
+      }
+      const carrier =
+        e.data.via === 'skydropx'
+          ? ((e.data.carrier as string | undefined) ?? 'Skydropx')
+          : 'Coordinadora';
+      const base = `Guía ${number} generada en ${carrier}`.trim();
       return typeof e.data.cod === 'number' && e.data.cod > 0
         ? `${base} · con recaudo contraentrega`
         : base;
@@ -3514,7 +3602,10 @@ function InfoRow({
   );
 }
 
-const STATUS_LABELS: Record<string, { label: string; variant: 'warning' | 'success' | 'secondary' }> = {
+const STATUS_LABELS: Record<
+  string,
+  { label: string; variant: 'warning' | 'success' | 'secondary' }
+> = {
   'ready-for-handling': { label: 'Listo para preparar', variant: 'warning' },
   handling: { label: 'Preparando', variant: 'success' },
   invoiced: { label: 'Facturado', variant: 'secondary' },
@@ -3541,6 +3632,56 @@ function StatusPill({ status }: { status: string }) {
       {shipping ? <span className="h-1.5 w-1.5 rounded-full bg-accent" aria-hidden /> : null}
       {mapped?.label ?? status}
     </span>
+  );
+}
+
+/**
+ * Precio UNITARIO del producto con el neto de VTEX desplegable: un toque
+ * muestra debajo, entre parentesis, lo que de verdad queda tras la comision
+ * del marketplace + su IVA + el valor fijo (todo configurable en Ajustes).
+ * Antes esto vivia en la columna Precio de la tabla; ahi el clic ahora solo
+ * abre el pedido, y el neto quedo donde se mira el producto — y por linea,
+ * que es lo util cuando el pedido trae varios.
+ */
+function UnitPrice({
+  unitPrice,
+  quantity,
+  currency,
+  fees,
+}: {
+  unitPrice: string;
+  quantity: number;
+  currency: string;
+  /** null = el pedido no es de VTEX: no hay comision que descontar. */
+  fees: VtexFees | null;
+}) {
+  const [open, setOpen] = useState(false);
+  const line = (
+    <>
+      {quantity} &times; {formatCurrency(unitPrice, currency)}
+    </>
+  );
+  if (!fees) return <p className="text-[11px] tabular-nums text-hint">{line}</p>;
+
+  const net = vtexNetValue(Number(unitPrice) || 0, fees);
+  return (
+    <button
+      type="button"
+      onClick={() => setOpen((v) => !v)}
+      title={`Ver neto tras comisión ${fees.commissionPct}% + IVA ${fees.vatPct}% de la comisión + ${formatCurrency(String(fees.fixed), currency)} (configurable en Ajustes)`}
+      aria-expanded={open}
+      className={cn(
+        'block rounded-[5px] text-right text-[11px] tabular-nums text-hint transition-colors [transition-duration:140ms] hover:text-accent-ink',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-surface',
+      )}
+    >
+      <span className={cn(open && 'underline decoration-dotted underline-offset-2')}>{line}</span>
+      {open ? (
+        <span className="block text-[11px] text-muted-foreground">
+          neto {formatCurrency(String(net), currency)} c/u
+        </span>
+      ) : null}
+    </button>
   );
 }
 

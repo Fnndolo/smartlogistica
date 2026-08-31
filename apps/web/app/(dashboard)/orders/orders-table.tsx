@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns/format';
 import { es } from 'date-fns/locale/es';
 import {
@@ -19,18 +19,22 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-  DEFAULT_VTEX_FEES,
-  vtexNetValue,
   type OrderSummary,
   type OrderSortField,
   type Platform,
   type SortDir,
-  type VtexFees,
 } from '@smartlogistica/shared';
 
 import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { Badge } from '@/components/ui/badge';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { ApiError, api } from '@/lib/api-client';
 import { canUseWhatsapp } from '@/lib/rbac';
 import { cn, titleCaseName } from '@/lib/utils';
@@ -84,10 +88,7 @@ export function OrdersTable({
   const { data: platforms = [] } = usePlatforms();
   const selectable = Boolean(selectedIds && onToggleSelect);
   const colCount =
-    (selectable ? 8 : 7) +
-    (showShipping ? 1 : 0) +
-    (showAddress ? 1 : 0) +
-    (showPlatform ? 1 : 0);
+    (selectable ? 8 : 7) + (showShipping ? 1 : 0) + (showAddress ? 1 : 0) + (showPlatform ? 1 : 0);
   const allSelected = selectable && items.length > 0 && items.every((o) => selectedIds!.has(o.id));
 
   const toggle = (id: string) =>
@@ -107,22 +108,6 @@ export function OrdersTable({
   // esta tomado (asi la tabla no gana ancho cuando nadie ha tomado nada).
   const anyClaimed = items.some((o) => o.claimedBy);
 
-  // Clic en el PRECIO de un pedido VTEX: muestra/oculta debajo el neto real
-  // tras descontar comision del marketplace (solo visual, por fila). Los
-  // porcentajes y el fijo son CONFIGURABLES en Ajustes (globales).
-  const [netShown, setNetShown] = useState<Set<string>>(new Set());
-  const toggleNet = (id: string) =>
-    setNetShown((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  const { data: fees = DEFAULT_VTEX_FEES } = useQuery({
-    queryKey: ['vtex-fees'],
-    queryFn: () => api.get<VtexFees>('/v1/vtex-fees'),
-    staleTime: 5 * 60_000,
-  });
-
   return (
     <>
       {/* Movil: lista de tarjetas (la tabla no cabe). */}
@@ -139,9 +124,6 @@ export function OrdersTable({
             showAddress={showAddress}
             showPlatform={showPlatform}
             platforms={platforms}
-            fees={fees}
-            netOpen={netShown.has(order.id)}
-            onToggleNet={toggleNet}
             onPrefetch={() => onOpenOrder && prefetchOrder(qc, order.id)}
             onClaim={openMenu('claim')}
             onReact={openMenu('react')}
@@ -153,215 +135,251 @@ export function OrdersTable({
       {/* Escritorio: tabla completa. */}
       <div className="hidden md:block">
         <Table>
-      <TableHeader>
-        <TableRow>
-          {selectable ? (
-            <TableHead className="w-10">
-              <input
-                type="checkbox"
-                className="block h-[15px] w-[15px] cursor-pointer rounded-[4px] border-input accent-accent"
-                checked={allSelected}
-                onChange={() => onToggleSelectAll?.()}
-                aria-label="Seleccionar todos"
+          <TableHeader>
+            <TableRow>
+              {selectable ? (
+                <TableHead className="w-10">
+                  <input
+                    type="checkbox"
+                    className="block h-[15px] w-[15px] cursor-pointer rounded-[4px] border-input accent-accent"
+                    checked={allSelected}
+                    onChange={() => onToggleSelectAll?.()}
+                    aria-label="Seleccionar todos"
+                  />
+                </TableHead>
+              ) : null}
+              <TableHead>N&ordm; Pedido</TableHead>
+              <TableHead>Cliente</TableHead>
+              <TableHead>Producto</TableHead>
+              <SortHeader
+                label="Cant."
+                field="quantity"
+                sort={sort}
+                dir={dir}
+                onSort={onSort}
+                align="right"
               />
-            </TableHead>
-          ) : null}
-          <TableHead>N&ordm; Pedido</TableHead>
-          <TableHead>Cliente</TableHead>
-          <TableHead>Producto</TableHead>
-          <SortHeader label="Cant." field="quantity" sort={sort} dir={dir} onSort={onSort} align="right" />
-          {/* "Precio" a secas: reclama ancho para la columna Plataforma. */}
-          <SortHeader label="Precio" field="price" sort={sort} dir={dir} onSort={onSort} align="right" />
-          {/* Fecha desc es el orden POR DEFECTO: no se pinta como filtro aplicado. */}
-          <SortHeader label="Fecha" field="date" sort={sort} dir={dir} onSort={onSort} defaultDesc />
-          {showPlatform ? <TableHead>Plataforma</TableHead> : null}
-          <TableHead>Estado</TableHead>
-          {showAddress ? <TableHead>Dirección</TableHead> : null}
-          {showShipping ? <TableHead>Envío</TableHead> : null}
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {items.map((order) => {
-          const multi = order.items.length > 1;
-          const isOpen = expanded.has(order.id);
-          const isSelected = selectable && selectedIds!.has(order.id);
-          return (
-            <Fragment key={order.id}>
-              <TableRow
-                className={cn(
-                  'group/row relative transition-colors hover:bg-accent/[0.05]',
-                  (onOpenOrder || multi) && 'cursor-pointer',
-                  (isOpen || isSelected) && 'bg-accent/[0.08]',
-                  // Con reacciones, la fila crece: los chips tienen su FRANJA
-                  // propia abajo y nunca tapan contenido (igual que el mockup).
-                  order.reactions.length > 0 && '[&>td]:pb-9',
-                )}
-                onClick={
-                  onOpenOrder
-                    ? () => onOpenOrder(order)
-                    : multi
-                      ? () => toggle(order.id)
-                      : undefined
-                }
-                // Precarga la conversacion antes del clic: al abrir, el chat ya
-                // esta en cache y se pinta al instante (sin "cargando").
-                onMouseEnter={onOpenOrder ? () => prefetchOrder(qc, order.id) : undefined}
-                onFocus={onOpenOrder ? () => prefetchOrder(qc, order.id) : undefined}
-              >
-                {selectable ? (
-                  <TableCell className="relative w-10" onClick={(e) => e.stopPropagation()}>
-                    <RowRail />
-                    <input
-                      type="checkbox"
-                      className="block h-[15px] w-[15px] cursor-pointer rounded-[4px] border-input accent-accent"
-                      checked={isSelected}
-                      onChange={() => onToggleSelect!(order.id)}
-                      aria-label={`Seleccionar ${order.externalId}`}
-                    />
-                  </TableCell>
-                ) : null}
-                <TableCell className="relative whitespace-nowrap font-mono text-[11.5px] text-muted-foreground">
-                  {!selectable ? <RowRail /> : null}
-                  <span className="inline-flex items-center gap-2">
-                    {/* Distintivo de "tomado" al INICIO de la fila (hueco reservado
+              {/* "Precio" a secas: reclama ancho para la columna Plataforma. */}
+              <SortHeader
+                label="Precio"
+                field="price"
+                sort={sort}
+                dir={dir}
+                onSort={onSort}
+                align="right"
+              />
+              {/* Fecha desc es el orden POR DEFECTO: no se pinta como filtro aplicado. */}
+              <SortHeader
+                label="Fecha"
+                field="date"
+                sort={sort}
+                dir={dir}
+                onSort={onSort}
+                defaultDesc
+              />
+              {showPlatform ? <TableHead>Plataforma</TableHead> : null}
+              <TableHead>Estado</TableHead>
+              {showAddress ? <TableHead>Dirección</TableHead> : null}
+              {showShipping ? <TableHead>Envío</TableHead> : null}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {items.map((order) => {
+              const multi = order.items.length > 1;
+              const isOpen = expanded.has(order.id);
+              const isSelected = selectable && selectedIds!.has(order.id);
+              return (
+                <Fragment key={order.id}>
+                  <TableRow
+                    className={cn(
+                      'group/row relative transition-colors hover:bg-accent/[0.05]',
+                      (onOpenOrder || multi) && 'cursor-pointer',
+                      (isOpen || isSelected) && 'bg-accent/[0.08]',
+                      // Con reacciones, la fila crece: los chips tienen su FRANJA
+                      // propia abajo y nunca tapan contenido (igual que el mockup).
+                      order.reactions.length > 0 && '[&>td]:pb-9',
+                    )}
+                    onClick={
+                      onOpenOrder
+                        ? () => onOpenOrder(order)
+                        : multi
+                          ? () => toggle(order.id)
+                          : undefined
+                    }
+                    // Precarga la conversacion antes del clic: al abrir, el chat ya
+                    // esta en cache y se pinta al instante (sin "cargando").
+                    onMouseEnter={onOpenOrder ? () => prefetchOrder(qc, order.id) : undefined}
+                    onFocus={onOpenOrder ? () => prefetchOrder(qc, order.id) : undefined}
+                  >
+                    {selectable ? (
+                      <TableCell className="relative w-10" onClick={(e) => e.stopPropagation()}>
+                        <RowRail />
+                        <input
+                          type="checkbox"
+                          className="block h-[15px] w-[15px] cursor-pointer rounded-[4px] border-input accent-accent"
+                          checked={isSelected}
+                          onChange={() => onToggleSelect!(order.id)}
+                          aria-label={`Seleccionar ${order.externalId}`}
+                        />
+                      </TableCell>
+                    ) : null}
+                    <TableCell className="relative whitespace-nowrap font-mono text-[11.5px] text-muted-foreground">
+                      {!selectable ? <RowRail /> : null}
+                      <span className="inline-flex items-center gap-2">
+                        {/* Distintivo de "tomado" al INICIO de la fila (hueco reservado
                         solo si hay tomados en la pagina: los numeros alinean). */}
-                    {order.claimedBy ? (
-                      <ClaimChip
-                        userId={order.claimedBy.userId}
-                        name={order.claimedBy.name}
-                        mine={order.claimedBy.mine}
-                      />
-                    ) : anyClaimed ? (
-                      <ClaimSlot />
-                    ) : null}
-                    {order.externalId}
-                    {order.hasDevicePhoto ? (
-                      <span
-                        title="Tiene foto de IMEI/serial"
-                        className="text-emerald-600 dark:text-emerald-400"
-                      >
-                        <Camera className="h-3.5 w-3.5" />
-                      </span>
-                    ) : null}
-                  </span>
-                </TableCell>
-                <TableCell>
-                  <div className="flex flex-col">
-                    <span className="flex items-center gap-1.5 font-medium text-foreground">
-                      {titleCaseName(order.customerName)}
-                      {order.unreadCount > 0 ? (
-                        <span
-                          title={`${order.unreadCount} mensaje(s) sin leer`}
-                          className="animate-unread inline-flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-accent px-1 font-mono text-[10px] font-semibold leading-none text-accent-foreground"
-                        >
-                          {order.unreadCount > 99 ? '99+' : order.unreadCount}
-                        </span>
-                      ) : null}
-                    </span>
-                    {order.customerDocument ? (
-                      <span className="font-mono text-[10.5px] text-muted-foreground/80">
-                        CC {order.customerDocument}
-                      </span>
-                    ) : null}
-                  </div>
-                </TableCell>
-
-                {/* Producto: 1 -> nombre; varios -> nombre + pildora "+N" debajo.
-                    El nombre SIEMPRE se muestra completo (envuelve en lineas). */}
-                <TableCell className="min-w-[176px] max-w-[340px]">
-                  <ProductCell
-                    order={order}
-                    multi={multi}
-                    isOpen={isOpen}
-                    onToggle={() => toggle(order.id)}
-                  />
-                </TableCell>
-
-                {/* Cantidad: unidades totales + cuantos productos distintos */}
-                <TableCell className="text-right">
-                  <div className="flex flex-col items-end leading-tight">
-                    <span className="text-[13px] font-medium tabular-nums">{order.totalUnits}</span>
-                    {multi ? (
-                      <span className="text-[10.5px] text-muted-foreground/80">
-                        {order.items.length} productos
-                      </span>
-                    ) : null}
-                  </div>
-                </TableCell>
-
-                <TableCell className="whitespace-nowrap text-right font-mono text-xs tabular-nums">
-                  <PriceCell
-                    order={order}
-                    fees={fees}
-                    netOpen={netShown.has(order.id)}
-                    onToggleNet={toggleNet}
-                  />
-                </TableCell>
-                <TableCell className="whitespace-nowrap text-muted-foreground">
-                  <div className="flex flex-col leading-tight">
-                    <span className="text-xs">
-                      {format(new Date(order.marketplaceCreatedAt), 'd MMM yyyy', { locale: es })}
-                    </span>
-                    <span className="font-mono text-[10.5px] text-muted-foreground/70">
-                      {format(new Date(order.marketplaceCreatedAt), 'HH:mm')}
-                    </span>
-                  </div>
-                </TableCell>
-                {showPlatform ? (
-                  <TableCell className="whitespace-nowrap">
-                    <PlatformBadge order={order} platforms={platforms} />
-                  </TableCell>
-                ) : null}
-                <TableCell className={cn(!showAddress && !showShipping && 'relative pr-16')}>
-                  <StatusBadge status={order.status} />
-                  {!showAddress && !showShipping ? (
-                    <RowActions order={order} onClaim={openMenu('claim')} onReact={openMenu('react')} onToggleReaction={actions.toggleReaction} />
-                  ) : null}
-                </TableCell>
-                {showAddress ? (
-                  <TableCell className="relative pr-16">
-                    <AddressCell order={order} />
-                    <RowActions order={order} onClaim={openMenu('claim')} onReact={openMenu('react')} onToggleReaction={actions.toggleReaction} />
-                  </TableCell>
-                ) : null}
-                {showShipping ? (
-                  <TableCell className="relative pr-16">
-                    <ShippingCell order={order} />
-                    <RowActions order={order} onClaim={openMenu('claim')} onReact={openMenu('react')} onToggleReaction={actions.toggleReaction} />
-                  </TableCell>
-                ) : null}
-              </TableRow>
-
-              {/* Sub-fila expandible con el desglose de productos (mockup):
-                  icono + nombre con SKU al lado en gris + "1 × precio" a la
-                  derecha. Sin caja interna ni columna de total. */}
-              {multi && isOpen ? (
-                <TableRow className="bg-muted/20 hover:bg-muted/20">
-                  <TableCell colSpan={colCount} className="py-1 pl-12 pr-4">
-                    {order.items.map((item, idx) => (
-                      <div
-                        key={`${item.sku}-${idx}`}
-                        className="flex items-center gap-2.5 py-1.5 text-xs"
-                      >
-                        <Package className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
-                        <span className="min-w-0 flex-1 break-words leading-snug">
-                          {item.name}{' '}
-                          <span className="font-mono text-[10.5px] text-muted-foreground/80">
-                            SKU {item.sku}
+                        {order.claimedBy ? (
+                          <ClaimChip
+                            userId={order.claimedBy.userId}
+                            name={order.claimedBy.name}
+                            mine={order.claimedBy.mine}
+                          />
+                        ) : anyClaimed ? (
+                          <ClaimSlot />
+                        ) : null}
+                        {order.externalId}
+                        {order.hasDevicePhoto ? (
+                          <span
+                            title="Tiene foto de IMEI/serial"
+                            className="text-emerald-600 dark:text-emerald-400"
+                          >
+                            <Camera className="h-3.5 w-3.5" />
                           </span>
+                        ) : null}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col">
+                        <span className="flex items-center gap-1.5 font-medium text-foreground">
+                          {titleCaseName(order.customerName)}
+                          {order.unreadCount > 0 ? (
+                            <span
+                              title={`${order.unreadCount} mensaje(s) sin leer`}
+                              className="animate-unread inline-flex h-[17px] min-w-[17px] items-center justify-center rounded-full bg-accent px-1 font-mono text-[10px] font-semibold leading-none text-accent-foreground"
+                            >
+                              {order.unreadCount > 99 ? '99+' : order.unreadCount}
+                            </span>
+                          ) : null}
                         </span>
-                        <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
-                          {item.quantity} &times; {formatCurrency(item.unitPrice, order.currency)}
+                        {order.customerDocument ? (
+                          <span className="font-mono text-[10.5px] text-muted-foreground/80">
+                            CC {order.customerDocument}
+                          </span>
+                        ) : null}
+                      </div>
+                    </TableCell>
+
+                    {/* Producto: 1 -> nombre; varios -> nombre + pildora "+N" debajo.
+                    El nombre SIEMPRE se muestra completo (envuelve en lineas). */}
+                    <TableCell className="min-w-[176px] max-w-[340px]">
+                      <ProductCell
+                        order={order}
+                        multi={multi}
+                        isOpen={isOpen}
+                        onToggle={() => toggle(order.id)}
+                      />
+                    </TableCell>
+
+                    {/* Cantidad: unidades totales + cuantos productos distintos */}
+                    <TableCell className="text-right">
+                      <div className="flex flex-col items-end leading-tight">
+                        <span className="text-[13px] font-medium tabular-nums">
+                          {order.totalUnits}
+                        </span>
+                        {multi ? (
+                          <span className="text-[10.5px] text-muted-foreground/80">
+                            {order.items.length} productos
+                          </span>
+                        ) : null}
+                      </div>
+                    </TableCell>
+
+                    <TableCell className="whitespace-nowrap text-right font-mono text-xs tabular-nums">
+                      <PriceCell order={order} />
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-muted-foreground">
+                      <div className="flex flex-col leading-tight">
+                        <span className="text-xs">
+                          {format(new Date(order.marketplaceCreatedAt), 'd MMM yyyy', {
+                            locale: es,
+                          })}
+                        </span>
+                        <span className="font-mono text-[10.5px] text-muted-foreground/70">
+                          {format(new Date(order.marketplaceCreatedAt), 'HH:mm')}
                         </span>
                       </div>
-                    ))}
-                  </TableCell>
-                </TableRow>
-              ) : null}
-            </Fragment>
-          );
-        })}
-      </TableBody>
+                    </TableCell>
+                    {showPlatform ? (
+                      <TableCell className="whitespace-nowrap">
+                        <PlatformBadge order={order} platforms={platforms} />
+                      </TableCell>
+                    ) : null}
+                    <TableCell className={cn(!showAddress && !showShipping && 'relative pr-16')}>
+                      <StatusBadge status={order.status} />
+                      {!showAddress && !showShipping ? (
+                        <RowActions
+                          order={order}
+                          onClaim={openMenu('claim')}
+                          onReact={openMenu('react')}
+                          onToggleReaction={actions.toggleReaction}
+                        />
+                      ) : null}
+                    </TableCell>
+                    {showAddress ? (
+                      <TableCell className="relative pr-16">
+                        <AddressCell order={order} />
+                        <RowActions
+                          order={order}
+                          onClaim={openMenu('claim')}
+                          onReact={openMenu('react')}
+                          onToggleReaction={actions.toggleReaction}
+                        />
+                      </TableCell>
+                    ) : null}
+                    {showShipping ? (
+                      <TableCell className="relative pr-16">
+                        <ShippingCell order={order} />
+                        <RowActions
+                          order={order}
+                          onClaim={openMenu('claim')}
+                          onReact={openMenu('react')}
+                          onToggleReaction={actions.toggleReaction}
+                        />
+                      </TableCell>
+                    ) : null}
+                  </TableRow>
+
+                  {/* Sub-fila expandible con el desglose de productos (mockup):
+                  icono + nombre con SKU al lado en gris + "1 × precio" a la
+                  derecha. Sin caja interna ni columna de total. */}
+                  {multi && isOpen ? (
+                    <TableRow className="bg-muted/20 hover:bg-muted/20">
+                      <TableCell colSpan={colCount} className="py-1 pl-12 pr-4">
+                        {order.items.map((item, idx) => (
+                          <div
+                            key={`${item.sku}-${idx}`}
+                            className="flex items-center gap-2.5 py-1.5 text-xs"
+                          >
+                            <Package className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+                            <span className="min-w-0 flex-1 break-words leading-snug">
+                              {item.name}{' '}
+                              <span className="font-mono text-[10.5px] text-muted-foreground/80">
+                                SKU {item.sku}
+                              </span>
+                            </span>
+                            <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+                              {item.quantity} &times;{' '}
+                              {formatCurrency(item.unitPrice, order.currency)}
+                            </span>
+                          </div>
+                        ))}
+                      </TableCell>
+                    </TableRow>
+                  ) : null}
+                </Fragment>
+              );
+            })}
+          </TableBody>
         </Table>
       </div>
 
@@ -437,7 +455,11 @@ function ReactionChips({
               onToggleReaction(order.id, r.emoji);
             }
           }}
-          title={r.mine ? 'Tu reacción · clic para quitar' : `Reaccionaron ${r.count} · clic para sumarte`}
+          title={
+            r.mine
+              ? 'Tu reacción · clic para quitar'
+              : `Reaccionaron ${r.count} · clic para sumarte`
+          }
           className={cn(
             // Mas grandes que las del chat: en la fila deben NOTARSE.
             'inline-flex h-[24px] cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-[14px] leading-none shadow-card transition-all hover:-translate-y-px',
@@ -447,7 +469,12 @@ function ReactionChips({
           )}
         >
           {r.emoji}
-          <b className={cn('font-mono text-[11px] font-medium', r.mine ? 'text-accent' : 'text-muted-foreground')}>
+          <b
+            className={cn(
+              'font-mono text-[11px] font-medium',
+              r.mine ? 'text-accent' : 'text-muted-foreground',
+            )}
+          >
             {r.count}
           </b>
         </span>
@@ -495,7 +522,13 @@ function RowActions({
           type="button"
           onClick={(e) => onClaim(order, e)}
           aria-label="Opciones del pedido"
-          title={order.claimedBy ? (order.claimedBy.mine ? 'Lo tienes tú' : `Tomado por ${order.claimedBy.name}`) : 'Tomar pedido'}
+          title={
+            order.claimedBy
+              ? order.claimedBy.mine
+                ? 'Lo tienes tú'
+                : `Tomado por ${order.claimedBy.name}`
+              : 'Tomar pedido'
+          }
           className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-card transition-colors hover:border-accent/40 hover:text-foreground"
         >
           <MoreHorizontal className="h-3.5 w-3.5" />
@@ -604,9 +637,6 @@ function OrderCard({
   showAddress,
   showPlatform,
   platforms,
-  fees,
-  netOpen,
-  onToggleNet,
   onPrefetch,
   onClaim,
   onReact,
@@ -621,9 +651,6 @@ function OrderCard({
   showAddress: boolean;
   showPlatform: boolean;
   platforms: Platform[];
-  fees: VtexFees;
-  netOpen: boolean;
-  onToggleNet: (id: string) => void;
   onPrefetch: () => void;
   onClaim: (order: OrderSummary, e: React.MouseEvent) => void;
   onReact: (order: OrderSummary, e: React.MouseEvent) => void;
@@ -695,38 +722,9 @@ function OrderCard({
         <div className="mt-1.5 flex items-center justify-between gap-2 text-[12.5px] text-muted-foreground">
           <span className="tabular-nums">
             {order.totalUnits} un &middot;{' '}
-            {order.provider === 'vtex' ? (
-              // Tocar el precio muestra/oculta el NETO tras la comision (visual).
-              <span
-                role="button"
-                tabIndex={0}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onToggleNet(order.id);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    onToggleNet(order.id);
-                  }
-                }}
-                className="inline-flex flex-col align-top font-medium text-foreground"
-              >
-                <span className={cn(netOpen && 'underline decoration-dotted underline-offset-2')}>
-                  {formatCurrency(order.totalValue, order.currency)}
-                </span>
-                {netOpen ? (
-                  <span className="text-[11px] font-normal text-muted-foreground">
-                    ({formatCurrency(String(vtexNetValue(Number(order.totalValue) || 0, fees)), order.currency)})
-                  </span>
-                ) : null}
-              </span>
-            ) : (
-              <span className="font-medium text-foreground">
-                {formatCurrency(order.totalValue, order.currency)}
-              </span>
-            )}
+            <span className="font-medium text-foreground">
+              {formatCurrency(order.totalValue, order.currency)}
+            </span>
           </span>
           <span className="shrink-0 tabular-nums">
             {format(new Date(order.marketplaceCreatedAt), "d MMM '·' HH:mm", { locale: es })}
@@ -739,7 +737,9 @@ function OrderCard({
           </div>
         ) : null}
 
-        {showShipping && order.guideNumber ? (
+        {/* Un domicilio no tiene guia pero SI tiene envio: sin la segunda
+            condicion la tarjeta de movil se quedaria sin ninguna señal. */}
+        {showShipping && (order.guideNumber || order.shippingProvider === 'domicilio') ? (
           <div className="mt-2">
             <ShippingCell order={order} />
           </div>
@@ -778,53 +778,10 @@ function OrderCard({
   );
 }
 
-/**
- * Precio con toggle de NETO (solo VTEX): un clic muestra debajo, entre
- * parentesis, lo que de verdad queda tras los descuentos configurados en
- * Ajustes (comision % + IVA % sobre la comision + fijo); otro clic lo oculta.
- */
-function PriceCell({
-  order,
-  fees,
-  netOpen,
-  onToggleNet,
-}: {
-  order: OrderSummary;
-  fees: VtexFees;
-  netOpen: boolean;
-  onToggleNet: (id: string) => void;
-}) {
-  if (order.provider !== 'vtex') {
-    return <>{formatCurrency(order.totalValue, order.currency)}</>;
-  }
-  return (
-    <span
-      role="button"
-      tabIndex={0}
-      title={`Ver neto tras comisión ${fees.commissionPct}% + IVA ${fees.vatPct}% de la comisión + ${formatCurrency(String(fees.fixed), order.currency)} (configurable en Ajustes)`}
-      onClick={(e) => {
-        e.stopPropagation();
-        onToggleNet(order.id);
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          e.stopPropagation();
-          onToggleNet(order.id);
-        }
-      }}
-      className="inline-flex cursor-pointer flex-col items-end rounded-sm leading-tight outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    >
-      <span className={cn(netOpen && 'underline decoration-dotted underline-offset-2')}>
-        {formatCurrency(order.totalValue, order.currency)}
-      </span>
-      {netOpen ? (
-        <span className="text-[10.5px] text-muted-foreground">
-          ({formatCurrency(String(vtexNetValue(Number(order.totalValue) || 0, fees)), order.currency)})
-        </span>
-      ) : null}
-    </span>
-  );
+/** Precio del pedido. El neto de VTEX se mira ahora en el DETALLE del
+ *  drawer, por precio unitario: aqui el clic solo abre el pedido. */
+function PriceCell({ order }: { order: OrderSummary }) {
+  return <>{formatCurrency(order.totalValue, order.currency)}</>;
 }
 
 function ProductCell({
@@ -860,9 +817,7 @@ function ProductCell({
         className="inline-flex shrink-0 items-center gap-1 rounded-full border border-border bg-muted px-2 py-px font-mono text-[10.5px] font-medium text-muted-foreground transition-colors hover:border-accent/40 hover:text-foreground"
       >
         +{order.items.length - 1}
-        <ChevronRight
-          className={cn('h-2.5 w-2.5 transition-transform', isOpen && 'rotate-90')}
-        />
+        <ChevronRight className={cn('h-2.5 w-2.5 transition-transform', isOpen && 'rotate-90')} />
       </button>
     </div>
   );
@@ -957,7 +912,11 @@ function RouteDots({ order }: { order: OrderSummary }) {
   const step = shipStep(order);
   const done = order.shippingState === 'entregado';
   return (
-    <span className="mt-1.5 flex items-center" aria-hidden title={order.shippingStatus ?? undefined}>
+    <span
+      className="mt-1.5 flex items-center"
+      aria-hidden
+      title={order.shippingStatus ?? undefined}
+    >
       {Array.from({ length: 6 }, (_, i) => {
         const n = i + 1;
         const on = n <= step;
@@ -982,19 +941,37 @@ function RouteDots({ order }: { order: OrderSummary }) {
 }
 
 function ShippingCell({ order }: { order: OrderSummary }) {
+  const meta = SHIPPING_LABELS[order.shippingState ?? 'sin_movimientos'] ?? SHIPPING_FALLBACK;
+
+  // DOMICILIO (transportadora propia): sale sin guia, asi que ni "Guía Nº" ni
+  // recorrido de 6 puntos (esos son los tramos de la transportadora). Va ANTES
+  // del corte por guideNumber: sin esto un pedido que ya salio hoy se leeria
+  // como "Sin guía".
+  if (order.shippingProvider === 'domicilio') {
+    return (
+      <div className="flex flex-col items-start">
+        <Badge dot variant={meta.variant} className="whitespace-nowrap">
+          {meta.label}
+        </Badge>
+        <span className="mt-1 text-[10.5px] text-muted-foreground/70">Domicilio propio</span>
+      </div>
+    );
+  }
   if (!order.guideNumber) {
     return <span className="text-xs text-muted-foreground">Sin guía</span>;
   }
   // Badge + recorrido de 6 puntos + Nº de guia: el estado del envio se lee
   // de un vistazo sin abrir el pedido.
-  const meta = SHIPPING_LABELS[order.shippingState ?? 'sin_movimientos'] ?? SHIPPING_FALLBACK;
   return (
     <div className="flex flex-col items-start">
       <Badge dot variant={meta.variant} className="whitespace-nowrap">
         {meta.label}
       </Badge>
       <RouteDots order={order} />
-      <span className="mt-1 font-mono text-[10.5px] text-muted-foreground/70" title="Número de guía">
+      <span
+        className="mt-1 font-mono text-[10.5px] text-muted-foreground/70"
+        title="Número de guía"
+      >
         Guía {order.guideNumber}
       </span>
     </div>
@@ -1020,7 +997,11 @@ function AddressCell({ order }: { order: OrderSummary }) {
     if (order.waConfirmation === 'unsent') {
       return <SendConfirmationButton orderId={order.id} />;
     }
-    return <Badge dot variant="outline" className="whitespace-nowrap">Sin responder</Badge>;
+    return (
+      <Badge dot variant="outline" className="whitespace-nowrap">
+        Sin responder
+      </Badge>
+    );
   }
   const meta = ADDRESS_LABELS[order.addressStatus] ?? ADDRESS_FALLBACK;
   // Solo el estado en la tabla; la direccion nueva se ve en el drawer del pedido.
@@ -1044,7 +1025,11 @@ function SendConfirmationButton({ orderId }: { orderId: string }) {
   // El estado/boton lo ven los ADMINISTRADORES; los demas (gestor, operador)
   // ven el badge normal — WhatsApp es de administradores en el API.
   if (!canUseWhatsapp(me?.role)) {
-    return <Badge dot variant="outline" className="whitespace-nowrap">Sin responder</Badge>;
+    return (
+      <Badge dot variant="outline" className="whitespace-nowrap">
+        Sin responder
+      </Badge>
+    );
   }
 
   const send = async (e: React.MouseEvent) => {
@@ -1070,17 +1055,16 @@ function SendConfirmationButton({ orderId }: { orderId: string }) {
       title="La confirmación automática no salió (¿WhatsApp caído o bloqueado?). Clic para enviarla ahora."
       className="inline-flex items-center gap-[5px] whitespace-nowrap rounded-full border border-destructive/30 bg-destructive/10 px-[10px] py-[3px] text-[10.5px] font-semibold uppercase tracking-[0.06em] text-destructive transition-colors hover:bg-destructive/20 disabled:opacity-60 md:px-[9px] md:py-[2.5px] md:text-[10px]"
     >
-      {sending ? (
-        <Loader2 className="h-3 w-3 animate-spin" />
-      ) : (
-        <Send className="h-3 w-3" />
-      )}
+      {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
       {sending ? 'Enviando…' : 'Sin enviar'}
     </button>
   );
 }
 
-const STATUS_LABELS: Record<string, { label: string; variant: 'warning' | 'success' | 'secondary' }> = {
+const STATUS_LABELS: Record<
+  string,
+  { label: string; variant: 'warning' | 'success' | 'secondary' }
+> = {
   'ready-for-handling': { label: 'Listo para preparar', variant: 'warning' },
   handling: { label: 'Preparando', variant: 'success' },
   invoiced: { label: 'Facturado', variant: 'success' },

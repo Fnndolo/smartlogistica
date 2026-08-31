@@ -369,7 +369,10 @@ model Order {
   shippingState        String? // sin_movimientos | en_transito | novedad | entregado
   shippingStatus       String? // descripcion cruda de la transportadora
   shippingUpdatedAt    DateTime?
-  // Transportadora de la guia: 'coordinadora' (null = legado) | 'skydropx'.
+  // Como salio el envio: 'coordinadora' (null = legado) | 'skydropx' |
+  // 'domicilio' (transportadora propia: sin guia, sin rastreo y sin link — por
+  // eso en domicilio guideNumber se queda NULL, que es lo que lo mantiene
+  // fuera del poll de rastreo).
   shippingProvider     String?
   // Id del shipment en Skydropx (para el rastreo por API).
   skydropxShipmentId   String?

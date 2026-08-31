@@ -120,6 +120,11 @@ export const packagePresetSchema = z.object({
   height: z.number().positive(), // cm
   width: z.number().positive(),
   length: z.number().positive(),
+  /** Contenido del paquete (OPCIONAL aqui): si el paquete lo trae, al elegirlo
+   *  en la guia tambien llena el campo Contenido. */
+  content: z.string().trim().max(60).optional(),
+  /** Paquete PREDETERMINADO: el que arranca elegido al abrir la guia. */
+  isDefault: z.boolean().optional(),
 });
 export type PackagePreset = z.infer<typeof packagePresetSchema>;
 
@@ -141,12 +146,21 @@ export const guidePackageSchema = z.object({
 });
 export type GuidePackage = z.infer<typeof guidePackageSchema>;
 
+/**
+ * COMO salio el envio. 'domicilio' = transportadora propia: no hay guia real,
+ * ni numero de rastreo, ni link de seguimiento — solo el soporte de entrega.
+ */
+export const shipmentViaSchema = z.enum(['coordinadora', 'skydropx', 'domicilio']);
+export type ShipmentVia = z.infer<typeof shipmentViaSchema>;
+
 /** Una guia ya emitida para el pedido (bloquea volver a generar). */
 export const guideSchema = z.object({
   id: z.string(), // id_remision
-  number: z.string(), // codigo_remision (Nº de guia)
-  url: z.string().nullable(), // url de rastreo (url_terceros)
+  number: z.string(), // codigo_remision (Nº de guia) — DOM-<nº Alegra> si es domicilio
+  url: z.string().nullable(), // url de rastreo (url_terceros) — SIEMPRE null en domicilio
   createdAt: z.string(),
+  /** null = evento legado (anterior a que se guardara el modo) = Coordinadora. */
+  via: shipmentViaSchema.nullable().default(null),
 });
 export type Guide = z.infer<typeof guideSchema>;
 
@@ -175,6 +189,11 @@ export const guidePreviewSchema = z.object({
   rotuloId: z.number().int(), // formato de rotulo por defecto de la sede
   // Paquetes predefinidos de la sede (para llenar dimensiones de un clic).
   packagePresets: z.array(packagePresetSchema),
+  /** Nº de factura de Alegra ya emitida (null = todavia sin facturar). Es el
+   *  "No. Orden" del soporte de entrega: sin el no se puede emitir. */
+  invoiceNumber: z.string().nullable().default(null),
+  /** Productos del pedido, para el soporte de entrega a domicilio. */
+  items: z.array(z.object({ name: z.string(), quantity: z.number().int() })).default([]),
   guide: guideSchema.nullable(), // si ya se genero
 });
 export type GuidePreview = z.infer<typeof guidePreviewSchema>;

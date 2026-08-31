@@ -18,12 +18,14 @@ import type {
   CreateSkydropxGuideInput,
   SkydropxQuoteInput,
   SkydropxQuoteResponse,
+  CreateDeliverySupportInput,
   CreateManualOrderInput,
   CreateOrderMessageInput,
   DevicePhotoKind,
   DevicePhotoResponse,
   ExistingInvoice,
   Guide,
+  ShipmentVia,
   GuidePreview,
   GuideTracking,
   InvoicePreview,
@@ -34,6 +36,7 @@ import type {
   OrderEvent as OrderEventDto,
   OrderMessage as OrderMessageDto,
   OrderSummary,
+  OrdersDashboard,
   OrdersPulse,
   SuperMentionAlert as SuperMentionAlertDto,
   ProcessAllInput,
@@ -43,6 +46,7 @@ import type {
   MentionItem,
   OrderSearchResult,
 } from '@smartlogistica/shared';
+import { DELIVERY_COURIER, DELIVERY_SUPPORT_PREFIX } from '@smartlogistica/shared';
 import type { Prisma, PrismaClient } from '.prisma/tenant-client';
 
 import { canManageOrders, canTransferOrders, isAdmin } from '../../common/rbac';
@@ -57,7 +61,10 @@ import { AiConnectionService } from '../ai/ai-connection.service';
 import { type ImageMime } from '../ai/ai-vision-client.service';
 import { AlegraService, type InvoiceClient } from '../marketplaces/alegra/alegra.service';
 import { WarrantyService } from '../marketplaces/alegra/warranty.service';
-import { CoordinadoraService, postalCodeByCity } from '../marketplaces/coordinadora/coordinadora.service';
+import {
+  CoordinadoraService,
+  postalCodeByCity,
+} from '../marketplaces/coordinadora/coordinadora.service';
 import { postalCodeForCity, postalCodeForDane } from '../marketplaces/skydropx/co-postal';
 import type { RastreoResult } from '../marketplaces/coordinadora/coordinadora-client.service';
 import { MktDocumentService } from '../marketplaces/vtex/mkt-document.service';
@@ -67,6 +74,7 @@ import { SkydropxService } from '../marketplaces/skydropx/skydropx.service';
 import { WaUpsellService } from '../whatsapp/wa-upsell.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { WarehousesService } from '../warehouses/warehouses.service';
+import { DeliverySupportService } from './delivery-support.service';
 import { loadPlatforms } from './platforms.store';
 
 const IMAGE_EXT: Record<ImageMime, string> = {
@@ -108,6 +116,18 @@ function groupReactions(
     byEmoji.set(r.emoji, g);
   }
   return [...byEmoji.entries()].map(([emoji, g]) => ({ emoji, ...g }));
+}
+
+/**
+ * Arranque del dia de HOY en horario de Colombia (GMT-5, sin DST) expresado en
+ * UTC. Lo usan el pulso de generales y el Resumen: "hoy" tiene que significar
+ * lo mismo en las dos pantallas.
+ */
+function startOfTodayBogota(now = new Date()): Date {
+  const bogota = new Date(now.getTime() - 5 * 3_600_000);
+  return new Date(
+    Date.UTC(bogota.getUTCFullYear(), bogota.getUTCMonth(), bogota.getUTCDate(), 5, 0, 0),
+  );
 }
 
 /** No leidos de un pedido: total + si me mencionan + ultimo mensaje (preview). */
@@ -156,6 +176,7 @@ export class OrdersService {
     private readonly upsell: WaUpsellService,
     private readonly skydropx: SkydropxService,
     private readonly dispatchRelation: DispatchRelationService,
+    private readonly deliverySupport: DeliverySupportService,
   ) {}
 
   async list(query: ListOrdersQuery, auth: AuthContext): Promise<ListOrdersResponse> {
@@ -219,7 +240,10 @@ export class OrdersService {
       if (statuses.length > 0) or.push({ addressStatus: { in: statuses } });
       if (parts.has('pending')) or.push({ addressStatus: null });
       if (or.length > 0) {
-        where.AND = [...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []), { OR: or }];
+        where.AND = [
+          ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+          { OR: or },
+        ];
       }
     }
 
@@ -233,7 +257,8 @@ export class OrdersService {
 
     if (query.from || query.to) {
       where.marketplaceCreatedAt = {};
-      if (query.from) (where.marketplaceCreatedAt as Prisma.DateTimeFilter).gte = new Date(query.from);
+      if (query.from)
+        (where.marketplaceCreatedAt as Prisma.DateTimeFilter).gte = new Date(query.from);
       if (query.to) (where.marketplaceCreatedAt as Prisma.DateTimeFilter).lte = new Date(query.to);
     }
     if (query.q) {
@@ -303,7 +328,9 @@ export class OrdersService {
       if (!governs) return null;
       if (waSent.has(o.id)) return 'sent';
       const since =
-        waConn.d360!.createdAt < WA_CONFIRMATION_SINCE ? waConn.d360!.createdAt : WA_CONFIRMATION_SINCE;
+        waConn.d360!.createdAt < WA_CONFIRMATION_SINCE
+          ? waConn.d360!.createdAt
+          : WA_CONFIRMATION_SINCE;
       return o.status === 'ready-for-handling' && o.marketplaceCreatedAt >= since ? 'unsent' : null;
     };
 
@@ -483,11 +510,7 @@ export class OrdersService {
       // generales ve su pulso (si no, la tira de metricas daria 403).
       if (!canManageOrders(auth)) throw new ForbiddenException('Sin acceso a pedidos generales');
       // "Hoy" en horario de Colombia (GMT-5, sin DST).
-      const now = new Date();
-      const bogota = new Date(now.getTime() - 5 * 3_600_000);
-      const startToday = new Date(
-        Date.UTC(bogota.getUTCFullYear(), bogota.getUTCMonth(), bogota.getUTCDate(), 5, 0, 0),
-      );
+      const startToday = startOfTodayBogota();
       const startYesterday = new Date(startToday.getTime() - 24 * 3_600_000);
       // OJO: la vista de generales es el espejo en 'ready-for-handling'. Los
       // facturados POR FUERA (status invoiced, trazabilidad) tambien tienen
@@ -503,7 +526,14 @@ export class OrdersService {
         prisma.order.count({ where: { ...mirror, addressStatus: null } }),
         prisma.order.count({ where: { ...mirror, claimedById: null } }),
       ]);
-      return { scope, a: today, b: unassigned, c: addrPending, d: unclaimed, deltaToday: today - yesterday };
+      return {
+        scope,
+        a: today,
+        b: unassigned,
+        c: addrPending,
+        d: unclaimed,
+        deltaToday: today - yesterday,
+      };
     }
 
     if (!warehouseId) throw new BadRequestException('Falta la sede');
@@ -542,6 +572,100 @@ export class OrdersService {
   }
 
   /**
+   * Datos del RESUMEN (la portada): las 3 metricas de arriba, las alertas de
+   * "Necesitan atencion" y la carga por sede, en un solo viaje.
+   *
+   * No inventa estados: reusa los mismos criterios que la tabla y el pulso —
+   * el espejo de generales (sin sede + ready-for-handling), "por preparar" =
+   * pedido de sede sin evento finalizador (igual que el badge del sidebar) y
+   * el "hoy" de Colombia (startOfTodayBogota).
+   */
+  async dashboard(auth: AuthContext): Promise<OrdersDashboard> {
+    // Mismo gate que el pulso de generales: el Resumen muestra generales.
+    if (!canManageOrders(auth)) throw new ForbiddenException('Sin acceso al resumen de pedidos');
+    const { prisma } = getTenantContext();
+    // null = todas las sedes (admin/gestor). Un operador no pasa el gate de
+    // arriba, pero si algun dia entrara solo contaria SUS sedes.
+    const allowed = await this.warehouses.accessibleWarehouseIds(auth);
+    const ofMine: Prisma.OrderWhereInput = allowed ? { warehouseId: { in: allowed } } : {};
+
+    const startToday = startOfTodayBogota();
+    const over24hAgo = new Date(Date.now() - 24 * 3_600_000);
+
+    // Generales = espejo de VTEX. Los facturados POR FUERA (mismo warehouseId
+    // null pero otro status) son solo trazabilidad: no son "sin asignar".
+    const mirror: Prisma.OrderWhereInput = { warehouseId: null, status: 'ready-for-handling' };
+    // Por preparar: en una sede viva y sin evento finalizador. El filtro de
+    // sede archivada mantiene el total cuadrado con la suma de perWarehouse.
+    const pendingWhere: Prisma.OrderWhereInput = {
+      ...ofMine,
+      warehouse: { is: { archived: false } },
+      events: { none: { type: { in: FINALIZED_EVENTS } } },
+    };
+    // "Vivos" = lo que el equipo todavia trabaja (generales + por preparar).
+    const alive: Prisma.OrderWhereInput = { OR: [mirror, pendingWhere] };
+
+    const [
+      unassigned,
+      unassignedOver24h,
+      pending,
+      pendingInvoiced,
+      dispatchedToday,
+      shippingIssues,
+      addressPending,
+      unclaimed,
+      sedes,
+    ] = await Promise.all([
+      prisma.order.count({ where: mirror }),
+      prisma.order.count({ where: { ...mirror, marketplaceCreatedAt: { lt: over24hAgo } } }),
+      prisma.order.count({ where: pendingWhere }),
+      // Ya facturado en Alegra pero sin cerrar todavia (evento 'invoiced').
+      // Va en AND: dos filtros sobre `events` no caben en el mismo objeto.
+      prisma.order.count({
+        where: {
+          ...ofMine,
+          warehouse: { is: { archived: false } },
+          AND: [
+            { events: { none: { type: { in: FINALIZED_EVENTS } } } },
+            { events: { some: { type: 'invoiced' } } },
+          ],
+        },
+      }),
+      // Despachados hoy = la guia se genero hoy (evento 'guide_generated').
+      prisma.order.count({
+        where: {
+          ...ofMine,
+          events: { some: { type: 'guide_generated', createdAt: { gte: startToday } } },
+        },
+      }),
+      // Novedad del envio: NO se filtra por "vivos" — cuando la transportadora
+      // reporta el problema el pedido ya suele estar cerrado (Facturados).
+      prisma.order.count({ where: { ...ofMine, shippingState: 'novedad' } }),
+      prisma.order.count({ where: { ...alive, addressStatus: null } }),
+      prisma.order.count({ where: { ...alive, claimedById: null } }),
+      // Carga por sede: la misma lista (y el mismo conteo) del sidebar.
+      this.warehouses.list(auth),
+    ]);
+
+    return {
+      unassigned,
+      unassignedOver24h,
+      pending,
+      pendingInvoiced,
+      dispatchedToday,
+      shippingIssues,
+      addressPending,
+      unclaimed,
+      perWarehouse: sedes.map((w) => ({
+        id: w.id,
+        slug: w.slug,
+        name: w.name,
+        pending: w.orderCount,
+      })),
+    };
+  }
+
+  /**
    * Asigna / transfiere / devuelve (warehouseId null) pedidos. Solo admins: la
    * transferencia entre sedes NO la hace un gestor (decision del propietario).
    */
@@ -575,8 +699,14 @@ export class OrdersService {
     ]);
     // Los EXTERNOS (sin asignar y ya avanzados en VTEX) son solo trazabilidad:
     // no se asignan a sedes.
-    if (prior.some((p) => !p.warehouseId && p.provider === 'vtex' && p.status !== 'ready-for-handling')) {
-      throw new BadRequestException('Ese pedido se procesó por fuera: es solo trazabilidad, no se puede asignar');
+    if (
+      prior.some(
+        (p) => !p.warehouseId && p.provider === 'vtex' && p.status !== 'ready-for-handling',
+      )
+    ) {
+      throw new BadRequestException(
+        'Ese pedido se procesó por fuera: es solo trazabilidad, no se puede asignar',
+      );
     }
 
     if (input.warehouseId && (!wh || wh.archived)) {
@@ -616,7 +746,10 @@ export class OrdersService {
     const fromIds = [...new Set(prior.map((o) => o.warehouseId).filter((x): x is string => !!x))];
     const fromNames = new Map(
       (
-        await prisma.warehouse.findMany({ where: { id: { in: fromIds } }, select: { id: true, name: true } })
+        await prisma.warehouse.findMany({
+          where: { id: { in: fromIds } },
+          select: { id: true, name: true },
+        })
       ).map((w) => [w.id, w.name]),
     );
     await prisma.orderEvent.createMany({
@@ -660,7 +793,9 @@ export class OrdersService {
     const platforms = await loadPlatforms();
     const platform = platforms.find((pl) => pl.id === input.platformId && pl.id !== 'vtex');
     if (!platform) {
-      throw new BadRequestException('Plataforma no valida. Elige una del catalogo (o creala en Ajustes).');
+      throw new BadRequestException(
+        'Plataforma no valida. Elige una del catalogo (o creala en Ajustes).',
+      );
     }
 
     const c = input.customer;
@@ -901,7 +1036,8 @@ export class OrdersService {
       }
       superRecipients = memberships
         .filter(
-          (m) => m.userId !== auth.userId && (m.role !== 'OPERATOR' || allowedOperators.has(m.userId)),
+          (m) =>
+            m.userId !== auth.userId && (m.role !== 'OPERATOR' || allowedOperators.has(m.userId)),
         )
         .map((m) => m.userId);
       mentions = [...new Set([...mentions, ...superRecipients])];
@@ -1232,7 +1368,8 @@ export class OrdersService {
       messageWhere.orderId = { in: opts.orderIds };
     }
     if (opts.since) messageWhere.createdAt = { gte: opts.since };
-    if (opts.scopeWarehouseIds) messageWhere.order = { warehouseId: { in: opts.scopeWarehouseIds } };
+    if (opts.scopeWarehouseIds)
+      messageWhere.order = { warehouseId: { in: opts.scopeWarehouseIds } };
 
     const [reads, messages] = await Promise.all([
       prisma.orderRead.findMany({
@@ -1753,7 +1890,11 @@ export class OrdersService {
   }
 
   /** Busca items de Alegra (selector manual de producto) usando el Alegra de la sede del pedido. */
-  async searchAlegraItems(orderId: string, query: string, auth: AuthContext): Promise<AlegraItem[]> {
+  async searchAlegraItems(
+    orderId: string,
+    query: string,
+    auth: AuthContext,
+  ): Promise<AlegraItem[]> {
     const order = await this.loadAccessibleOrder(orderId, auth);
     if (!order.warehouseId) throw new BadRequestException('Asigna el pedido a una sede.');
     return this.alegra.searchItems(order.warehouseId, query, auth);
@@ -1927,11 +2068,16 @@ export class OrdersService {
     if (!ev) return null;
     const d = (ev.data ?? {}) as Record<string, unknown>;
     const asStr = (v: unknown): string => (v == null ? '' : String(v));
+    // `via` distingue el envio a domicilio (sin guia real) de una guia de
+    // transportadora. Los eventos viejos no lo traen -> null = Coordinadora.
+    const via =
+      d.via === 'skydropx' || d.via === 'domicilio' || d.via === 'coordinadora' ? d.via : null;
     return {
       id: asStr(d.id),
       number: asStr(d.number),
       url: d.url != null ? String(d.url) : null,
       createdAt: ev.createdAt.toISOString(),
+      via: via as ShipmentVia | null,
     };
   }
 
@@ -1951,19 +2097,30 @@ export class OrdersService {
     // Pedido montado a mano: la ciudad se eligio del catalogo DANE al montarlo
     // (guardada en rawPayload.manual) — no hay nada que resolver.
     const manualCity = manualCityOf(order);
-    const [city, packagePresets] = await Promise.all([
+    const [city, packagePresets, guide, invoice] = await Promise.all([
       manualCity
         ? Promise.resolve(manualCity)
         : this.coordinadora
-            .resolveCity(order.warehouseId, client.address?.city ?? null, client.address?.department ?? null)
+            .resolveCity(
+              order.warehouseId,
+              client.address?.city ?? null,
+              client.address?.department ?? null,
+            )
             .catch(() => null),
       this.warehouses.getGlobalPackagePresets(),
+      this.existingGuide(orderId),
+      this.existingInvoice(orderId),
     ]);
 
     const { rotuloId, ...senderData } = sender;
     return {
-      guide: await this.existingGuide(orderId),
+      guide,
       packagePresets,
+      // Para el SOPORTE DE ENTREGA del domicilio: el "No. Orden" impreso es el
+      // Nº de la factura de Alegra, y las lineas arrancan con los productos del
+      // pedido (editables antes de emitir).
+      invoiceNumber: invoice?.number || null,
+      items: order.items.map((it) => ({ name: it.name, quantity: it.quantity })),
       recipient: {
         name: client.name,
         document: client.identification,
@@ -2031,8 +2188,13 @@ export class OrdersService {
       where: {
         warehouseId,
         guideNumber: { not: null },
-        // Las guias de SKYDROPX van por su propio rastreo (abajo).
-        AND: [{ OR: [{ shippingProvider: null }, { shippingProvider: { not: 'skydropx' } }] }],
+        // Las guias de SKYDROPX van por su propio rastreo (abajo). Y el
+        // DOMICILIO no se rastrea: no existe guia que consultar (ademas nunca
+        // escribe guideNumber, asi que este filtro es defensa en profundidad).
+        AND: [
+          { OR: [{ shippingProvider: null }, { shippingProvider: { not: 'skydropx' } }] },
+          { OR: [{ shippingProvider: null }, { shippingProvider: { not: 'domicilio' } }] },
+        ],
         // Todo lo que NO esta entregado (los entregados ya no cambian). Incluye
         // shippingState null: en Prisma `NOT: {x:'entregado'}` excluiria los null
         // (NULL <> 'entregado' no es true en SQL), y esos justamente son los que
@@ -2066,7 +2228,9 @@ export class OrdersService {
       if (o.guideNumber === o.skydropxShipmentId) {
         // Adjuntar documentos TAMBIEN cuenta como cambio: si no, el chat
         // abierto no se entera y hay que recargar para ver el rotulo.
-        if (await this.backfillSkydropxLabel(tenantId, prisma, o.id, o.skydropxShipmentId as string)) {
+        if (
+          await this.backfillSkydropxLabel(tenantId, prisma, o.id, o.skydropxShipmentId as string)
+        ) {
           updated++;
         }
       }
@@ -2082,7 +2246,11 @@ export class OrdersService {
       if (t.state !== o.shippingState || statusText !== o.shippingStatus) {
         await prisma.order.update({
           where: { id: o.id },
-          data: { shippingState: t.state, shippingStatus: statusText, shippingUpdatedAt: new Date() },
+          data: {
+            shippingState: t.state,
+            shippingStatus: statusText,
+            shippingUpdatedAt: new Date(),
+          },
         });
         updated++;
         // TRANSICION a ENTREGADO: toque 3 del flujo del respaldo, igual que
@@ -2139,6 +2307,9 @@ export class OrdersService {
     if (!order.warehouseId) return null;
     const guide = await this.existingGuide(orderId);
     if (!guide) return null;
+    // DOMICILIO (transportadora propia): no hay guia real, asi que no hay nada
+    // que rastrear. Sin este corte se llamaria a Coordinadora con "DOM-xxxxx".
+    if (order.shippingProvider === 'domicilio' || guide.via === 'domicilio') return null;
     // Guia hecha por SKYDROPX: el rastreo va por su API e indica la
     // TRANSPORTADORA real por la que salio el envio.
     if (order.shippingProvider === 'skydropx' && order.skydropxShipmentId) {
@@ -2214,7 +2385,8 @@ export class OrdersService {
     }
     await this.ensureNotExternallyInvoiced(orderId);
     const order = await this.loadAccessibleOrder(orderId, auth);
-    if (!order.warehouseId) throw new BadRequestException('Asigna el pedido a una sede para cotizar.');
+    if (!order.warehouseId)
+      throw new BadRequestException('Asigna el pedido a una sede para cotizar.');
     // Remitente: la PLANTILLA Skydropx fijada en la sede manda (verificada:
     // habilita paqueterias que exigen origen verificado, ej. Inter); sin
     // plantilla, direccion cruda de la conexion Coordinadora.
@@ -2240,7 +2412,11 @@ export class OrdersService {
       // DANE; el formato final (depto completo) y el CP salen del catalogo
       // postal nacional embebido.
       const resolved = await this.coordinadora
-        .resolveCity(order.warehouseId, client.address?.city ?? null, client.address?.department ?? null)
+        .resolveCity(
+          order.warehouseId,
+          client.address?.city ?? null,
+          client.address?.department ?? null,
+        )
         .catch(() => null);
       cityTo = resolved
         ? resolved.name.replace(/\s*\(.*?\)\s*/g, '').trim()
@@ -2353,7 +2529,11 @@ export class OrdersService {
     let daneTo: string | null = null;
     if (!cityIn) {
       const resolved = await this.coordinadora
-        .resolveCity(order.warehouseId, client.address?.city ?? null, client.address?.department ?? null)
+        .resolveCity(
+          order.warehouseId,
+          client.address?.city ?? null,
+          client.address?.department ?? null,
+        )
         .catch(() => null);
       if (resolved) {
         toCity = resolved.name.replace(/\s*\(.*?\)\s*/g, '').trim();
@@ -2367,60 +2547,62 @@ export class OrdersService {
       postalCodeForDane(daneTo) ||
       postalCodeForCity(toCity, toDept) ||
       (client.address?.zipCode ?? '').trim();
-    const ship = await this.skydropx.createShipment({
-      rateId: input.rateId,
-      quotationId: input.quotationId,
-      carrierName: input.carrierCode,
-      packagingCode: input.packagingCode,
-      from: sedeCfg
-        ? { address_template_id: sedeCfg.addressTemplateId }
-        : {
-            country_code: 'CO',
-            postal_code: cpFrom as string,
-            area_level1: senderCity.dept,
-            area_level2: senderCity.city,
-            area_level3: '',
-            street1: sender.address,
-            name: sender.name,
-            company: sender.name,
-            phone: sender.phone,
-            email: senderEmail,
-          },
-      to: {
-        country_code: 'CO',
-        postal_code: cpTo,
-        area_level1: toDept,
-        area_level2: toCity,
-        area_level3: '',
-        street1: input.recipient.address,
-        name: input.recipient.name,
-        phone: input.recipient.phone,
-        email: input.recipient.email?.trim() || client.email?.trim() || senderEmail,
-      },
-      parcel: {
-        length: input.package.length,
-        width: input.package.width,
-        height: input.package.height,
-        weight: input.package.weight,
-        declared_amount: input.package.declaredValue,
-      },
-      packageContent: input.packageContent,
-    }).catch((err: unknown) => {
-      // Skydropx responde un 422 cripticio cuando la paqueteria exige origen
-      // VERIFICADO y la sede no tiene remitente fijado (va la direccion cruda
-      // de Coordinadora, que Skydropx no tiene verificada). Se traduce a algo
-      // accionable en vez de escupir el volcado del API.
-      const detail = err instanceof Error ? err.message : String(err);
-      if (/verificaci[oó]n de direcci[oó]n de origen/i.test(detail)) {
-        const sede = sender.name || 'esta sede';
-        throw new BadRequestException(
-          sedeCfg
-            ? `La transportadora ${input.carrier} exige un origen verificado y el remitente Skydropx fijado en ${sede} («${sedeCfg.alias ?? ''}») no está verificado para ella. Elige otra transportadora, o fija en los Ajustes de la sede una dirección con esa transportadora verificada.`
-            : `La sede ${sede} no tiene remitente Skydropx fijado, y ${input.carrier} exige un origen verificado. Ve a los Ajustes de la sede → «Remitente Skydropx» y fija una de tus direcciones verificadas.`,
-        );
-      }
-      throw err;
-    });
+    const ship = await this.skydropx
+      .createShipment({
+        rateId: input.rateId,
+        quotationId: input.quotationId,
+        carrierName: input.carrierCode,
+        packagingCode: input.packagingCode,
+        from: sedeCfg
+          ? { address_template_id: sedeCfg.addressTemplateId }
+          : {
+              country_code: 'CO',
+              postal_code: cpFrom as string,
+              area_level1: senderCity.dept,
+              area_level2: senderCity.city,
+              area_level3: '',
+              street1: sender.address,
+              name: sender.name,
+              company: sender.name,
+              phone: sender.phone,
+              email: senderEmail,
+            },
+        to: {
+          country_code: 'CO',
+          postal_code: cpTo,
+          area_level1: toDept,
+          area_level2: toCity,
+          area_level3: '',
+          street1: input.recipient.address,
+          name: input.recipient.name,
+          phone: input.recipient.phone,
+          email: input.recipient.email?.trim() || client.email?.trim() || senderEmail,
+        },
+        parcel: {
+          length: input.package.length,
+          width: input.package.width,
+          height: input.package.height,
+          weight: input.package.weight,
+          declared_amount: input.package.declaredValue,
+        },
+        packageContent: input.packageContent,
+      })
+      .catch((err: unknown) => {
+        // Skydropx responde un 422 cripticio cuando la paqueteria exige origen
+        // VERIFICADO y la sede no tiene remitente fijado (va la direccion cruda
+        // de Coordinadora, que Skydropx no tiene verificada). Se traduce a algo
+        // accionable en vez de escupir el volcado del API.
+        const detail = err instanceof Error ? err.message : String(err);
+        if (/verificaci[oó]n de direcci[oó]n de origen/i.test(detail)) {
+          const sede = sender.name || 'esta sede';
+          throw new BadRequestException(
+            sedeCfg
+              ? `La transportadora ${input.carrier} exige un origen verificado y el remitente Skydropx fijado en ${sede} («${sedeCfg.alias ?? ''}») no está verificado para ella. Elige otra transportadora, o fija en los Ajustes de la sede una dirección con esa transportadora verificada.`
+              : `La sede ${sede} no tiene remitente Skydropx fijado, y ${input.carrier} exige un origen verificado. Ve a los Ajustes de la sede → «Remitente Skydropx» y fija una de tus direcciones verificadas.`,
+          );
+        }
+        throw err;
+      });
     const carrier = ship.carrier || input.carrier || 'Skydropx';
 
     // Pipeline identico al de Coordinadora: aviso + evento + denormalizado.
@@ -2494,11 +2676,253 @@ export class OrdersService {
       number: ship.trackingNumber,
       url: ship.labelUrl ?? '',
       createdAt: new Date().toISOString(),
+      via: 'skydropx',
     };
   }
 
+  // === DOMICILIO: transportadora propia (envio SIN guia) ===
+
+  /** Nombre del PDF que se adjunta al chat. */
+  private static readonly DELIVERY_FILE_PREFIX = 'SOPORTE-ENTREGA-';
+
+  /**
+   * Emite el SOPORTE DE ENTREGA de un domicilio y cierra el pedido.
+   *
+   * No hay transportadora, no hay guia, no hay rastreo: el unico documento es
+   * el soporte, que se imprime y firma el cliente al recibir. El cierre en VTEX
+   * es el mismo de siempre pero con `courier` de domicilio y SIN tracking.
+   */
+  async generateDeliverySupport(
+    orderId: string,
+    input: CreateDeliverySupportInput,
+    auth: AuthContext,
+  ): Promise<Guide> {
+    // MISMO permiso que las dos guias: emitir el soporte factura el pedido en
+    // VTEX, que es irreversible. Va inline porque aqui no hay servicio de
+    // transportadora que traiga su propio gate.
+    if (!canManageOrders(auth)) {
+      throw new ForbiddenException('No tienes permiso para emitir soportes de entrega.');
+    }
+    // MISMA clave que Coordinadora y Skydropx: un pedido tiene un solo envio en
+    // vuelo, salga como salga.
+    this.acquireLock(`${orderId}:guide`, 'Ya hay un envío en curso para este pedido.');
+    try {
+      return await this.generateDeliverySupportLocked(orderId, input, auth);
+    } finally {
+      this.opLocks.delete(`${orderId}:guide`);
+    }
+  }
+
+  private async generateDeliverySupportLocked(
+    orderId: string,
+    input: CreateDeliverySupportInput,
+    auth: AuthContext,
+  ): Promise<Guide> {
+    await this.ensureNotExternallyInvoiced(orderId);
+    const order = await this.loadAccessibleOrder(orderId, auth);
+    if (!order.warehouseId) {
+      throw new BadRequestException(
+        'Asigna el pedido a una sede para emitir el soporte de entrega.',
+      );
+    }
+    const already = await this.existingGuide(orderId);
+    if (already) {
+      throw new ConflictException(
+        `Este pedido ya tiene envío (${already.number}). Anúlalo antes de emitir otro.`,
+      );
+    }
+    // La factura de Alegra es REQUISITO, no opcional como en las guias: el
+    // "No. Orden" impreso en el soporte es su numero. Sin ella el documento
+    // saldria mutilado y ademas el cierre en VTEX no tendria numero que enviar.
+    const invoice = await this.existingInvoice(orderId);
+    if (!invoice?.number) {
+      throw new BadRequestException(
+        'Factura primero en Alegra: el «No. Orden» del soporte de entrega es el N° de esa factura.',
+      );
+    }
+
+    const { tenantId, prisma } = getTenantContext();
+    const number = `${DELIVERY_SUPPORT_PREFIX}${invoice.number}`;
+
+    // El PDF se arma ANTES de escribir nada: es lo unico que puede reventar por
+    // datos raros (un glifo fuera de WinAnsi), y asi el pedido queda intacto.
+    const pdf = await this.deliverySupport.build({
+      invoiceNumber: invoice.number,
+      customerName: input.recipient.name,
+      customerDocument: input.recipient.document,
+      customerPhone: input.recipient.phone,
+      address: input.recipient.address,
+      deliveryDate: input.deliveryDate ?? bogotaToday(),
+      items: input.items,
+    });
+
+    // Tres escrituras puras sin llamada externa de por medio -> en transaccion.
+    // Evita el estado imposible "evento creado pero shippingProvider sin
+    // escribir", que dejaria el pedido bloqueado y a la vez diciendo "sin guia".
+    await prisma.$transaction([
+      prisma.orderMessage.create({
+        data: {
+          orderId,
+          authorId: auth.userId,
+          authorName: displayName(auth),
+          kind: 'system',
+          body: `Soporte de entrega ${number} emitido · entrega a domicilio (transportadora propia).`,
+          imeis: [],
+        },
+      }),
+      prisma.orderEvent.create({
+        data: {
+          orderId,
+          type: 'guide_generated',
+          actorId: auth.userId,
+          actorName: displayName(auth),
+          data: {
+            number,
+            id: number,
+            url: null, // no hay rotulo ni rastreo
+            cod: null,
+            via: 'domicilio',
+            carrier: DELIVERY_COURIER,
+            invoiceNumber: invoice.number,
+          } as Prisma.InputJsonValue,
+        },
+      }),
+      prisma.order.update({
+        where: { id: orderId },
+        data: {
+          // guideNumber SE QUEDA NULL a proposito: el poll de rastreo selecciona
+          // por esa columna y "DOM-xxxxx" no es una guia que nadie pueda seguir.
+          shippingProvider: 'domicilio',
+          shippingState: 'en_transito',
+          shippingStatus: 'Domicilio propio · En reparto',
+          shippingUpdatedAt: new Date(),
+        },
+      }),
+    ]);
+
+    // Soporte al chat + cierre del pedido. Best-effort las dos: el soporte ya
+    // quedo emitido y ninguna de las dos puede tumbarlo.
+    // NO se manda nada por WhatsApp: la plantilla de guia lleva el link de
+    // rastreo horneado dentro y aqui no hay nada que rastrear.
+    await Promise.all([
+      this.attachDeliverySupport(orderId, number, pdf, auth),
+      order.provider === 'manual'
+        ? this.finalizeManual(order, auth).catch(() => null)
+        : this.finalizeVtex({ ...order, shippingProvider: 'domicilio' }, auth).catch(() => null),
+    ]);
+
+    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+    return { id: number, number, url: null, createdAt: new Date().toISOString(), via: 'domicilio' };
+  }
+
+  /** Sube el soporte de entrega y lo deja en la conversacion del pedido. */
+  private async attachDeliverySupport(
+    orderId: string,
+    number: string,
+    pdf: Buffer,
+    auth: AuthContext,
+  ): Promise<void> {
+    if (!this.storage.isConfigured()) return;
+    const { tenantId, prisma } = getTenantContext();
+    try {
+      const fileName = `${OrdersService.DELIVERY_FILE_PREFIX}${number}.pdf`;
+      const key = `tenants/${tenantId}/orders/${orderId}/${slugForKey(fileName)}-${randomUUID()}.pdf`;
+      await this.storage.put(key, pdf, 'application/pdf', contentDisposition(fileName));
+      await prisma.orderMessage.create({
+        data: {
+          orderId,
+          authorId: auth.userId,
+          authorName: displayName(auth),
+          kind: 'document',
+          body: fileName,
+          attachmentKey: key,
+          attachmentMime: 'application/pdf',
+          imeis: [],
+        },
+      });
+    } catch {
+      // El soporte ya quedo emitido: un fallo al adjuntarlo no lo tumba.
+    }
+  }
+
+  /**
+   * MARCA ENTREGADO un envio a domicilio. Es la unica forma de cerrarle el
+   * ciclo: el poll de rastreo no lo toca (no hay guia que consultar), asi que
+   * sin esto se quedaria en "en transito" para siempre, inflando el pulso de la
+   * sede y dejando fuera el toque post-entrega de WhatsApp.
+   */
+  async markDelivered(orderId: string, auth: AuthContext): Promise<{ ok: boolean }> {
+    if (!canManageOrders(auth)) {
+      throw new ForbiddenException('No tienes permiso para cerrar entregas.');
+    }
+    const { tenantId, prisma } = getTenantContext();
+    const order = await this.loadAccessibleOrder(orderId, auth);
+    if (order.shippingProvider !== 'domicilio') {
+      throw new BadRequestException(
+        'Solo las entregas a domicilio se marcan a mano: las de transportadora las cierra el rastreo.',
+      );
+    }
+    if (order.shippingState === 'entregado') return { ok: true };
+
+    await prisma.$transaction([
+      prisma.order.update({
+        where: { id: orderId },
+        data: {
+          shippingState: 'entregado',
+          shippingStatus: 'Entregado a domicilio',
+          shippingUpdatedAt: new Date(),
+        },
+      }),
+      prisma.orderMessage.create({
+        data: {
+          orderId,
+          authorId: auth.userId,
+          authorName: displayName(auth),
+          kind: 'system',
+          body: 'Entrega a domicilio confirmada.',
+          imeis: [],
+        },
+      }),
+    ]);
+    // Mismo toque 3 del flujo de respaldo que dispara el rastreo al entregar.
+    this.upsell.triggerDelivered(tenantId, prisma, orderId);
+    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+    return { ok: true };
+  }
+
+  /**
+   * REINTENTA el cierre del pedido (VTEX o manual) cuando el envio ya se emitio
+   * pero el cierre fallo (VTEX caido, timeout...). Idempotente: si ya se cerro,
+   * `finalizeVtex` sale solo por su evento `vtex_invoiced`.
+   */
+  async retryFinalize(orderId: string, auth: AuthContext): Promise<{ ok: boolean }> {
+    if (!canManageOrders(auth)) {
+      throw new ForbiddenException('No tienes permiso para cerrar pedidos.');
+    }
+    // MISMA clave que emitir el envio: si no, un reintento podria solaparse con
+    // una guia en curso y facturar dos veces en VTEX (irreversible).
+    this.acquireLock(`${orderId}:guide`, 'Ya hay una operación en curso para este pedido.');
+    try {
+      const order = await this.loadAccessibleOrder(orderId, auth);
+      if (order.provider === 'manual') await this.finalizeManual(order, auth);
+      else await this.finalizeVtex(order, auth);
+      const { prisma } = getTenantContext();
+      const done = await prisma.orderEvent.findFirst({
+        where: { orderId, type: { in: FINALIZED_EVENTS } },
+        select: { id: true },
+      });
+      return { ok: Boolean(done) };
+    } finally {
+      this.opLocks.delete(`${orderId}:guide`);
+    }
+  }
+
   /** Busca ciudades (selector de destino) via la conexion de la sede del pedido. */
-  async searchGuideCities(orderId: string, query: string, auth: AuthContext): Promise<CoordinadoraCity[]> {
+  async searchGuideCities(
+    orderId: string,
+    query: string,
+    auth: AuthContext,
+  ): Promise<CoordinadoraCity[]> {
     const order = await this.loadAccessibleOrder(orderId, auth);
     if (!order.warehouseId) throw new BadRequestException('Asigna el pedido a una sede.');
     return this.coordinadora.searchCities(order.warehouseId, query);
@@ -2648,7 +3072,13 @@ export class OrdersService {
 
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
 
-    return { id: guide.id, number: guide.number, url: guide.url, createdAt: new Date().toISOString() };
+    return {
+      id: guide.id,
+      number: guide.number,
+      url: guide.url,
+      createdAt: new Date().toISOString(),
+      via: 'coordinadora',
+    };
   }
 
   /**
@@ -2668,7 +3098,10 @@ export class OrdersService {
     const docs = await this.skydropx.shipmentDocs(shipmentId).catch(() => null);
     if (!docs?.trackingNumber || docs.trackingNumber === shipmentId) return false;
 
-    const order = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: { items: true },
+    });
     if (!order || order.guideNumber !== shipmentId) return false; // ya lo rescato otra pasada
     const actor = await this.guideActor(prisma, orderId);
 
@@ -2772,7 +3205,10 @@ export class OrdersService {
       select: { id: true },
     });
     if (already) return false;
-    const order = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: { items: true },
+    });
     if (!order) return false;
     const rel = await this.skydropx.shipmentRelation(shipmentId).catch(() => null);
     if (!rel?.carrier) return false;
@@ -2905,7 +3341,8 @@ export class OrdersService {
     });
     // invoiceNumber = prefijo de la sede + numero de factura de Alegra (ej. "PA25879").
     const invoiceNumber = `${wh?.invoicePrefix ?? ''}${invoice.number}`;
-    const invoiceValue = vtexValueCents(order.rawPayload) ?? Math.round(Number(order.totalValue) * 100);
+    const invoiceValue =
+      vtexValueCents(order.rawPayload) ?? Math.round(Number(order.totalValue) * 100);
 
     let mktPdf: Buffer | null = null;
     try {
@@ -2913,15 +3350,32 @@ export class OrdersService {
       // start-handling solo aplica desde ready-for-handling; si ya esta en handling
       // devuelve error -> best-effort (lo ignoramos y seguimos con la factura).
       await this.vtex.startHandling(http, order.externalId).catch(() => null);
-      await this.vtex.notifyInvoice(http, order.externalId, {
-        type: 'Output',
-        issuanceDate: new Date().toISOString(),
-        invoiceNumber,
-        invoiceValue,
-        trackingNumber: guide.number,
-        trackingUrl: 'https://coordinadora.com/rastreo/rastreo-de-guia/',
-        courier: 'Transportadora estándar',
-      });
+      // DOMICILIO (transportadora propia): la factura va SIN tracking. Los
+      // campos se OMITEN (undefined -> axios no los serializa); mandarlos como
+      // "" crearia en VTEX un paquete con seguimiento vacio, que es justo el
+      // enlace muerto que no debe llegarle al cliente.
+      const viaDomicilio = order.shippingProvider === 'domicilio' || guide.via === 'domicilio';
+      await this.vtex.notifyInvoice(
+        http,
+        order.externalId,
+        viaDomicilio
+          ? {
+              type: 'Output',
+              issuanceDate: new Date().toISOString(),
+              invoiceNumber,
+              invoiceValue,
+              courier: DELIVERY_COURIER,
+            }
+          : {
+              type: 'Output',
+              issuanceDate: new Date().toISOString(),
+              invoiceNumber,
+              invoiceValue,
+              trackingNumber: guide.number,
+              trackingUrl: 'https://coordinadora.com/rastreo/rastreo-de-guia/',
+              courier: 'Transportadora estándar',
+            },
+      );
       // Re-traer el pedido (ya con la factura/tracking cargados) y generar el MKT.
       const detail = await this.vtex.getOrder(http, order.externalId);
       mktPdf = await this.mkt.build(detail).catch(() => null);
@@ -3012,7 +3466,14 @@ export class OrdersService {
   private async systemMessage(orderId: string, auth: AuthContext, body: string): Promise<void> {
     const { prisma } = getTenantContext();
     await prisma.orderMessage.create({
-      data: { orderId, authorId: auth.userId, authorName: displayName(auth), kind: 'system', body, imeis: [] },
+      data: {
+        orderId,
+        authorId: auth.userId,
+        authorName: displayName(auth),
+        kind: 'system',
+        body,
+        imeis: [],
+      },
     });
   }
 
@@ -3108,6 +3569,8 @@ export class OrdersService {
       shippingState: (o.shippingState as OrderSummary['shippingState']) ?? null,
       shippingStatus: o.shippingStatus,
       shippingUpdatedAt: o.shippingUpdatedAt ? o.shippingUpdatedAt.toISOString() : null,
+      // Sin esto la tabla no puede distinguir "sin guia" de "sale por domicilio".
+      shippingProvider: o.shippingProvider,
       addressStatus: (o.addressStatus as OrderSummary['addressStatus']) ?? null,
       confirmedAddress: o.confirmedAddress,
       addressConfirmedAt: o.addressConfirmedAt ? o.addressConfirmedAt.toISOString() : null,
@@ -3444,6 +3907,20 @@ function tokenizeName(s: string): string[] {
     .replace(/[̀-ͯ]/g, '')
     .split(/[^a-z0-9]+/)
     .filter((t) => t.length >= 2);
+}
+
+/**
+ * Fecha de HOY en Bogota (YYYY-MM-DD). El servidor corre en UTC, asi que un
+ * `toISOString().slice(0,10)` despues de las 19:00 imprimiria el dia siguiente
+ * en el soporte de entrega.
+ */
+function bogotaToday(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Bogota',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
 }
 
 /** Slug ASCII para el nombre de archivo dentro de la key de storage. */

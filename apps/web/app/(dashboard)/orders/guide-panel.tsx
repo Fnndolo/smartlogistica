@@ -4,13 +4,16 @@ import { useEffect, useRef, useState } from 'react';
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
+  Bike,
   CheckCircle2,
   CreditCard,
   ExternalLink,
   Loader2,
   MapPin,
   Package,
+  Plus,
   RefreshCw,
+  Trash2,
   Truck,
   Zap,
   type LucideIcon,
@@ -20,9 +23,11 @@ import {
   coordinadoraRotuloOptions,
   type CoordinadoraCity,
   type CreateSkydropxGuideInput,
+  type DeliveryItem,
   type Guide,
   type GuidePreview,
   type GuideTracking,
+  type PackagePreset,
   type SkydropxPackaging,
   type SkydropxCity,
   type SkydropxPackagePreset,
@@ -69,6 +74,16 @@ const BTN_PRIMARY_CLS =
 /** Boton secundario del mockup (.btn-ghost). */
 const BTN_GHOST_CLS =
   'h-auto max-w-full whitespace-normal rounded-[11px] border border-input bg-card px-[18px] py-2.5 text-center text-[13.5px] font-extrabold tracking-[0.01em] text-muted-foreground shadow-none hover:bg-card hover:border-accent hover:text-accent motion-reduce:transition-none max-sm:w-full [&_svg]:size-[15px]';
+/** Boton de solo icono (quitar una linea de producto): 38px, rojo al pasar. */
+const ICON_BTN_CLS =
+  'h-auto min-h-[38px] w-[38px] shrink-0 rounded-[10px] border border-input bg-card p-0 text-hint shadow-none transition-colors hover:border-destructive hover:bg-card hover:text-destructive max-md:min-h-[42px] [&_svg]:size-[15px]';
+
+/** Hoy en formato YYYY-MM-DD (hora local del navegador) para el <input type="date">. */
+function todayISO(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
 
 interface Recipient {
   name: string;
@@ -89,8 +104,25 @@ interface Pkg {
   observations: string;
 }
 
-/** Transportadora del panel: Coordinadora (directa) o Skydropx (agregador). */
-type Courier = 'coordinadora' | 'skydropx';
+/** Campos que ESCRIBE un paquete guardado (medidas, peso y contenido). */
+const PRESET_FIELDS = ['weight', 'height', 'width', 'length', 'content'] as const;
+
+/**
+ * ¿El bloque Paquete sigue exactamente como lo entrego el preview? Solo
+ * entonces se preselecciona el paquete PREDETERMINADO: lo que el usuario
+ * escribio — o lo que restauro el borrador de una visita anterior — manda.
+ */
+function pkgIsPristine(pkg: Pkg, base: GuidePreview['package']): boolean {
+  return PRESET_FIELDS.every((f) => pkg[f] === String(base[f]));
+}
+
+/**
+ * Como sale el envio: Coordinadora (directa), Skydropx (agregador) o DOMICILIO
+ * (transportadora propia). El domicilio no es una tercera transportadora: es un
+ * envio SIN GUIA — no hay rotulo, ni rastreo, ni link. Su unico documento es el
+ * soporte de entrega, que se imprime y firma el cliente al recibir.
+ */
+type Courier = 'coordinadora' | 'skydropx' | 'domicilio';
 
 /** Embalaje por defecto del catalogo de Skydropx: '4G' = Caja de carton. */
 const DEFAULT_PACKAGING_CODE = '4G';
@@ -120,6 +152,8 @@ interface GuideDraft {
   // Modo Skydropx: embalaje elegido del catalogo (opcional: los borradores
   // viejos no lo traen -> cae al default '4G').
   packagingCode?: string;
+  // Modo Domicilio: productos del soporte (editables) y fecha impresa.
+  domItems?: DeliveryItem[];
 }
 
 export function GuidePanel({
@@ -143,6 +177,12 @@ export function GuidePanel({
   const [codOn, setCodOn] = useState<boolean>(draft?.codOn ?? false);
   const [codValue, setCodValue] = useState<string>(draft?.codValue ?? orderTotal ?? '');
   const [result, setResult] = useState<Guide | null>(null);
+
+  // === Domicilio (transportadora propia) ===
+  // Productos que van en el soporte: arrancan con los del pedido (preview) y se
+  // pueden corregir antes de emitir, como todo lo demas del panel.
+  const [domItems, setDomItems] = useState<DeliveryItem[] | null>(draft?.domItems ?? null);
+  const [domDate, setDomDate] = useState<string>(todayISO());
 
   // === Skydropx ===
   const [courier, setCourier] = useState<Courier>(draft?.courier ?? 'coordinadora');
@@ -242,8 +282,89 @@ export function GuidePanel({
         observations: preview.package.observations ?? '',
       });
       setRotuloId(preview.rotuloId);
+      // Productos del soporte de entrega: los del pedido, editables.
+      // `?? []` NO es paranoia: `api.get` es un cast, no un parseo con zod, asi
+      // que el `.default([])` del esquema no llega a aplicarse. Un API mas
+      // viejo que este front (ventana de despliegue, o un front local apuntando
+      // a produccion) devuelve el preview SIN `items` y esto reventaba el
+      // drawer entero con "Cannot read properties of undefined".
+      setDomItems((cur) => cur ?? (preview.items ?? []).map((it) => ({ ...it })));
     }
   }, [preview, recipient]);
+
+  /* ── Paquete PREDETERMINADO (Ajustes > Paquetes) ───────────────────────────
+     El paquete marcado como predeterminado arranca elegido y aplica sus
+     medidas EXACTAMENTE como si lo hubieran pulsado. Una sola vez por catalogo
+     y solo si nadie toco el bloque Paquete: ni lo tecleado ahora ni lo que
+     restauro el borrador se pisa jamas. */
+
+  /** true en cuanto el usuario edita a mano un campo del paquete. */
+  const pkgEdited = useRef(false);
+  /** ¿El paquete llego SIN personalizar? Se mide UNA vez, antes de que nada lo
+   *  toque (null = todavia sin preview o sin paquete). */
+  const pkgWasPristine = useRef<boolean | null>(null);
+  const defaultApplied = useRef(false);
+  const sdxDefaultApplied = useRef(false);
+
+  useEffect(() => {
+    if (pkgWasPristine.current === null && preview && pkg) {
+      pkgWasPristine.current = pkgIsPristine(pkg, preview.package);
+    }
+  }, [preview, pkg]);
+
+  /** Aplica un paquete guardado al bloque Paquete: medidas, peso y — si el
+   *  paquete lo trae — contenido. Lo comparten el clic del usuario y la
+   *  preseleccion del predeterminado, para que hagan lo MISMO. */
+  const applyPreset = (p: PackagePreset) =>
+    setPkg((v) =>
+      v
+        ? {
+            ...v,
+            weight: String(p.weight),
+            height: String(p.height),
+            width: String(p.width),
+            length: String(p.length),
+            ...(p.content ? { content: p.content } : {}),
+          }
+        : v,
+    );
+  /**
+   * Igual, mas lo PROPIO de Skydropx: el embalaje del catalogo y el valor
+   * declarado sugerido. Si el paquete no trae valor declarado se respeta el
+   * que ya venia (la mitad de la compra).
+   */
+  const applySdxPreset = (p: SkydropxPackagePreset) => {
+    applyPreset(p);
+    if (p.packagingCode) setPackagingCode(p.packagingCode);
+    if (p.declaredValue) {
+      setPkg((v) => (v ? { ...v, declaredValue: String(p.declaredValue) } : v));
+    }
+  };
+
+  // Coordinadora: pastillas de paquete guardado (llegan en el preview).
+  useEffect(() => {
+    if (defaultApplied.current || courier === 'skydropx' || !preview || !pkg) return;
+    const def = (preview.packagePresets ?? []).find((p) => p.isDefault);
+    if (!def) return;
+    defaultApplied.current = true;
+    if (pkgEdited.current || pkgWasPristine.current !== true) return;
+    setPresetName(def.name);
+    applyPreset(def);
+    // applyPreset se recrea en cada render: por eso NO va en las dependencias.
+  }, [preview, pkg, courier]);
+
+  // Skydropx: desplegable de paquete guardado (catalogo propio, se pide solo
+  // al entrar en modo Skydropx).
+  useEffect(() => {
+    if (sdxDefaultApplied.current || courier !== 'skydropx' || !preview || !pkg) return;
+    const def = sdxPresets.find((p) => p.isDefault);
+    if (!def) return;
+    sdxDefaultApplied.current = true;
+    if (pkgEdited.current || pkgWasPristine.current !== true) return;
+    setSdxPresetName(def.name);
+    applySdxPreset(def);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preview, pkg, courier, sdxPresets]);
 
   // Persistir el borrador con cada edicion (sobrevive cierre del drawer).
   useEffect(() => {
@@ -260,6 +381,10 @@ export function GuidePanel({
         packagingCode,
         // Ciudad elegida en modo Skydropx (sobrevive cierre del drawer).
         ...(sdxCity ? { cityTo: sdxCity.name, departmentTo: sdxCity.department } : {}),
+        // Productos del soporte de entrega (modo Domicilio). La FECHA no se
+        // guarda a proposito: el borrador vive lo que viva la pestaña, y una
+        // fecha congelada de ayer acabaria impresa en el documento firmado.
+        ...(domItems ? { domItems } : {}),
       });
     }
   }, [
@@ -272,6 +397,7 @@ export function GuidePanel({
     postalCodeTo,
     packagingCode,
     sdxCity,
+    domItems,
     orderId,
   ]);
 
@@ -316,6 +442,43 @@ export function GuidePanel({
     },
     onError: (err) =>
       toast.error(err instanceof ApiError ? err.message : 'No se pudo generar la guía'),
+  });
+
+  /**
+   * DOMICILIO: emite el soporte de entrega. Comparte `mutationKey` con las dos
+   * guias a proposito — un pedido tiene un solo envio en vuelo, salga como
+   * salga, y asi el bloqueo del boton y `useIsMutating` funcionan sin nada nuevo.
+   */
+  const generateDelivery = useMutation({
+    mutationKey: ['op-guide', orderId],
+    mutationFn: () =>
+      api.post<Guide>(`/v1/orders/${orderId}/delivery-support`, {
+        recipient: {
+          name: recipient!.name.trim(),
+          document: recipient!.document.trim(),
+          address: recipient!.address.trim(),
+          phone: recipient!.phone.trim(),
+        },
+        items: (domItems ?? []).map((it) => ({
+          name: it.name.trim(),
+          quantity: Math.max(1, it.quantity),
+        })),
+        // Vacia = que el server ponga hoy (Bogota). Mandar '' seria un 400.
+        ...(domDate ? { deliveryDate: domDate } : {}),
+      }),
+    onSuccess: (g) => {
+      setResult(g);
+      clearDraft(`guide:${orderId}`);
+      toast.success(`Soporte de entrega ${g.number} emitido`);
+      qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
+      qc.invalidateQueries({ queryKey: ['order-events', orderId] });
+      qc.invalidateQueries({ queryKey: ['guide-preview', orderId] });
+      qc.invalidateQueries({ queryKey: ['orders'] });
+    },
+    onError: (err) =>
+      toast.error(
+        err instanceof ApiError ? err.message : 'No se pudo emitir el soporte de entrega',
+      ),
   });
 
   // Paquete en el shape que pide Skydropx (cotizar y generar usan el MISMO:
@@ -457,6 +620,8 @@ export function GuidePanel({
   if (!recipient || !pkg || !preview) return null;
 
   const sdx = courier === 'skydropx';
+  const dom = courier === 'domicilio';
+  const items = domItems ?? [];
 
   /** Ciudad y departamento de destino VIGENTES en modo Skydropx: lo elegido
    *  manda, luego lo que salio en la cotizacion, y de base lo que el preview
@@ -499,8 +664,29 @@ export function GuidePanel({
     (postalCodeTo.trim().length >= 4 || quotedCity !== null) &&
     Number(pkg.weight) > 0;
 
+  /** El soporte de entrega imprime el Nº de factura de Alegra como "No. Orden":
+   *  sin factura no hay documento que emitir. */
+  const canGenerateDom =
+    Boolean(preview.invoiceNumber) &&
+    recipient.name.trim().length >= 2 &&
+    recipient.document.trim().length >= 3 &&
+    recipient.address.trim().length >= 3 &&
+    recipient.phone.trim().length >= 5 &&
+    items.length > 0 &&
+    // TODAS con nombre: si se filtraran las vacias, el soporte que firma el
+    // cliente saldria con un producto menos y nadie se enteraria.
+    items.every((it) => it.name.trim().length > 0);
+
+  const patchItem = (index: number, p: Partial<DeliveryItem>) =>
+    setDomItems((v) => (v ?? []).map((it, i) => (i === index ? { ...it, ...p } : it)));
+
   const patchR = (p: Partial<Recipient>) => setRecipient((r) => (r ? { ...r, ...p } : r));
-  const patchP = (p: Partial<Pkg>) => setPkg((v) => (v ? { ...v, ...p } : v));
+  /** Edicion MANUAL del paquete: desde aqui el predeterminado ya no se aplica
+   *  (los paquetes guardados entran por applyPreset, no por aca). */
+  const patchP = (p: Partial<Pkg>) => {
+    pkgEdited.current = true;
+    setPkg((v) => (v ? { ...v, ...p } : v));
+  };
 
   // Total mas bajo de la cotizacion vigente (solo para la pastilla "Más
   // barata" de la tarjeta de tarifa; puramente visual).
@@ -509,21 +695,24 @@ export function GuidePanel({
 
   return (
     <div className="p-[22px]">
-      {/* Transportadora: Coordinadora (flujo directo, por defecto) o Skydropx
-          (agregador: cotiza varias transportadoras y genera con la elegida). */}
+      {/* Como sale el envio: Coordinadora (directa, por defecto), Skydropx
+          (agregador: cotiza varias y genera con la elegida) o Domicilio
+          (transportadora propia: sin guia, solo el soporte de entrega). */}
       <div
         role="group"
-        aria-label="Transportadora"
+        aria-label="Cómo sale el envío"
         className="mb-[18px] flex max-w-full flex-wrap gap-[3px] rounded-xl border border-border bg-wash p-[3px] sm:inline-flex"
       >
         <button
           type="button"
           onClick={() => setCourier('coordinadora')}
-          aria-pressed={!sdx}
+          aria-pressed={courier === 'coordinadora'}
           className={cn(
             'inline-flex min-w-0 flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-[9px] px-4 py-[7px] text-[13px] font-extrabold transition-colors sm:flex-none sm:justify-start max-md:min-h-[40px]',
             FOCUS_RING,
-            !sdx ? 'bg-card text-foreground shadow-card' : 'text-muted-foreground',
+            courier === 'coordinadora'
+              ? 'bg-card text-foreground shadow-card'
+              : 'text-muted-foreground',
           )}
         >
           <CourierMark slug="coordinadora" />
@@ -542,10 +731,36 @@ export function GuidePanel({
           <CourierMark slug="skydropx" />
           Skydropx
         </button>
+        <button
+          type="button"
+          onClick={() => setCourier('domicilio')}
+          aria-pressed={dom}
+          className={cn(
+            'inline-flex min-w-0 flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-[9px] px-4 py-[7px] text-[13px] font-extrabold transition-colors sm:flex-none sm:justify-start max-md:min-h-[40px]',
+            FOCUS_RING,
+            dom ? 'bg-card text-foreground shadow-card' : 'text-muted-foreground',
+          )}
+        >
+          {/* Domicilio no es una marca: no lleva logo de transportadora sino la
+              baldosa cobalto de "esto lo llevamos nosotros". */}
+          <span
+            className="grid h-[18px] w-[18px] shrink-0 place-items-center rounded-[5px] bg-wash-strong text-accent-ink"
+            aria-hidden
+          >
+            <Bike className="h-3 w-3" />
+          </span>
+          Domicilio
+        </button>
       </div>
 
-      {/* Remitente (de la sede) */}
-      <section className="mb-5 rounded-[14px] border border-border bg-surface px-4 py-3.5">
+      {/* Remitente (de la sede). En domicilio no aplica: no hay despacho a una
+          transportadora, sale de la sede en mano. */}
+      <section
+        className={cn(
+          'mb-5 rounded-[14px] border border-border bg-surface px-4 py-3.5',
+          dom && 'hidden',
+        )}
+      >
         <p className="text-[11px] font-bold uppercase tracking-[0.06em] text-hint">
           Remitente (origen)
         </p>
@@ -571,9 +786,15 @@ export function GuidePanel({
           <section className="space-y-2.5">
             <SectionTitle
               icon={MapPin}
-              hint={sdx ? 'catálogo postal nacional' : 'llega listo del pedido — solo verifica'}
+              hint={
+                sdx
+                  ? 'catálogo postal nacional'
+                  : dom
+                    ? 'va impreso en el soporte de entrega'
+                    : 'llega listo del pedido — solo verifica'
+              }
             >
-              {sdx ? 'Destino' : 'Destinatario'}
+              {sdx ? 'Destino' : dom ? 'Datos del cliente' : 'Destinatario'}
             </SectionTitle>
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Nombre">
@@ -668,6 +889,16 @@ export function GuidePanel({
                     />
                   </Field>
                 </>
+              ) : dom ? (
+                /* Domicilio: no hay ciudad DANE ni codigo postal que resolver —
+                   el mensajero sale con la direccion y el telefono. */
+                <Field label="Teléfono">
+                  <Input
+                    value={recipient.phone}
+                    onChange={(e) => patchR({ phone: e.target.value })}
+                    className={INPUT_CLS}
+                  />
+                </Field>
               ) : (
                 <>
                   <Field label="Ciudad (DANE)">
@@ -707,7 +938,7 @@ export function GuidePanel({
                 </>
               )}
             </div>
-            {!sdx && !recipient.cityCode ? (
+            {!sdx && !dom && !recipient.cityCode ? (
               <p className="flex items-start gap-2.5 rounded-xl bg-amber-500/10 px-3.5 py-[11px] text-[12.5px] leading-[1.45] text-amber-600 dark:text-amber-400">
                 <AlertTriangle className="mt-px h-[15px] w-[15px] shrink-0" aria-hidden />
                 <span className="min-w-0 break-words">
@@ -717,8 +948,90 @@ export function GuidePanel({
             ) : null}
           </section>
 
+          {/* Domicilio: lo que se entrega y cuando. Sustituye al bloque Paquete
+              entero — sin transportadora no hay medidas, peso, embalaje ni
+              valor declarado que declarar a nadie. */}
+          {dom ? (
+            <section className="space-y-2.5">
+              <SectionTitle icon={Package} hint="salen impresos en el soporte">
+                Productos entregados
+              </SectionTitle>
+              <div className="space-y-2">
+                {items.map((it, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <Input
+                      inputMode="numeric"
+                      aria-label={`Cantidad del producto ${i + 1}`}
+                      value={String(it.quantity)}
+                      onChange={(e) =>
+                        patchItem(i, {
+                          quantity: Math.max(1, Number(e.target.value.replace(/\D/g, '')) || 1),
+                        })
+                      }
+                      className={cn(INPUT_CLS, MONO_CLS, 'w-[62px] shrink-0 text-center')}
+                    />
+                    <Input
+                      aria-label={`Producto ${i + 1}`}
+                      value={it.name}
+                      onChange={(e) => patchItem(i, { name: e.target.value })}
+                      className={cn(INPUT_CLS, 'min-w-0 flex-1')}
+                    />
+                    <Button
+                      variant="ghost"
+                      aria-label={`Quitar producto ${i + 1}`}
+                      onClick={() => setDomItems((v) => (v ?? []).filter((_, k) => k !== i))}
+                      className={ICON_BTN_CLS}
+                    >
+                      <Trash2 />
+                    </Button>
+                  </div>
+                ))}
+                {items.length === 0 ? (
+                  <p className="rounded-[11px] border border-dashed border-input bg-surface px-3 py-3 text-center text-[12.5px] text-hint">
+                    Agrega al menos un producto: es lo que el cliente firma haber recibido.
+                  </p>
+                ) : null}
+                <div className="flex flex-wrap items-end gap-3">
+                  <Button
+                    variant="ghost"
+                    onClick={() => setDomItems((v) => [...(v ?? []), { name: '', quantity: 1 }])}
+                    className={cn(BTN_GHOST_CLS, 'shrink-0')}
+                  >
+                    <Plus />
+                    Agregar producto
+                  </Button>
+                  <div className="min-w-[150px]">
+                    <Field label="Fecha de entrega">
+                      <Input
+                        type="date"
+                        value={domDate}
+                        onChange={(e) => setDomDate(e.target.value)}
+                        className={cn(INPUT_CLS, MONO_CLS)}
+                      />
+                    </Field>
+                  </div>
+                </div>
+              </div>
+              {preview.invoiceNumber ? (
+                <p className="text-xs text-hint">
+                  El soporte sale con <b className="text-muted-foreground">No. Orden</b>{' '}
+                  <span className={MONO_CLS}>{preview.invoiceNumber}</span> — el N° de la factura de
+                  Alegra.
+                </p>
+              ) : (
+                <p className="flex items-start gap-2.5 rounded-xl bg-amber-500/10 px-3.5 py-[11px] text-[12.5px] leading-[1.45] text-amber-600 dark:text-amber-400">
+                  <AlertTriangle className="mt-px h-[15px] w-[15px] shrink-0" aria-hidden />
+                  <span className="min-w-0 break-words">
+                    Factura primero en Alegra: el «No. Orden» del soporte de entrega es el N° de esa
+                    factura.
+                  </span>
+                </p>
+              )}
+            </section>
+          ) : null}
+
           {/* Paquete */}
-          <section className="space-y-2.5">
+          <section className={cn('space-y-2.5', dom && 'hidden')}>
             <SectionTitle
               icon={Package}
               hint={
@@ -742,14 +1055,7 @@ export function GuidePanel({
                       setSdxPresetName(name);
                       const p = sdxPresets.find((x) => x.name === name);
                       if (!p) return; // "Personalizado": no toca las medidas
-                      patchP({
-                        weight: String(p.weight),
-                        height: String(p.height),
-                        width: String(p.width),
-                        length: String(p.length),
-                        ...(p.content ? { content: p.content } : {}),
-                      });
-                      if (p.packagingCode) setPackagingCode(p.packagingCode);
+                      applySdxPreset(p);
                     }}
                     className={SELECT_CLS}
                   >
@@ -812,11 +1118,11 @@ export function GuidePanel({
                   </div>
                 )}
               </Field>
-            ) : preview.packagePresets.length > 0 ? (
+            ) : (preview.packagePresets?.length ?? 0) > 0 ? (
               /* Igual que los "empaques" del portal de Coordinadora: elegirlo llena
               peso y medidas (despues se pueden ajustar a mano). */
               <PresetChips label="Paquete guardado">
-                {preview.packagePresets.map((p) => (
+                {(preview.packagePresets ?? []).map((p) => (
                   <PresetChip
                     key={p.name}
                     active={presetName === p.name}
@@ -825,12 +1131,7 @@ export function GuidePanel({
                       // CAMBIAR. Re-pulsar el activo no pisa lo editado a mano.
                       if (presetName === p.name) return;
                       setPresetName(p.name);
-                      patchP({
-                        weight: String(p.weight),
-                        height: String(p.height),
-                        width: String(p.width),
-                        length: String(p.length),
-                      });
+                      applyPreset(p);
                     }}
                   >
                     {p.name} · {p.height}×{p.width}×{p.length} · {p.weight} kg
@@ -1022,10 +1323,10 @@ export function GuidePanel({
               </p>
             )}
           </section>
-        ) : (
+        ) : dom ? null : (
           /* Recaudo contraentrega: para TODOS los pedidos (manuales y de
            marketplace). Coordinadora cobra el valor al entregar. NO aplica en
-           modo Skydropx. */
+           modo Skydropx ni en domicilio (ahi se cobra en mano). */
           <section className="space-y-2.5">
             <SectionTitle icon={CreditCard} tone="success">
               Cobro del envío
@@ -1082,13 +1383,17 @@ export function GuidePanel({
 
       <div className="mt-1.5 flex flex-wrap items-center gap-3 border-t border-border pt-4">
         <Button
-          onClick={() => (sdx ? generateSkydropx.mutate() : generate.mutate())}
+          onClick={() =>
+            dom ? generateDelivery.mutate() : sdx ? generateSkydropx.mutate() : generate.mutate()
+          }
           loading={generating}
-          disabled={(sdx ? !canGenerateSdx : !canGenerate) || generating}
+          disabled={(dom ? !canGenerateDom : sdx ? !canGenerateSdx : !canGenerate) || generating}
           className={BTN_PRIMARY_CLS}
         >
-          <Truck />
-          {sdx ? (
+          {dom ? <Bike /> : <Truck />}
+          {dom ? (
+            'Emitir soporte de entrega'
+          ) : sdx ? (
             selectedRate ? (
               <>
                 Generar guía · {selectedRate.carrier}{' '}
@@ -1114,7 +1419,14 @@ export function GuidePanel({
           </Button>
         ) : null}
         <p className="min-w-[min(100%,220px)] flex-1 text-xs leading-[1.45] text-hint">
-          {sdx ? (
+          {dom ? (
+            <>
+              El soporte va <b className="text-muted-foreground">a la conversación</b> para
+              imprimirlo y hacerlo firmar, y el pedido{' '}
+              <b className="text-muted-foreground">se factura en VTEX</b> como domicilio, sin número
+              de guía ni link de rastreo.
+            </>
+          ) : sdx ? (
             <>
               Mismo cierre: <b className="text-muted-foreground">rótulo al chat</b>,{' '}
               <b className="text-muted-foreground">WhatsApp</b>,{' '}
@@ -1223,8 +1535,11 @@ function RateCard({
         'relative w-full rounded-[15px] border bg-surface px-[15px] py-[13px] text-left',
         // Solo lo que anima el mockup (.rate): el degradado del estado elegido
         // aparece de golpe, como alli.
-        // duration-[130ms] es AMBIGUA para Tailwind (tailwindcss-animate añade
-        // su propio duration-*) y no emite nada: va como propiedad literal.
+        // La utilidad `duration` con valor arbitrario es AMBIGUA para Tailwind
+        // (tailwindcss-animate añade la suya) y no emite NADA; por eso la
+        // duracion va como propiedad literal. Escrita asi tambien para que el
+        // escaner de Tailwind no la vea en este comentario y avise en cada
+        // compilacion.
         'transition-[border-color,box-shadow,transform] [transition-duration:130ms]',
         'hover:-translate-y-px hover:border-accent',
         FOCUS_RING,
@@ -1295,11 +1610,13 @@ function RateCard({
  * misma queryKey -> una sola peticion (React Query dedup) y ambos ven la
  * transportadora real aunque el panel se haya remontado.
  */
-function useOrderTracking(orderId: string) {
+function useOrderTracking(orderId: string, opts?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['order-tracking', orderId],
     queryFn: () => api.get<GuideTracking | null>(`/v1/orders/${orderId}/tracking`),
     staleTime: 60_000,
+    // En domicilio no hay nada que rastrear: ni se pregunta.
+    enabled: opts?.enabled ?? true,
   });
 }
 
@@ -1313,28 +1630,114 @@ function GuideDoneView({
   /** Transportadora recien emitida (Skydropx); null = Coordinadora o remonte. */
   carrierName?: string | null;
 }) {
-  const { data: tracking } = useOrderTracking(orderId);
-  const carrier = tracking?.carrier ?? carrierName ?? 'Coordinadora';
+  // DOMICILIO (transportadora propia): no hay guia, ni transportadora, ni
+  // rastreo. Montar el seguimiento aqui pintaria "sin guia que rastrear" justo
+  // debajo de una tarjeta verde, que es contradecirse.
+  const dom = guide.via === 'domicilio';
+  const { data: tracking } = useOrderTracking(orderId, { enabled: !dom });
+  const carrier = dom ? 'Domicilio propio' : (tracking?.carrier ?? carrierName ?? 'Coordinadora');
   const isCoordinadora = carrier.toLowerCase().includes('coordinadora');
   return (
     <div className="space-y-4 p-[22px]">
       <div className="rounded-[12px] bg-emerald-500/10 px-3.5 py-3 text-center text-emerald-600 dark:text-emerald-400">
         <CheckCircle2 className="mx-auto h-7 w-7" />
         <h3 className="mt-2 break-words text-[13.5px] font-extrabold">
-          Guía <span className={cn(MONO_CLS, 'break-all')}>{guide.number}</span> generada
+          {dom ? 'Soporte de entrega' : 'Guía'}{' '}
+          <span className={cn(MONO_CLS, 'break-all')}>{guide.number}</span>{' '}
+          {dom ? 'emitido' : 'generada'}
         </h3>
         <p className="mt-0.5 flex flex-wrap items-center justify-center gap-1.5 text-[12.5px] font-semibold text-emerald-600/90 dark:text-emerald-400/90">
-          <Package className="h-3.5 w-3.5 shrink-0" />
+          {dom ? (
+            <Bike className="h-3.5 w-3.5 shrink-0" />
+          ) : (
+            <Package className="h-3.5 w-3.5 shrink-0" />
+          )}
           <span className="min-w-0 break-words">{carrier}</span>
         </p>
       </div>
 
-      <TrackingTimeline orderId={orderId} />
+      {dom ? <DeliveryCloseActions orderId={orderId} /> : <TrackingTimeline orderId={orderId} />}
 
       <p className="text-center text-xs text-hint">
-        {isCoordinadora
-          ? 'El rótulo está en la conversación. Para generar otra guía, anúlala primero en Coordinadora.'
-          : `La guía está en la conversación. Para generar otra, anúlala primero en ${carrier}.`}
+        {dom
+          ? 'El soporte está en la conversación: imprímelo y hazlo firmar al entregar. Este envío no tiene número de guía ni rastreo.'
+          : isCoordinadora
+            ? 'El rótulo está en la conversación. Para generar otra guía, anúlala primero en Coordinadora.'
+            : `La guía está en la conversación. Para generar otra, anúlala primero en ${carrier}.`}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Cierre de un DOMICILIO. Sustituye al seguimiento: no hay transportadora que
+ * informe, asi que las dos cosas que pueden quedar pendientes las cierra a mano
+ * quien despacha.
+ *
+ * · «Entrega confirmada» saca el pedido de "en tránsito" (si no se queda ahí
+ *   para siempre) y dispara el toque post-entrega de WhatsApp.
+ * · «Reintentar cierre en VTEX» es la salida cuando el soporte ya se emitió
+ *   pero VTEX estaba caído: es idempotente, si ya se facturó no hace nada.
+ */
+function DeliveryCloseActions({ orderId }: { orderId: string }) {
+  const qc = useQueryClient();
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
+    qc.invalidateQueries({ queryKey: ['order-events', orderId] });
+    qc.invalidateQueries({ queryKey: ['orders'] });
+  };
+
+  const delivered = useMutation({
+    mutationKey: ['op-delivered', orderId],
+    mutationFn: () => api.post<{ ok: boolean }>(`/v1/orders/${orderId}/delivered`, {}),
+    onSuccess: () => {
+      toast.success('Entrega confirmada');
+      invalidate();
+    },
+    onError: (err) =>
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo confirmar la entrega'),
+  });
+
+  const finalize = useMutation({
+    mutationKey: ['op-finalize', orderId],
+    mutationFn: () => api.post<{ ok: boolean }>(`/v1/orders/${orderId}/finalize`, {}),
+    onSuccess: (r) => {
+      if (r.ok) toast.success('Pedido cerrado');
+      else toast.error('VTEX sigue sin responder — revisa la conversación');
+      invalidate();
+    },
+    onError: (err) =>
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo cerrar el pedido'),
+  });
+
+  return (
+    <div className="rounded-[14px] border border-border bg-surface px-4 py-3.5">
+      <p className="text-[11px] font-bold uppercase tracking-[0.06em] text-hint">Cerrar el envío</p>
+      <div className="mt-2.5 flex flex-wrap gap-2">
+        <Button
+          onClick={() => delivered.mutate()}
+          loading={delivered.isPending}
+          disabled={delivered.isPending}
+          className={cn(BTN_PRIMARY_CLS, 'max-sm:w-full')}
+        >
+          <CheckCircle2 />
+          Entrega confirmada
+        </Button>
+        <Button
+          variant="ghost"
+          onClick={() => finalize.mutate()}
+          loading={finalize.isPending}
+          disabled={finalize.isPending}
+          className={BTN_GHOST_CLS}
+        >
+          <RefreshCw />
+          Reintentar cierre en VTEX
+        </Button>
+      </div>
+      <p className="mt-2.5 text-xs leading-[1.45] text-hint">
+        Marca la entrega cuando el cliente firme el soporte. El reintento solo hace falta si el
+        pedido no quedó facturado; no factura dos veces.
       </p>
     </div>
   );
@@ -1360,15 +1763,17 @@ function TrackingTimeline({ orderId }: { orderId: string }) {
           <span className="min-w-0 break-words">Seguimiento del envío</span>
         </h4>
         <div className="ml-auto flex shrink-0 items-center gap-2">
-          {data?.trackingUrl ? (
+          {/* Solo un enlace REAL: la rama Skydropx del rastreo devuelve
+              trackingUrl vacio, y un <a href=""> recarga la pagina. */}
+          {/^https?:\/\//.test(data?.trackingUrl ?? '') ? (
             <a
-              href={data.trackingUrl}
+              href={data!.trackingUrl}
               target="_blank"
               rel="noreferrer"
               className="flex min-w-0 items-center gap-1 text-xs font-semibold text-accent hover:underline"
             >
               <ExternalLink className="h-3 w-3 shrink-0" />
-              <span className="truncate">{data.carrier ?? 'Coordinadora'}</span>
+              <span className="truncate">{data?.carrier ?? 'Coordinadora'}</span>
             </a>
           ) : null}
           <button

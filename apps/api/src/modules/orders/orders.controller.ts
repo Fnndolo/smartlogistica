@@ -31,6 +31,8 @@ import {
   skydropxQuoteInputSchema,
   createSkydropxGuideSchema,
   type CreateSkydropxGuideInput,
+  createDeliverySupportSchema,
+  type CreateDeliverySupportInput,
   type SkydropxQuoteInput,
   type SkydropxQuoteResponse,
   type AlegraItem,
@@ -54,6 +56,7 @@ import {
   type ListOrdersResponse,
   type OrderDetail,
   type OrderReactionInput,
+  type OrdersDashboard,
   type OrdersPulse,
   type Inbox,
   type MentionItem,
@@ -118,6 +121,15 @@ export class OrdersController {
   ): Promise<OrdersPulse> {
     const s = scope === 'pending' || scope === 'invoiced' ? scope : 'general';
     return this.orders.pulse(s, warehouse ?? null, user);
+  }
+
+  /**
+   * Datos del RESUMEN (portada): metricas, alertas y carga por sede en una sola
+   * llamada. Ruta literal: va ANTES de las rutas con :id.
+   */
+  @Get('dashboard')
+  async dashboard(@CurrentUser() user: AuthContext): Promise<OrdersDashboard> {
+    return this.orders.dashboard(user);
   }
 
   /**
@@ -276,10 +288,7 @@ export class OrdersController {
   // para que Express no matchee /orders/stats o /orders/stream contra :id.
 
   @Get(':id')
-  async detail(
-    @Param('id') id: string,
-    @CurrentUser() user: AuthContext,
-  ): Promise<OrderDetail> {
+  async detail(@Param('id') id: string, @CurrentUser() user: AuthContext): Promise<OrderDetail> {
     return this.orders.getDetail(id, user);
   }
 
@@ -371,10 +380,7 @@ export class OrdersController {
   }
 
   @Get(':id/events')
-  async events(
-    @Param('id') id: string,
-    @CurrentUser() user: AuthContext,
-  ): Promise<OrderEvent[]> {
+  async events(@Param('id') id: string, @CurrentUser() user: AuthContext): Promise<OrderEvent[]> {
     return this.orders.listEvents(id, user);
   }
 
@@ -394,7 +400,8 @@ export class OrdersController {
   ): Promise<DevicePhotoResponse> {
     if (!file) throw new BadRequestException('No se recibio ninguna imagen');
     const parsed = devicePhotoKindSchema.safeParse(kind);
-    if (!parsed.success) throw new BadRequestException('El parametro kind debe ser "imei" o "serial"');
+    if (!parsed.success)
+      throw new BadRequestException('El parametro kind debe ser "imei" o "serial"');
     return this.orders.addDevicePhoto(id, file, parsed.data, user);
   }
 
@@ -412,7 +419,12 @@ export class OrdersController {
     @CurrentUser() user: AuthContext,
   ): Promise<OrderMessage> {
     if (!file) throw new BadRequestException('No se recibio ningun archivo');
-    return this.orders.addAttachment(id, file, user, typeof caption === 'string' ? caption : undefined);
+    return this.orders.addAttachment(
+      id,
+      file,
+      user,
+      typeof caption === 'string' ? caption : undefined,
+    );
   }
 
   /** Busca codigos (IMEI/serial) en el catalogo de compras — para re-mostrar matches. */
@@ -519,6 +531,46 @@ export class OrdersController {
     @CurrentUser() user: AuthContext,
   ): Promise<Guide> {
     return this.orders.generateGuideSkydropx(id, body, user);
+  }
+
+  /**
+   * DOMICILIO (transportadora propia): emite el soporte de entrega, lo deja en
+   * la conversacion y cierra el pedido en VTEX SIN numero de guia ni link.
+   */
+  @Post(':id/delivery-support')
+  @HttpCode(201)
+  async deliverySupport(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(createDeliverySupportSchema)) body: CreateDeliverySupportInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<Guide> {
+    return this.orders.generateDeliverySupport(id, body, user);
+  }
+
+  /**
+   * REINTENTA el cierre del pedido cuando el envio ya se emitio pero VTEX fallo.
+   * Idempotente: si ya estaba cerrado, no vuelve a facturar.
+   */
+  @Post(':id/finalize')
+  @HttpCode(200)
+  async finalize(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ ok: boolean }> {
+    return this.orders.retryFinalize(id, user);
+  }
+
+  /**
+   * Cierra la entrega de un DOMICILIO (no hay rastreo que lo haga solo).
+   * Idempotente: si ya estaba entregado devuelve ok sin tocar nada.
+   */
+  @Post(':id/delivered')
+  @HttpCode(200)
+  async markDelivered(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ ok: boolean }> {
+    return this.orders.markDelivered(id, user);
   }
 
   /**

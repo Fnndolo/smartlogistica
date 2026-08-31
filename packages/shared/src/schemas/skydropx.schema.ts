@@ -17,6 +17,9 @@ import { packagePresetSchema } from './coordinadora.schema';
 export const skydropxPackagePresetSchema = packagePresetSchema.extend({
   content: z.string().trim().max(60).optional(),
   packagingCode: z.string().trim().max(10).optional(),
+  /** Valor declarado sugerido (COP). Skydropx asegura el contenido entre
+   *  $10.000 y $10.000.000; vacio = se calcula al generar la guia. */
+  declaredValue: z.number().min(10_000).max(10_000_000).optional(),
 });
 export type SkydropxPackagePreset = z.infer<typeof skydropxPackagePresetSchema>;
 
