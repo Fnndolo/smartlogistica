@@ -150,7 +150,9 @@ export function OrdersTable({
               ) : null}
               <TableHead>N&ordm; Pedido</TableHead>
               <TableHead>Cliente</TableHead>
-              <TableHead>Producto</TableHead>
+              {/* Ordenar por producto agrupa los pedidos del mismo articulo,
+                  que es como se preparan: en tanda. */}
+              <SortHeader label="Producto" field="product" sort={sort} dir={dir} onSort={onSort} />
               <SortHeader
                 label="Cant."
                 field="quantity"

@@ -358,6 +358,12 @@ model Order {
   // Denormalizado: suma de quantity de los items. Permite ordenar por
   // "cantidad" en el server (con paginacion) sin un join+sum por pagina.
   totalUnits           Int      @default(0)
+  // Producto "cabeza" del pedido: el PRIMERO alfabeticamente de sus items.
+  // Denormalizado igual que guideNumber/shippingState, y por la misma razon:
+  // los items viven en otra tabla y Prisma no sabe ordenar el padre por un
+  // campo de una relacion 1:N. Con esto "ordenar por producto" agrupa los
+  // pedidos del mismo articulo y sigue paginando bien.
+  primaryProduct       String?
   // Asignacion a sede. null = "pedidos generales" (espejo automatico de VTEX).
   // Cuando se asigna a una sede, el pedido queda "reclamado": pasa a tener ciclo
   // propio y el reconcile NO lo borra aunque cambie de estado en VTEX.

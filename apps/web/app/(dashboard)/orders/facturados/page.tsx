@@ -46,7 +46,12 @@ async function fetchOrders(params: {
   url.searchParams.set('page', String(params.page));
   url.searchParams.set('limit', '50');
   url.searchParams.set('state', 'invoiced');
-  url.searchParams.set('sort', params.sort === 'quantity' || params.sort === 'price' ? params.sort : 'date');
+  url.searchParams.set(
+    'sort',
+    params.sort === 'quantity' || params.sort === 'price' || params.sort === 'product'
+      ? params.sort
+      : 'date',
+  );
   url.searchParams.set('dir', params.dir === 'asc' ? 'asc' : 'desc');
   if (params.from) url.searchParams.set('from', params.from);
   if (params.to) url.searchParams.set('to', params.to);

@@ -226,7 +226,8 @@ export const assignOrdersSchema = z.object({
 });
 export type AssignOrdersInput = z.infer<typeof assignOrdersSchema>;
 
-export const orderSortFieldSchema = z.enum(['date', 'quantity', 'price']);
+/** 'product' agrupa los pedidos del MISMO articulo (A-Z por su producto cabeza). */
+export const orderSortFieldSchema = z.enum(['date', 'quantity', 'price', 'product']);
 export type OrderSortField = z.infer<typeof orderSortFieldSchema>;
 
 /**

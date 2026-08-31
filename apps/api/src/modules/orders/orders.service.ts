@@ -850,6 +850,8 @@ export class OrdersService {
             totalValue: total,
             currency: 'COP',
             totalUnits: p.quantity,
+            // Producto cabeza (denormalizado) para poder ordenar por producto.
+            primaryProduct: p.name,
             warehouseId: input.warehouseId,
             assignedAt: new Date(),
             // La direccion la dicto el cliente al montar el pedido: nace
@@ -3520,6 +3522,11 @@ export class OrdersService {
         return { totalUnits: dir };
       case 'price':
         return { totalValue: dir };
+      case 'product':
+        // Agrupa los pedidos del MISMO articulo. Los pedidos sin producto (o
+        // anteriores a la columna) van SIEMPRE al final, en los dos sentidos:
+        // el vacio no es "la A" ni "la Z", es ausencia de dato.
+        return { primaryProduct: { sort: dir, nulls: 'last' } };
       case 'date':
       default:
         return { marketplaceCreatedAt: dir };

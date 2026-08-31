@@ -21,6 +21,13 @@ export class VtexOrderService {
   ): Promise<void> {
     const { create, update } = mapVtexOrderToUpsert(accountName, detail);
     const items = mapVtexOrderItems(detail);
+    // Producto "cabeza" (el primero alfabeticamente): columna denormalizada que
+    // permite ORDENAR la tabla por producto. Los items viven en otra tabla y
+    // Prisma no sabe ordenar el padre por una relacion 1:N.
+    const primaryProduct =
+      items.length > 0
+        ? items.map((i) => i.name).sort((a, b) => a.localeCompare(b, 'es'))[0]
+        : null;
 
     const { order, isNew } = await prisma.$transaction(async (tx) => {
       const existed = await tx.order.findUnique({
@@ -29,8 +36,8 @@ export class VtexOrderService {
       });
       const row = await tx.order.upsert({
         where: { provider_externalId: { provider: 'vtex', externalId: detail.orderId } },
-        create: { ...create, items: { create: items } },
-        update,
+        create: { ...create, primaryProduct, items: { create: items } },
+        update: { ...update, primaryProduct },
       });
 
       // Replace items on update so quantity/price stay current

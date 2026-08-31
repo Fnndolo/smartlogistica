@@ -3,7 +3,19 @@
 import { useSearchParams, usePathname } from 'next/navigation';
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Building2, Check, ChevronLeft, ChevronRight, MapPin, Package, PackagePlus, Search, Truck, Undo2, X } from 'lucide-react';
+import {
+  Building2,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  MapPin,
+  Package,
+  PackagePlus,
+  Search,
+  Truck,
+  Undo2,
+  X,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import type {
   ListOrdersResponse,
@@ -30,7 +42,7 @@ import { useOrdersStream } from './use-orders-stream';
 
 export type OrdersScope = { kind: 'general' } | { kind: 'warehouse'; id: string; name: string };
 
-const SORT_FIELDS = new Set<OrderSortField>(['date', 'quantity', 'price']);
+const SORT_FIELDS = new Set<OrderSortField>(['date', 'quantity', 'price', 'product']);
 const parseSort = (v: string | null): OrderSortField =>
   v && SORT_FIELDS.has(v as OrderSortField) ? (v as OrderSortField) : 'date';
 const parseDir = (v: string | null): SortDir => (v === 'asc' ? 'asc' : 'desc');
@@ -66,7 +78,19 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
 
   const queryKey = [
     'orders',
-    { scope: warehouseId ?? 'general', state, shipping, address, product, page, from, to, q, sort, dir },
+    {
+      scope: warehouseId ?? 'general',
+      state,
+      shipping,
+      address,
+      product,
+      page,
+      from,
+      to,
+      q,
+      sort,
+      dir,
+    },
   ] as const;
   // Clave con la que se monto la pagina (la que corresponde al initialData del
   // SSR). Se fija UNA vez: si initialData se pasara plano, React Query lo
@@ -206,9 +230,12 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
     },
     [queryClient],
   );
-  useEffect(() => () => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    },
+    [],
+  );
 
   const live = useOrdersStream(handleStreamEvent);
 
@@ -260,7 +287,9 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       return next;
     });
   const toggleSelectAll = () =>
-    setSelected((prev) => (prev.size === items.length ? new Set() : new Set(items.map((o) => o.id))));
+    setSelected((prev) =>
+      prev.size === items.length ? new Set() : new Set(items.map((o) => o.id)),
+    );
 
   // Asignar/transferir/devolver de forma OPTIMISTA: los pedidos SALEN de esta
   // vista al instante y ademas ENTRAN ya a la cache de la sede destino — al
@@ -358,7 +387,9 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
           ))}
         </nav>
         <div className="relative flex flex-wrap items-center gap-3">
-          <h1 className="text-[19px] font-semibold leading-tight tracking-[-0.02em]">{viewTitle}</h1>
+          <h1 className="text-[19px] font-semibold leading-tight tracking-[-0.02em]">
+            {viewTitle}
+          </h1>
           <LivePill live={live} />
           <HeaderRange
             live={live}
@@ -374,7 +405,9 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
           vista de facturados por fuera no aplica (es solo trazabilidad). */}
       {!externalView ? (
         <OrdersPulseRow
-          scope={scope.kind === 'general' ? 'general' : state === 'invoiced' ? 'invoiced' : 'pending'}
+          scope={
+            scope.kind === 'general' ? 'general' : state === 'invoiced' ? 'invoiced' : 'pending'
+          }
           warehouseId={warehouseId}
         />
       ) : (
@@ -393,7 +426,11 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
         {/* Montar pedido: SOLO en la sede (Por preparar) — pedidos externos a
             las plataformas, escritos a mano (sin MKT: solo factura y guia). */}
         {scope.kind === 'warehouse' && state !== 'invoiced' ? (
-          <Button size="sm" onClick={() => setMounting(true)} className="ml-auto h-[34px] rounded-lg">
+          <Button
+            size="sm"
+            onClick={() => setMounting(true)}
+            className="ml-auto h-[34px] rounded-lg"
+          >
             <PackagePlus className="h-3.5 w-3.5" />
             Montar pedido
           </Button>
@@ -530,7 +567,10 @@ function ShippingFilter() {
         variant="outline"
         size="sm"
         onClick={() => setOpen((s) => !s)}
-        className={cn('h-[34px] rounded-lg font-normal text-muted-foreground', hasFilter && 'border-accent/40')}
+        className={cn(
+          'h-[34px] rounded-lg font-normal text-muted-foreground',
+          hasFilter && 'border-accent/40',
+        )}
       >
         <Truck className="h-3.5 w-3.5 text-muted-foreground/70" />
         <span className="text-xs">
@@ -666,7 +706,10 @@ function ProductFilter({
           setAlignRight(r.left + 320 > window.innerWidth - 12);
           setOpen((s) => !s);
         }}
-        className={cn('h-[34px] rounded-lg font-normal text-muted-foreground', hasFilter && 'border-accent/40')}
+        className={cn(
+          'h-[34px] rounded-lg font-normal text-muted-foreground',
+          hasFilter && 'border-accent/40',
+        )}
       >
         <Package className="h-3.5 w-3.5 text-muted-foreground/70" />
         <span className="text-xs">
@@ -817,7 +860,10 @@ function AddressFilter() {
         variant="outline"
         size="sm"
         onClick={() => setOpen((s) => !s)}
-        className={cn('h-[34px] rounded-lg font-normal text-muted-foreground', hasFilter && 'border-accent/40')}
+        className={cn(
+          'h-[34px] rounded-lg font-normal text-muted-foreground',
+          hasFilter && 'border-accent/40',
+        )}
       >
         <MapPin className="h-3.5 w-3.5 text-muted-foreground/70" />
         <span className="text-xs">
@@ -933,7 +979,11 @@ function AssignmentBar({
         <div className="h-5 w-px bg-border" />
 
         {scope.kind === 'warehouse' && canReturn ? (
-          <Button variant="outline" size="sm" onClick={() => onAssign(selectedIds, null, 'devueltos a generales')}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onAssign(selectedIds, null, 'devueltos a generales')}
+          >
             <Undo2 className="h-3.5 w-3.5" />
             Devolver a generales
           </Button>
@@ -952,7 +1002,9 @@ function AssignmentBar({
             }
           />
         ) : (
-          <span className="text-xs text-muted-foreground">No hay otras sedes. Crea una en &laquo;Sedes&raquo;.</span>
+          <span className="text-xs text-muted-foreground">
+            No hay otras sedes. Crea una en &laquo;Sedes&raquo;.
+          </span>
         )}
 
         <button
@@ -983,7 +1035,9 @@ function WarehousePicker({
       <Button size="sm" onClick={() => setOpen((s) => !s)}>
         <Building2 className="h-3.5 w-3.5" />
         {label}
-        <ChevronRight className={`h-3.5 w-3.5 transition-transform ${open ? '-rotate-90' : 'rotate-90'}`} />
+        <ChevronRight
+          className={`h-3.5 w-3.5 transition-transform ${open ? '-rotate-90' : 'rotate-90'}`}
+        />
       </Button>
       {open ? (
         <>
@@ -1000,7 +1054,9 @@ function WarehousePicker({
                   className="flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-sm hover:bg-accent/10"
                 >
                   <span className="truncate">{w.name}</span>
-                  <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">{w.orderCount}</span>
+                  <span className="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+                    {w.orderCount}
+                  </span>
                 </button>
               </li>
             ))}
