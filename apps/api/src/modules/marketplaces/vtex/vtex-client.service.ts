@@ -68,7 +68,9 @@ export class VtexClient {
     });
   }
 
-  async testCredentials(creds: VtexCredentialsRaw): Promise<{ ok: true; sampleOrderCount: number }> {
+  async testCredentials(
+    creds: VtexCredentialsRaw,
+  ): Promise<{ ok: true; sampleOrderCount: number }> {
     const http = this.buildHttp(creds);
     const res = await http.get<VtexOrderListResponse>('/api/oms/pvt/orders', {
       params: { per_page: 1, page: 1 },
@@ -116,7 +118,9 @@ export class VtexClient {
   }
 
   async getOrder(http: AxiosInstance, orderId: string): Promise<VtexOrderDetail> {
-    const res: AxiosResponse<VtexOrderDetail> = await http.get(`/api/oms/pvt/orders/${encodeURIComponent(orderId)}`);
+    const res: AxiosResponse<VtexOrderDetail> = await http.get(
+      `/api/oms/pvt/orders/${encodeURIComponent(orderId)}`,
+    );
     return res.data;
   }
 
@@ -184,8 +188,17 @@ export class VtexClient {
     )}?account=${encodeURIComponent(accountName)}`;
   }
 
-  // Separador `__` (no `:`) porque el eventId se usa para construir BullMQ jobIds
-  // y BullMQ reserva `:` para keys Redis.
-  static readonly extractWebhookEventId = (payload: VtexWebhookPayload): string =>
-    `${payload.OrderId}__${payload.State}__${payload.LastChange}`;
+  /**
+   * Id del evento para deduplicar. Lleva la CUENTA delante porque el OrderId de
+   * VTEX solo es unico dentro de una tienda: con dos cuentas conectadas, un
+   * evento de la tienda B con el mismo id se descartaria como duplicado de la A
+   * y ese pedido nunca entraria.
+   *
+   * Separador `__` (no `:`) porque el eventId se usa para construir BullMQ
+   * jobIds y BullMQ reserva `:` para keys Redis.
+   */
+  static readonly extractWebhookEventId = (
+    payload: VtexWebhookPayload,
+    accountName: string,
+  ): string => `${accountName}__${payload.OrderId}__${payload.State}__${payload.LastChange}`;
 }

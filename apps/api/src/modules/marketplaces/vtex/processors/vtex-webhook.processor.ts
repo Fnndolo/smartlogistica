@@ -57,7 +57,7 @@ export class VtexWebhookProcessor extends WorkerHost {
       // Si el estado del webhook NO es relevante (el pedido salio de
       // "listo para preparar"), lo eliminamos de nuestra DB y avisamos en vivo.
       if (!VtexClient.isRelevantStatus(payload.State)) {
-        await this.removeOrder(prisma, tenantId, payload.OrderId, payload.State);
+        await this.removeOrder(prisma, tenantId, accountName, payload.OrderId, payload.State);
         await this.markProcessed(prisma, eventId);
         return { processed: true };
       }
@@ -69,13 +69,16 @@ export class VtexWebhookProcessor extends WorkerHost {
       const detail = await this.vtex.getOrder(http, payload.OrderId);
 
       if (!VtexClient.isRelevantStatus(detail.status)) {
-        await this.removeOrder(prisma, tenantId, payload.OrderId, detail.status);
+        await this.removeOrder(prisma, tenantId, accountName, payload.OrderId, detail.status);
         await this.markProcessed(prisma, eventId);
         return { processed: true };
       }
 
       await this.orders.upsertFromDetail(prisma, accountName, detail, tenantId);
-      await this.realtime.publish(tenantId, { kind: 'order.upserted', externalId: payload.OrderId });
+      await this.realtime.publish(tenantId, {
+        kind: 'order.upserted',
+        externalId: payload.OrderId,
+      });
       this.logger.log(`Webhook upsert ${payload.OrderId} status=${detail.status}`);
 
       await this.markProcessed(prisma, eventId);
@@ -93,11 +96,14 @@ export class VtexWebhookProcessor extends WorkerHost {
   private async removeOrder(
     prisma: Parameters<VtexOrderService['upsertFromDetail']>[0],
     tenantId: string,
+    // La cuenta entra en la clave: sin ella, un pedido cancelado en la tienda B
+    // borraria el pedido con el mismo id de la tienda A.
+    accountName: string,
     externalId: string,
     newStatus: string,
   ): Promise<void> {
     const order = await prisma.order.findUnique({
-      where: { provider_externalId: { provider: 'vtex', externalId } },
+      where: { provider_accountName_externalId: { provider: 'vtex', accountName, externalId } },
     });
     if (!order) return;
 

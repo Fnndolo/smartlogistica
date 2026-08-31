@@ -1,16 +1,20 @@
 'use client';
 
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { formatRelative } from 'date-fns/formatRelative';
 import { es } from 'date-fns/locale/es';
-import { AlertTriangle, ArrowRight, Link2, Loader2, RefreshCw } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Link2, Loader2, Pencil, RefreshCw, Trash2 } from 'lucide-react';
 import Link from 'next/link';
+import { toast } from 'sonner';
 import type { VtexConnectionSummary } from '@smartlogistica/shared';
 
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { ApiError, api } from '@/lib/api-client';
+import { cn } from '@/lib/utils';
 
-import { BTN_GHOST, BTN_PRIMARY, CONN_CARD, Pill, Tile } from './connection-ui';
+import { BTN_GHOST, BTN_PRIMARY, BTN_SM, CONN_CARD, Pill, Tile } from './connection-ui';
 import { SyncButton } from './sync-button';
 
 /**
@@ -75,6 +79,37 @@ export function ConnectionsList({ initial }: { initial?: VtexConnectionSummary[]
 }
 
 function ConnectionRow({ connection }: { connection: VtexConnectionSummary }) {
+  const qc = useQueryClient();
+  const [renaming, setRenaming] = useState(false);
+  const [name, setName] = useState(connection.label);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const done = () => {
+    qc.invalidateQueries({ queryKey: ['connections'] });
+    // Las pestañas de pedidos se llaman igual que la tienda.
+    qc.invalidateQueries({ queryKey: ['order-accounts'] });
+  };
+
+  const rename = useMutation({
+    mutationFn: () =>
+      api.patch<VtexConnectionSummary>(`/v1/connections/${connection.id}`, { label: name.trim() }),
+    onSuccess: () => {
+      toast.success('Tienda renombrada');
+      setRenaming(false);
+      done();
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo renombrar'),
+  });
+
+  const remove = useMutation({
+    mutationFn: () => api.delete(`/v1/connections/${connection.id}`),
+    onSuccess: () => {
+      toast.success('Conexión eliminada');
+      done();
+    },
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo eliminar'),
+  });
+
   return (
     <div className={`${CONN_CARD} flex flex-wrap items-start gap-[13px]`}>
       <Tile tone="cobalt">
@@ -83,21 +118,86 @@ function ConnectionRow({ connection }: { connection: VtexConnectionSummary }) {
 
       <div className="min-w-0 flex-1 basis-[220px]">
         <div className="flex flex-wrap items-center gap-2">
-          <b className="min-w-0 break-words text-[13.5px] font-extrabold">
-            {connection.accountName}
-          </b>
+          <b className="min-w-0 break-words text-[13.5px] font-extrabold">{connection.label}</b>
           <Pill tone="muted">{connection.provider.toUpperCase()}</Pill>
           <StatusPill status={connection.status} />
         </div>
+        {/* La CUENTA es lo que ata los pedidos a su tienda y no cambia nunca;
+            el nombre de arriba si. Por eso se muestran las dos. */}
+        <p className="mt-[3px] font-mono text-[11.5px] text-hint">{connection.accountName}</p>
         <p className="mt-[3px] max-w-[64ch] text-[12px] text-muted-foreground">
           {connection.lastSyncedAt
             ? `Última sincronización ${formatRelative(new Date(connection.lastSyncedAt), new Date(), { locale: es })}`
             : 'Sin sincronizaciones aún'}
         </p>
+
+        {renaming ? (
+          <div className="mt-2.5 flex max-w-[380px] flex-wrap items-center gap-2">
+            <Input
+              autoFocus
+              value={name}
+              maxLength={40}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && name.trim().length >= 2) rename.mutate();
+                if (e.key === 'Escape') {
+                  setName(connection.label);
+                  setRenaming(false);
+                }
+              }}
+              aria-label="Nombre de la tienda"
+              className="h-auto min-h-[34px] min-w-[160px] flex-1 rounded-[9px] border-input bg-card text-[13px] shadow-none"
+            />
+            <Button
+              onClick={() => rename.mutate()}
+              loading={rename.isPending}
+              disabled={name.trim().length < 2 || rename.isPending}
+              className={cn(BTN_PRIMARY, BTN_SM)}
+            >
+              Guardar
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setName(connection.label);
+                setRenaming(false);
+              }}
+              className={cn(BTN_GHOST, BTN_SM)}
+            >
+              Cancelar
+            </Button>
+          </div>
+        ) : null}
       </div>
 
       <div className="flex shrink-0 flex-wrap gap-[7px]">
         <SyncButton connectionId={connection.id} />
+        {renaming ? null : (
+          <Button
+            variant="ghost"
+            onClick={() => setRenaming(true)}
+            className={cn(BTN_GHOST, BTN_SM)}
+          >
+            <Pencil />
+            Renombrar
+          </Button>
+        )}
+        {/* Eliminar en dos pasos: se lleva las credenciales y desregistra el
+            webhook en VTEX. Los pedidos ya ingeridos NO se borran. */}
+        <Button
+          variant="ghost"
+          onClick={() => (confirmDelete ? remove.mutate() : setConfirmDelete(true))}
+          onBlur={() => setConfirmDelete(false)}
+          loading={remove.isPending}
+          className={cn(
+            BTN_GHOST,
+            BTN_SM,
+            confirmDelete && 'border-destructive text-destructive hover:text-destructive',
+          )}
+        >
+          <Trash2 />
+          {confirmDelete ? '¿Seguro? Sí, eliminar' : 'Eliminar'}
+        </Button>
       </div>
     </div>
   );

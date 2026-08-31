@@ -56,6 +56,7 @@ import {
   type ListOrdersResponse,
   type OrderDetail,
   type OrderReactionInput,
+  type OrderAccount,
   type OrdersDashboard,
   type OrdersPulse,
   type Inbox,
@@ -117,10 +118,11 @@ export class OrdersController {
   async pulse(
     @Query('scope') scope: string | undefined,
     @Query('warehouse') warehouse: string | undefined,
+    @Query('account') account: string | undefined,
     @CurrentUser() user: AuthContext,
   ): Promise<OrdersPulse> {
     const s = scope === 'pending' || scope === 'invoiced' ? scope : 'general';
-    return this.orders.pulse(s, warehouse ?? null, user);
+    return this.orders.pulse(s, warehouse ?? null, user, account?.trim() || null);
   }
 
   /**
@@ -153,6 +155,15 @@ export class OrdersController {
   @Get('inbox')
   async inbox(@CurrentUser() user: AuthContext): Promise<Inbox> {
     return this.orders.inbox(user);
+  }
+
+  /**
+   * Tiendas conectadas (pestañas de pedidos generales), con su contador.
+   * Ruta literal: va ANTES de las rutas con :id.
+   */
+  @Get('accounts')
+  async accounts(@CurrentUser() user: AuthContext): Promise<OrderAccount[]> {
+    return this.orders.orderAccounts(user);
   }
 
   /** Menciones a mi (pagina "Menciones"). Ruta literal: antes de :id. */

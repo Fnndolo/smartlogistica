@@ -328,6 +328,9 @@ model MarketplaceConnection {
   id                String    @id @default(cuid())
   provider          String
   accountName       String
+  // Nombre visible de la tienda. Con dos VTEX conectados es lo unico que las
+  // distingue en las pestañas de pedidos. null = se muestra el accountName.
+  label             String?
   // Blobs auto-contenidos: cada uno embebe [iv:12][tag:16][ciphertext:N].
   // Una sola columna por campo cifrado = imposible mezclar iv/tag entre campos.
   encryptedAppKey   Bytes
@@ -408,7 +411,10 @@ model Order {
   superMentions SuperMentionAlert[]
   warehouse     Warehouse?  @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
 
-  @@unique([provider, externalId])
+  // La CUENTA entra en la clave: el orderId de VTEX solo es unico dentro de una
+  // tienda, asi que con dos cuentas conectadas el pedido de la segunda pisaba
+  // al de la primera (mismo id -> el upsert lo tomaba por el mismo pedido).
+  @@unique([provider, accountName, externalId])
   @@index([status, marketplaceCreatedAt(sort: Desc)])
   @@index([status, totalUnits])
   @@index([status, totalValue])

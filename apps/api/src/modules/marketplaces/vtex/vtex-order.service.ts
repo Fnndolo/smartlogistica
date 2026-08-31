@@ -31,11 +31,23 @@ export class VtexOrderService {
 
     const { order, isNew } = await prisma.$transaction(async (tx) => {
       const existed = await tx.order.findUnique({
-        where: { provider_externalId: { provider: 'vtex', externalId: detail.orderId } },
+        where: {
+          provider_accountName_externalId: {
+            provider: 'vtex',
+            accountName,
+            externalId: detail.orderId,
+          },
+        },
         select: { id: true },
       });
       const row = await tx.order.upsert({
-        where: { provider_externalId: { provider: 'vtex', externalId: detail.orderId } },
+        where: {
+          provider_accountName_externalId: {
+            provider: 'vtex',
+            accountName,
+            externalId: detail.orderId,
+          },
+        },
         create: { ...create, primaryProduct, items: { create: items } },
         update: { ...update, primaryProduct },
       });

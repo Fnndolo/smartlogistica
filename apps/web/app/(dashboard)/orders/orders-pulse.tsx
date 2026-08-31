@@ -64,15 +64,21 @@ const TILES: Record<OrdersPulse['scope'], TileDef[]> = {
 export function OrdersPulseRow({
   scope,
   warehouseId,
+  account,
 }: {
   scope: OrdersPulse['scope'];
   warehouseId?: string;
+  /** Pestaña de tienda activa en generales: las metricas hablan de la tabla
+   *  que se esta viendo, no de todas las tiendas juntas. */
+  account?: string;
 }) {
   const { data } = useQuery({
-    queryKey: ['orders-pulse', scope, warehouseId ?? null],
+    queryKey: ['orders-pulse', scope, warehouseId ?? null, account ?? null],
     queryFn: () =>
       api.get<OrdersPulse>(
-        `/v1/orders/pulse?scope=${scope}${warehouseId ? `&warehouse=${warehouseId}` : ''}`,
+        `/v1/orders/pulse?scope=${scope}${warehouseId ? `&warehouse=${warehouseId}` : ''}${
+          account ? `&account=${encodeURIComponent(account)}` : ''
+        }`,
       ),
     staleTime: 15_000,
     refetchInterval: 60_000,
@@ -92,7 +98,9 @@ export function OrdersPulseRow({
             className="shadow-card flex flex-col items-center gap-1.5 rounded-xl border border-border bg-card px-3 py-3 text-center transition-all hover:-translate-y-px hover:shadow-float"
           >
             <div className="flex items-center justify-center gap-2 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground">
-              <span className={cn('flex h-6 w-6 items-center justify-center rounded-md', TINT[t.tint])}>
+              <span
+                className={cn('flex h-6 w-6 items-center justify-center rounded-md', TINT[t.tint])}
+              >
                 <Icon className="h-3.5 w-3.5" />
               </span>
               {t.label}
@@ -100,7 +108,9 @@ export function OrdersPulseRow({
             {v === null ? (
               <div className="h-7 w-10 animate-pulse rounded bg-muted" />
             ) : (
-              <div className="text-2xl font-semibold leading-none tracking-tight tabular-nums">{v}</div>
+              <div className="text-2xl font-semibold leading-none tracking-tight tabular-nums">
+                {v}
+              </div>
             )}
             <div className="flex items-center justify-center text-[11.5px] text-muted-foreground">
               {scope === 'general' && i === 0 && data?.deltaToday != null ? (

@@ -167,7 +167,9 @@ export class VtexBackfillProcessor extends WorkerHost {
       await this.orders.upsertFromDetail(prisma, accountName, detail, tenantId);
       if (detail.status === 'invoiced') {
         const row = await prisma.order.findUnique({
-          where: { provider_externalId: { provider: 'vtex', externalId: orderId } },
+          where: {
+            provider_accountName_externalId: { provider: 'vtex', accountName, externalId: orderId },
+          },
           select: { id: true },
         });
         if (row) {
@@ -177,7 +179,13 @@ export class VtexBackfillProcessor extends WorkerHost {
           });
           if (!already) {
             await prisma.orderEvent.create({
-              data: { orderId: row.id, type: 'vtex_invoiced_external', actorId: null, actorName: 'VTEX', data: {} },
+              data: {
+                orderId: row.id,
+                type: 'vtex_invoiced_external',
+                actorId: null,
+                actorName: 'VTEX',
+                data: {},
+              },
             });
           }
         }
@@ -185,7 +193,10 @@ export class VtexBackfillProcessor extends WorkerHost {
       await this.realtime.publish(tenantId, { kind: 'order.upserted', externalId: orderId });
       return true;
     } catch (err) {
-      this.logger.warn({ err: extractAxiosErr(err), orderId }, 'importExternal failed — continuing');
+      this.logger.warn(
+        { err: extractAxiosErr(err), orderId },
+        'importExternal failed — continuing',
+      );
       return false;
     }
   }
@@ -259,7 +270,10 @@ export class VtexBackfillProcessor extends WorkerHost {
           }
         }
         if (vtexStatus !== s.status) {
-          await this.realtime.publish(tenantId, { kind: 'order.upserted', externalId: s.externalId });
+          await this.realtime.publish(tenantId, {
+            kind: 'order.upserted',
+            externalId: s.externalId,
+          });
         }
         continue;
       }

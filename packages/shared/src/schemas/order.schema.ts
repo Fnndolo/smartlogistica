@@ -260,6 +260,10 @@ export const listOrdersQuerySchema = z.object({
     .string()
     .regex(/^(confirmed|modified|pending)(,(confirmed|modified|pending))*$/)
     .optional(),
+  // Filtro por CUENTA de marketplace (pestañas de generales cuando hay mas de
+  // una tienda VTEX conectada). Solo aplica en generales: en la sede se ven
+  // todos los pedidos asignados, vengan de la tienda que vengan.
+  account: z.string().trim().min(1).max(60).optional(),
   // Filtro por PRODUCTO: solo pedidos con algun item cuyo nombre contenga esto.
   product: z.string().trim().min(1).max(160).optional(),
   // Busqueda universal: matchea por nombre de cliente, N.º de pedido (externalId),
@@ -270,6 +274,17 @@ export const listOrdersQuerySchema = z.object({
 });
 
 export type ListOrdersQuery = z.infer<typeof listOrdersQuerySchema>;
+
+/**
+ * Una tienda conectada, para las PESTAÑAS de pedidos generales. `count` es
+ * cuantos pedidos sin asignar tiene ahora mismo, para pintarlo en el chip.
+ */
+export const orderAccountSchema = z.object({
+  accountName: z.string(),
+  label: z.string(),
+  count: z.number().int(),
+});
+export type OrderAccount = z.infer<typeof orderAccountSchema>;
 
 export const listOrdersResponseSchema = z.object({
   items: z.array(orderSummarySchema),

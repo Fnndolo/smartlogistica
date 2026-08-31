@@ -72,6 +72,9 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const shipping = searchParams.get('shipping') ?? undefined;
   const address = searchParams.get('address') ?? undefined;
   const product = searchParams.get('product') ?? undefined;
+  // Pestaña de tienda: solo tiene sentido en generales (en la sede los pedidos
+  // de las dos tiendas ya conviven a proposito).
+  const account = scope.kind === 'general' ? (searchParams.get('account') ?? undefined) : undefined;
   const sort = parseSort(searchParams.get('sort'));
   const dir = parseDir(searchParams.get('dir'));
   const warehouseId = scope.kind === 'warehouse' ? scope.id : undefined;
@@ -84,6 +87,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       shipping,
       address,
       product,
+      account,
       page,
       from,
       to,
@@ -114,6 +118,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       if (shipping) params.set('shipping', shipping);
       if (address) params.set('address', address);
       if (product) params.set('product', product);
+      if (account) params.set('account', account);
       return api.get<ListOrdersResponse>(`/v1/orders?${params.toString()}`);
     },
     // Solo la clave inicial recibe el initialData del SSR (ver mountKey arriba).
@@ -142,7 +147,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   useEffect(() => {
     setSelected(new Set());
-  }, [page, q, from, to, sort, dir, warehouseId, shipping, address, product]);
+  }, [page, q, from, to, sort, dir, warehouseId, shipping, address, product, account]);
 
   // Pedido abierto en el drawer (click en la fila). La conversacion es SIEMPRE
   // la primera pestaña.
@@ -409,6 +414,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
             scope.kind === 'general' ? 'general' : state === 'invoiced' ? 'invoiced' : 'pending'
           }
           warehouseId={warehouseId}
+          account={account}
         />
       ) : (
         <p className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-[12.5px] text-amber-700 dark:text-amber-400">

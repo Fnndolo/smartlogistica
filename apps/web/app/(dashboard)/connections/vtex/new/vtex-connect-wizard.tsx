@@ -42,7 +42,7 @@ export function VtexConnectWizard() {
   const form = useForm<VtexCredentialsInput>({
     resolver: zodResolver(vtexCredentialsSchema),
     mode: 'onChange',
-    defaultValues: { accountName: '', appKey: '', appToken: '' },
+    defaultValues: { accountName: '', label: '', appKey: '', appToken: '' },
   });
 
   const { register, trigger, getValues, formState, watch } = form;
@@ -102,6 +102,7 @@ export function VtexConnectWizard() {
           <StepAccountName
             value={accountName}
             register={register('accountName')}
+            labelRegister={register('label')}
             error={formState.errors.accountName?.message}
             onNext={goNextFromStep1}
           />
@@ -183,11 +184,13 @@ function WizardSteps({ steps, current }: { steps: string[]; current: number }) {
 function StepAccountName({
   value,
   register,
+  labelRegister,
   error,
   onNext,
 }: {
   value: string;
   register: ReturnType<ReturnType<typeof useForm<VtexCredentialsInput>>['register']>;
+  labelRegister: ReturnType<ReturnType<typeof useForm<VtexCredentialsInput>>['register']>;
   error?: string;
   onNext: () => void;
 }) {
@@ -220,6 +223,25 @@ function StepAccountName({
           </span>
         </div>
         <FieldError message={error} />
+      </div>
+
+      {/* Nombre visible. Con dos tiendas VTEX conectadas es lo unico que las
+          distingue en las pestañas de pedidos y en la lista de conexiones. */}
+      <div className="space-y-1.5">
+        <Label htmlFor="label" className={LABEL_MICRO}>
+          Nombre de la tienda <span className="font-normal normal-case text-hint">(opcional)</span>
+        </Label>
+        <Input
+          id="label"
+          className="rounded-[10px] border-input bg-card shadow-none"
+          placeholder="Ej. Smart Gadgets"
+          maxLength={40}
+          {...labelRegister}
+        />
+        <p className="text-[11.5px] leading-[1.45] text-hint">
+          Así la verás en las pestañas de pedidos. Si lo dejas vacío se usa el account name. Se
+          puede cambiar después.
+        </p>
       </div>
 
       <div className="flex justify-end">
@@ -373,6 +395,7 @@ function StepConfirm({
   return (
     <div className="space-y-5">
       <div className="space-y-2">
+        <SummaryRow label="Tienda" value={values.label?.trim() || values.accountName} />
         <SummaryRow label="Account" value={values.accountName} />
         <SummaryRow label="App Key" value={maskMiddle(values.appKey)} />
         <SummaryRow label="App Token" value={maskMiddle(values.appToken)} />
@@ -380,7 +403,8 @@ function StepConfirm({
 
       <div className="rounded-[10px] border border-border bg-surface p-3 text-[12px] text-muted-foreground">
         Al confirmar registramos un webhook seguro en tu cuenta VTEX para los estados
-        ready-for-handling y handling. Tus credenciales se cifran con AES-256-GCM antes de almacenarse.
+        ready-for-handling y handling. Tus credenciales se cifran con AES-256-GCM antes de
+        almacenarse.
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">

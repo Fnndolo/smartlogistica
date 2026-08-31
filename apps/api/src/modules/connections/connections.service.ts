@@ -62,6 +62,7 @@ export class ConnectionsService {
       data: {
         provider: 'vtex',
         accountName: input.accountName,
+        label: input.label?.trim() || null,
         encryptedAppKey,
         encryptedAppToken,
         webhookSecret,
@@ -161,9 +162,23 @@ export class ConnectionsService {
     await prisma.marketplaceConnection.delete({ where: { id } });
   }
 
+  /** Renombra la conexion. No toca credenciales ni pedidos: `accountName`,
+   *  que es lo que ata los pedidos a su tienda, no cambia nunca. */
+  async rename(id: string, label: string): Promise<VtexConnectionSummary> {
+    const { prisma } = getTenantContext();
+    const conn = await prisma.marketplaceConnection.findUnique({ where: { id } });
+    if (!conn) throw new NotFoundException();
+    const row = await prisma.marketplaceConnection.update({
+      where: { id },
+      data: { label: label.trim() },
+    });
+    return this.toSummary(row);
+  }
+
   private toSummary(row: {
     id: string;
     accountName: string;
+    label?: string | null;
     status: string;
     lastSyncedAt: Date | null;
     createdAt: Date;
@@ -172,6 +187,8 @@ export class ConnectionsService {
       id: row.id,
       provider: 'vtex',
       accountName: row.accountName,
+      // Nunca vacio: sin nombre puesto, la propia cuenta hace de nombre.
+      label: row.label?.trim() || row.accountName,
       status: (row.status as VtexConnectionSummary['status']) ?? 'connected',
       lastSyncedAt: row.lastSyncedAt ? row.lastSyncedAt.toISOString() : null,
       createdAt: row.createdAt.toISOString(),

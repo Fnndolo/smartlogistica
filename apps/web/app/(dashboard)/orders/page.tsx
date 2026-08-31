@@ -4,6 +4,7 @@ import type { ListOrdersResponse } from '@smartlogistica/shared';
 
 import { INTERNAL_API_URL, sanitizeAddressList } from '@/lib/server-api';
 
+import { AccountTabs } from './account-tabs';
 import { OrdersLive } from './orders-live';
 import { OrdersTabs } from './orders-tabs';
 
@@ -22,6 +23,7 @@ interface PageProps {
     dir?: string;
     address?: string;
     product?: string;
+    account?: string;
   }>;
 }
 
@@ -34,6 +36,7 @@ async function fetchOrders(params: {
   dir?: string;
   address?: string;
   product?: string;
+  account?: string;
 }): Promise<ListOrdersResponse> {
   const cookieStore = await cookies();
   const session = cookieStore.get(SESSION_COOKIE_NAME);
@@ -53,6 +56,8 @@ async function fetchOrders(params: {
   if (params.to) url.searchParams.set('to', params.to);
   if (params.q) url.searchParams.set('q', params.q);
   if (params.product) url.searchParams.set('product', params.product.slice(0, 160));
+  // Pestaña de tienda (solo con mas de un VTEX conectado).
+  if (params.account) url.searchParams.set('account', params.account.slice(0, 60));
   const address = sanitizeAddressList(params.address);
   if (address) url.searchParams.set('address', address);
 
@@ -80,12 +85,15 @@ export default async function OrdersPage({ searchParams }: PageProps) {
     dir: params.dir,
     address: params.address,
     product: params.product,
+    account: params.account,
   });
 
   // El encabezado (migas + titulo + "En vivo" + rango) lo pinta OrdersLive.
   return (
     <div className="space-y-5">
       <OrdersTabs />
+      {/* Pestañas por tienda: solo aparecen con mas de un VTEX conectado. */}
+      <AccountTabs />
       <OrdersLive initialData={initialData} />
     </div>
   );

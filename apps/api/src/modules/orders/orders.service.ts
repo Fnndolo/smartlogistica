@@ -35,6 +35,7 @@ import type {
   OrderDetail,
   OrderEvent as OrderEventDto,
   OrderMessage as OrderMessageDto,
+  OrderAccount,
   OrderSummary,
   OrdersDashboard,
   OrdersPulse,
@@ -196,6 +197,9 @@ export class OrdersService {
       // Pedidos generales (sin asignar). Admins y gestores.
       if (!canManageOrders(auth)) throw new ForbiddenException('Sin acceso a pedidos generales');
       where.warehouseId = null;
+      // Pestañas por tienda: con dos VTEX conectados, cada una se ve aparte.
+      // Solo aqui — en la sede los pedidos ya estan mezclados a proposito.
+      if (query.account) where.accountName = query.account;
       if (query.state === 'invoiced') {
         // Trazabilidad TOTAL de lo que se procesa POR FUERA de SmartLogistica:
         // TODO pedido sin asignar que avanzo mas alla de ready-for-handling
@@ -358,6 +362,50 @@ export class OrdersService {
    * (Por preparar vs Facturados) — sugerir un producto que en esa pestaña da
    * 0 resultados solo confunde.
    */
+  /**
+   * Tiendas conectadas para las PESTAÑAS de pedidos generales, con cuantos
+   * pedidos sin asignar tiene cada una.
+   *
+   * Sale de las CONEXIONES, no de los pedidos: una tienda recien conectada
+   * (todavia sin pedidos) tiene que aparecer igual, y una cuenta desconectada
+   * cuyos pedidos siguen ahi tambien — por eso se suman las cuentas que
+   * aparecen en los pedidos aunque ya no tengan conexion.
+   */
+  async orderAccounts(auth: AuthContext): Promise<OrderAccount[]> {
+    if (!canManageOrders(auth)) throw new ForbiddenException('Sin acceso a pedidos generales');
+    const { prisma } = getTenantContext();
+
+    const [conns, counts] = await Promise.all([
+      prisma.marketplaceConnection.findMany({
+        where: { provider: 'vtex' },
+        select: { accountName: true, label: true, createdAt: true },
+        orderBy: { createdAt: 'asc' },
+      }),
+      prisma.order.groupBy({
+        by: ['accountName'],
+        where: { warehouseId: null, status: 'ready-for-handling' },
+        _count: { _all: true },
+      }),
+    ]);
+
+    const byAccount = new Map(counts.map((c) => [c.accountName, c._count._all]));
+    const out: OrderAccount[] = conns.map((c) => ({
+      accountName: c.accountName,
+      label: c.label?.trim() || c.accountName,
+      count: byAccount.get(c.accountName) ?? 0,
+    }));
+
+    // Cuentas con pedidos pero sin conexion viva (se desconecto y los pedidos
+    // quedaron): igual se listan, o esos pedidos serian invisibles.
+    const known = new Set(out.map((o) => o.accountName));
+    for (const c of counts) {
+      if (c.accountName && c.accountName !== 'manual' && !known.has(c.accountName)) {
+        out.push({ accountName: c.accountName, label: c.accountName, count: c._count._all });
+      }
+    }
+    return out;
+  }
+
   async productOptions(
     warehouseId: string | null,
     state: 'pending' | 'invoiced',
@@ -502,6 +550,8 @@ export class OrdersService {
     scope: 'general' | 'pending' | 'invoiced',
     warehouseId: string | null,
     auth: AuthContext,
+    /** Pestaña de tienda activa en generales (null = todas). */
+    account: string | null = null,
   ): Promise<OrdersPulse> {
     const { prisma } = getTenantContext();
 
@@ -516,11 +566,14 @@ export class OrdersService {
       // facturados POR FUERA (status invoiced, trazabilidad) tambien tienen
       // warehouseId null — sin el filtro de status inflaban "sin asignar" a
       // miles cuando la tabla mostraba unos cientos.
-      const mirror = { warehouseId: null, status: 'ready-for-handling' } as const;
+      // La pestaña de tienda manda tambien aqui: si no, las metricas hablarian
+      // de una tabla distinta de la que se esta viendo.
+      const acc = account ? { accountName: account } : {};
+      const mirror = { warehouseId: null, status: 'ready-for-handling', ...acc } as const;
       const [today, yesterday, unassigned, addrPending, unclaimed] = await Promise.all([
-        prisma.order.count({ where: { marketplaceCreatedAt: { gte: startToday } } }),
+        prisma.order.count({ where: { ...acc, marketplaceCreatedAt: { gte: startToday } } }),
         prisma.order.count({
-          where: { marketplaceCreatedAt: { gte: startYesterday, lt: startToday } },
+          where: { ...acc, marketplaceCreatedAt: { gte: startYesterday, lt: startToday } },
         }),
         prisma.order.count({ where: mirror }),
         prisma.order.count({ where: { ...mirror, addressStatus: null } }),

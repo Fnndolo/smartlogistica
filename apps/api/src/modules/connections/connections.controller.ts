@@ -6,14 +6,17 @@ import {
   Get,
   HttpCode,
   Param,
+  Patch,
   Post,
 } from '@nestjs/common';
 import {
   vtexConnectionSummarySchema,
   vtexCreateConnectionSchema,
+  vtexRenameConnectionSchema,
   vtexTestConnectionSchema,
   type VtexConnectionSummary,
   type VtexCredentialsInput,
+  type VtexRenameConnectionInput,
 } from '@smartlogistica/shared';
 
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -73,6 +76,17 @@ export class ConnectionsController {
   ): Promise<VtexConnectionSummary> {
     this.assertAdmin(user);
     return this.connections.syncVtex(id);
+  }
+
+  /** Renombrar la tienda (nombre visible). No toca credenciales ni pedidos. */
+  @Patch(':id')
+  async rename(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(vtexRenameConnectionSchema)) body: VtexRenameConnectionInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<VtexConnectionSummary> {
+    this.assertAdmin(user);
+    return this.connections.rename(id, body.label);
   }
 
   @Delete(':id')

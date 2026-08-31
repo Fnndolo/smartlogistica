@@ -102,7 +102,7 @@ export class WebhooksController {
     }
     const payload = result.data as VtexWebhookPayload;
 
-    const eventId = VtexClient.extractWebhookEventId(payload);
+    const eventId = VtexClient.extractWebhookEventId(payload, accountName);
     await this.queue.add(
       'webhook',
       {
