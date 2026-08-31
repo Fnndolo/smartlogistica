@@ -74,7 +74,12 @@ export function WhatsappPanel({
   const [tplParams, setTplParams] = useState<string[]>([]);
   const slashMode = !tpl && text.startsWith('/');
 
-  const { data: thread, isLoading, isFetchedAfterMount, dataUpdatedAt } = useQuery({
+  const {
+    data: thread,
+    isLoading,
+    isFetchedAfterMount,
+    dataUpdatedAt,
+  } = useQuery({
     queryKey: ['wa-thread', base],
     queryFn: () => api.get<WaThread>(base),
     // Respaldo por si el SSE se cae; el canal primario es wa.message.
@@ -179,7 +184,9 @@ export function WhatsappPanel({
     kind: 'text',
     body,
     mediaUrl: null,
-    authorName: 'Tú',
+    // Mi nombre real, no "Tú": la burbuja ya muestra quien escribio y con
+    // "Tú" cambiaria de etiqueta (y de color) al confirmar el servidor.
+    authorName: me?.name?.trim() || me?.email || 'Tú',
     buttons,
     replyTo: null,
     reactions: [],
@@ -196,19 +203,21 @@ export function WhatsappPanel({
     // OPTIMISTA: la burbuja aparece AL INSTANTE con relojito; el POST corre por detras.
     onMutate: (vars) => {
       const quoted = vars.replyToId
-        ? (qc.getQueryData<WaThread>(['wa-thread', base])?.messages.find((x) => x.id === vars.replyToId) ?? null)
+        ? (qc
+            .getQueryData<WaThread>(['wa-thread', base])
+            ?.messages.find((x) => x.id === vars.replyToId) ?? null)
         : null;
       appendMessage({
         ...optimistic(vars.body),
         id: vars.tempId,
         replyTo: quoted
           ? {
-            id: quoted.id,
-            direction: quoted.direction,
-            kind: quoted.kind,
-            body: quoted.body,
-            authorName: quoted.authorName,
-          }
+              id: quoted.id,
+              direction: quoted.direction,
+              kind: quoted.kind,
+              body: quoted.body,
+              authorName: quoted.authorName,
+            }
           : null,
       });
     },
@@ -303,7 +312,10 @@ export function WhatsappPanel({
 
   const tplQuery = text.slice(1).trim().toLowerCase();
   const tplMatches = (tplList?.templates ?? []).filter(
-    (t) => !tplQuery || t.name.toLowerCase().includes(tplQuery) || t.body.toLowerCase().includes(tplQuery),
+    (t) =>
+      !tplQuery ||
+      t.name.toLowerCase().includes(tplQuery) ||
+      t.body.toLowerCase().includes(tplQuery),
   );
 
   const sendFile = useMutation({
@@ -350,7 +362,8 @@ export function WhatsappPanel({
       toast.error(err instanceof ApiError ? err.message : 'No se pudo enviar el archivo');
     },
   });
-  const sendFileNow = (file: File) => sendFile.mutate({ file, tempId: `temp-${crypto.randomUUID()}` });
+  const sendFileNow = (file: File) =>
+    sendFile.mutate({ file, tempId: `temp-${crypto.randomUUID()}` });
 
   // ===== Estado del composer estilo WhatsApp =====
   const [replyTo, setReplyTo] = useState<WaMessage | null>(null);
@@ -375,12 +388,13 @@ export function WhatsappPanel({
     if (!active || !opPhone || count === 0) return;
     const t = setTimeout(() => {
       void api.post(orderId ? `${base}/read` : `${opBase}/read`, {}).catch(() => null);
-      qc.setQueryData<{ chats: Array<{ phone: string; unread: number } & Record<string, unknown>>; labels: string[] }>(
-        ['wa-inbox'],
-        (old) =>
-          old
-            ? { ...old, chats: old.chats.map((c) => (c.phone === opPhone ? { ...c, unread: 0 } : c)) }
-            : old,
+      qc.setQueryData<{
+        chats: Array<{ phone: string; unread: number } & Record<string, unknown>>;
+        labels: string[];
+      }>(['wa-inbox'], (old) =>
+        old
+          ? { ...old, chats: old.chats.map((c) => (c.phone === opPhone ? { ...c, unread: 0 } : c)) }
+          : old,
       );
     }, 500);
     return () => clearTimeout(t);
@@ -475,19 +489,19 @@ export function WhatsappPanel({
       qc.setQueryData<WaThread>(['wa-thread', base], (old) =>
         old
           ? {
-            ...old,
-            messages: old.messages.map((m) =>
-              m.id === vars.messageId
-                ? {
-                  ...m,
-                  reactions: [
-                    ...m.reactions.filter((r) => !r.mine),
-                    ...(vars.emoji ? [{ emoji: vars.emoji, mine: true }] : []),
-                  ],
-                }
-                : m,
-            ),
-          }
+              ...old,
+              messages: old.messages.map((m) =>
+                m.id === vars.messageId
+                  ? {
+                      ...m,
+                      reactions: [
+                        ...m.reactions.filter((r) => !r.mine),
+                        ...(vars.emoji ? [{ emoji: vars.emoji, mine: true }] : []),
+                      ],
+                    }
+                  : m,
+              ),
+            }
           : old,
       );
     },
@@ -502,30 +516,29 @@ export function WhatsappPanel({
       qc.setQueryData<WaThread>(['wa-thread', base], (old) =>
         old
           ? {
-            ...old,
-            messages: old.messages.map((m) =>
-              m.id === vars.messageId ? { ...m, starred: vars.starred } : m,
-            ),
-          }
+              ...old,
+              messages: old.messages.map((m) =>
+                m.id === vars.messageId ? { ...m, starred: vars.starred } : m,
+              ),
+            }
           : old,
       );
     },
   });
 
   const removeMsg = useMutation({
-    mutationFn: (messageId: string) =>
-      api.delete<{ ok: true }>(`${opBase}/messages/${messageId}`),
+    mutationFn: (messageId: string) => api.delete<{ ok: true }>(`${opBase}/messages/${messageId}`),
     onMutate: (messageId) => {
       qc.setQueryData<WaThread>(['wa-thread', base], (old) =>
         old ? { ...old, messages: old.messages.filter((m) => m.id !== messageId) } : old,
       );
     },
-    onError: (err) =>
-      toast.error(err instanceof ApiError ? err.message : 'No se pudo eliminar'),
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo eliminar'),
   });
 
   const favSticker = useMutation({
-    mutationFn: (messageId: string) => api.post<{ ok: true }>(`/v1/whatsapp/stickers`, { messageId }),
+    mutationFn: (messageId: string) =>
+      api.post<{ ok: true }>(`/v1/whatsapp/stickers`, { messageId }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['wa-stickers'] });
       toast.success('Sticker agregado a Favoritos');
@@ -608,7 +621,9 @@ export function WhatsappPanel({
         }
         const type = rec.mimeType || 'audio/webm';
         const ext = type.includes('mp4') ? 'm4a' : type.includes('ogg') ? 'ogg' : 'webm';
-        const file = new File([new Blob(recChunksRef.current, { type })], `nota-de-voz.${ext}`, { type });
+        const file = new File([new Blob(recChunksRef.current, { type })], `nota-de-voz.${ext}`, {
+          type,
+        });
         sendFileNow(file);
       };
       mediaRecRef.current = rec;
@@ -643,7 +658,9 @@ export function WhatsappPanel({
       } else if (name === 'NotReadableError') {
         toast.error('Otro programa está usando el micrófono (ciérralo y reintenta).');
       } else {
-        toast.error(`No se pudo acceder al micrófono${name ? ` (${name}${msg ? `: ${msg}` : ''})` : ''}.`);
+        toast.error(
+          `No se pudo acceder al micrófono${name ? ` (${name}${msg ? `: ${msg}` : ''})` : ''}.`,
+        );
       }
     }
   };
@@ -726,7 +743,9 @@ export function WhatsappPanel({
     forward: (m) => setForwardMsg(m),
     star: (m) => star.mutate({ messageId: m.id, starred: !m.starred }),
     remove: (m) => {
-      if (confirm('¿Eliminar este mensaje de la plataforma? (en el WhatsApp del cliente no se borra)')) {
+      if (
+        confirm('¿Eliminar este mensaje de la plataforma? (en el WhatsApp del cliente no se borra)')
+      ) {
         removeMsg.mutate(m.id);
       }
     },
@@ -867,11 +886,18 @@ export function WhatsappPanel({
                       className="-mx-4 my-2 flex justify-center bg-[#00000010] py-2 dark:bg-[#ffffff0d] md:-mx-[6.82%]"
                     >
                       <span className="rounded-full bg-white px-3.5 py-[5px] text-[12.5px] font-semibold text-[#111b21] shadow-sm dark:bg-[#182229] dark:text-[#e9edef]">
-                        {dividerCount === 1 ? '1 mensaje no leído' : `${dividerCount} mensajes no leídos`}
+                        {dividerCount === 1
+                          ? '1 mensaje no leído'
+                          : `${dividerCount} mensajes no leídos`}
                       </span>
                     </div>
                   ) : null}
-                  <WaBubble message={m} prev={thread.messages[i - 1]} base={base} actions={bubbleActions} />
+                  <WaBubble
+                    message={m}
+                    prev={thread.messages[i - 1]}
+                    base={base}
+                    actions={bubbleActions}
+                  />
                 </div>
               ))
             )}
@@ -960,7 +986,9 @@ export function WhatsappPanel({
                     onClick={() => pickTemplate(t)}
                     className={cn(
                       'block w-full rounded-lg px-2.5 py-2 text-left transition-colors',
-                      approved ? 'hover:bg-black/5 dark:hover:bg-white/5' : 'cursor-not-allowed opacity-55',
+                      approved
+                        ? 'hover:bg-black/5 dark:hover:bg-white/5'
+                        : 'cursor-not-allowed opacity-55',
                     )}
                   >
                     <span className="flex items-center gap-2">
@@ -975,7 +1003,11 @@ export function WhatsappPanel({
                               : 'bg-amber-500/15 text-amber-600 dark:text-amber-400',
                         )}
                       >
-                        {approved ? 'Aprobada' : t.status === 'rejected' ? 'Rechazada' : 'Pendiente'}
+                        {approved
+                          ? 'Aprobada'
+                          : t.status === 'rejected'
+                            ? 'Rechazada'
+                            : 'Pendiente'}
                       </span>
                     </span>
                     <span className="mt-0.5 line-clamp-2 block text-[11.5px] leading-snug text-muted-foreground">
@@ -1055,13 +1087,31 @@ export function WhatsappPanel({
       {replyTo ? (
         <div className="flex items-center gap-2 bg-[#f0f2f5] px-3 pt-2 dark:bg-[#202c33]">
           <div className="flex min-w-0 flex-1 overflow-hidden rounded-[6px] bg-white dark:bg-[#2a3942]">
-            <span className="w-1 shrink-0" style={{ backgroundColor: replyTo.direction === 'out' ? '#06cf9c' : '#e17bb5' }} />
+            <span
+              className="w-1 shrink-0"
+              style={{ backgroundColor: replyTo.direction === 'out' ? '#06cf9c' : '#e17bb5' }}
+            />
             <div className="min-w-0 px-2 py-1">
-              <p className="truncate text-[12.5px] font-semibold" style={{ color: replyTo.direction === 'out' ? '#06cf9c' : '#e17bb5' }}>
-                {replyTo.direction === 'out' ? (replyTo.authorName ?? 'Tú') : (thread.contactName ?? 'Cliente')}
+              <p
+                className="truncate text-[12.5px] font-semibold"
+                style={{ color: replyTo.direction === 'out' ? '#06cf9c' : '#e17bb5' }}
+              >
+                {replyTo.direction === 'out'
+                  ? (replyTo.authorName ?? 'Tú')
+                  : (thread.contactName ?? 'Cliente')}
               </p>
               <p className="line-clamp-1 text-[12.5px] text-[#667781] dark:text-[#8696a0]">
-                {replyTo.kind === 'text' ? (replyTo.body ?? '') : replyTo.kind === 'image' ? '📷 Foto' : replyTo.kind === 'video' ? '🎬 Video' : replyTo.kind === 'audio' ? '🎙️ Audio' : replyTo.kind === 'sticker' ? '🩵 Sticker' : `📎 ${replyTo.body ?? 'Archivo'}`}
+                {replyTo.kind === 'text'
+                  ? (replyTo.body ?? '')
+                  : replyTo.kind === 'image'
+                    ? '📷 Foto'
+                    : replyTo.kind === 'video'
+                      ? '🎬 Video'
+                      : replyTo.kind === 'audio'
+                        ? '🎙️ Audio'
+                        : replyTo.kind === 'sticker'
+                          ? '🩵 Sticker'
+                          : `📎 ${replyTo.body ?? 'Archivo'}`}
               </p>
             </div>
           </div>
@@ -1079,11 +1129,61 @@ export function WhatsappPanel({
       {/* Composer estilo WhatsApp: + | emoji | campo | mic/enviar */}
       <div className="relative bg-[#f0f2f5] px-2 py-2 dark:bg-[#202c33] md:px-3">
         {/* Inputs ocultos del menu "+" */}
-        <input ref={fileRef} type="file" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) sendFileNow(f); e.target.value = ''; }} />
-        <input ref={docRef} type="file" className="hidden" accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip,.rar" onChange={(e) => { const f = e.target.files?.[0]; if (f) sendFileNow(f); e.target.value = ''; }} />
-        <input ref={mediaRef} type="file" className="hidden" accept="image/*,video/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) sendFileNow(f); e.target.value = ''; }} />
-        <input ref={cameraRef} type="file" className="hidden" accept="image/*" capture="environment" onChange={(e) => { const f = e.target.files?.[0]; if (f) sendFileNow(f); e.target.value = ''; }} />
-        <input ref={audioPickRef} type="file" className="hidden" accept="audio/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) sendFileNow(f); e.target.value = ''; }} />
+        <input
+          ref={fileRef}
+          type="file"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) sendFileNow(f);
+            e.target.value = '';
+          }}
+        />
+        <input
+          ref={docRef}
+          type="file"
+          className="hidden"
+          accept=".pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip,.rar"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) sendFileNow(f);
+            e.target.value = '';
+          }}
+        />
+        <input
+          ref={mediaRef}
+          type="file"
+          className="hidden"
+          accept="image/*,video/*"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) sendFileNow(f);
+            e.target.value = '';
+          }}
+        />
+        <input
+          ref={cameraRef}
+          type="file"
+          className="hidden"
+          accept="image/*"
+          capture="environment"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) sendFileNow(f);
+            e.target.value = '';
+          }}
+        />
+        <input
+          ref={audioPickRef}
+          type="file"
+          className="hidden"
+          accept="audio/*"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) sendFileNow(f);
+            e.target.value = '';
+          }}
+        />
         <input
           ref={stickerFileRef}
           type="file"
@@ -1102,15 +1202,50 @@ export function WhatsappPanel({
         {/* Menu del "+" (Documento / Fotos y videos / Camara / Audio / Contacto / Nuevo sticker) */}
         {attachOpen ? (
           <>
-            <button type="button" className="fixed inset-0 z-20 cursor-default" onClick={() => setAttachOpen(false)} aria-label="Cerrar menú" />
+            <button
+              type="button"
+              className="fixed inset-0 z-20 cursor-default"
+              onClick={() => setAttachOpen(false)}
+              aria-label="Cerrar menú"
+            />
             <div className="shadow-float absolute bottom-14 left-2 z-30 w-56 rounded-2xl border border-border bg-white py-1.5 dark:bg-[#233138]">
               {[
-                { icon: FileText, color: '#7f66ff', label: 'Documento', act: () => docRef.current?.click() },
-                { icon: ImageIcon, color: '#007bfc', label: 'Fotos y videos', act: () => mediaRef.current?.click() },
-                { icon: Camera, color: '#ff2e74', label: 'Cámara', act: () => cameraRef.current?.click() },
-                { icon: Headphones, color: '#fa6533', label: 'Audio', act: () => audioPickRef.current?.click() },
-                { icon: UserRound, color: '#009de2', label: 'Contacto', act: () => setContactOpen(true) },
-                { icon: StickerIcon, color: '#02a698', label: 'Nuevo sticker', act: () => stickerFileRef.current?.click() },
+                {
+                  icon: FileText,
+                  color: '#7f66ff',
+                  label: 'Documento',
+                  act: () => docRef.current?.click(),
+                },
+                {
+                  icon: ImageIcon,
+                  color: '#007bfc',
+                  label: 'Fotos y videos',
+                  act: () => mediaRef.current?.click(),
+                },
+                {
+                  icon: Camera,
+                  color: '#ff2e74',
+                  label: 'Cámara',
+                  act: () => cameraRef.current?.click(),
+                },
+                {
+                  icon: Headphones,
+                  color: '#fa6533',
+                  label: 'Audio',
+                  act: () => audioPickRef.current?.click(),
+                },
+                {
+                  icon: UserRound,
+                  color: '#009de2',
+                  label: 'Contacto',
+                  act: () => setContactOpen(true),
+                },
+                {
+                  icon: StickerIcon,
+                  color: '#02a698',
+                  label: 'Nuevo sticker',
+                  act: () => stickerFileRef.current?.click(),
+                },
               ].map((it) => (
                 <button
                   key={it.label}
@@ -1143,7 +1278,12 @@ export function WhatsappPanel({
               <Trash2 className="h-[18px] w-[18px]" />
             </button>
             <span className="flex shrink-0 items-center gap-1.5 text-[14px] tabular-nums text-[#3b4a54] dark:text-[#e9edef]">
-              <span className={cn('h-2.5 w-2.5 rounded-full bg-[#f15c6d]', !recPaused && 'animate-pulse')} />
+              <span
+                className={cn(
+                  'h-2.5 w-2.5 rounded-full bg-[#f15c6d]',
+                  !recPaused && 'animate-pulse',
+                )}
+              />
               {fmtSecs(recSecs)}
             </span>
             <LiveWave stream={recStream} paused={recPaused} />

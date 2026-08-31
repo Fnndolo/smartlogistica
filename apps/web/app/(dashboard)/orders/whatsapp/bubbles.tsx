@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useRef, useState, type CSSProperties } from 'react';
 import { Download, Star } from 'lucide-react';
 import type { WaMessage } from '@smartlogistica/shared';
 
@@ -41,7 +41,10 @@ export function WaBubble({
   const bareRef = useRef<HTMLDivElement>(null);
   const day = (iso: string) => new Date(iso).toDateString();
   const newDay = !prev || day(prev.createdAt) !== day(m.createdAt);
-  const grouped = !newDay && prev && prev.direction === m.direction;
+  // Agrupa por dia, direccion Y AUTOR: si escribe otra persona del equipo su
+  // mensaje arranca grupo nuevo (con cola y nombre), como en un grupo.
+  const sameAuthor = (prev?.authorName ?? '') === (m.authorName ?? '');
+  const grouped = !newDay && prev && prev.direction === m.direction && sameAuthor;
   const hasReactions = m.reactions.length > 0;
 
   // Solo UN emoji va suelto y gigante; de dos en adelante van EN burbuja
@@ -111,10 +114,21 @@ export function WaBubble({
             className={cn('group relative max-w-[85%] md:max-w-[65%]', pending && 'opacity-90')}
           >
             {!grouped ? <Tail mine={mine} /> : null}
-            <MsgMenu m={m} mine={mine} actions={actions} open={menuOpen} onOpenChange={setMenuOpen} />
+            <MsgMenu
+              m={m}
+              mine={mine}
+              actions={actions}
+              open={menuOpen}
+              onOpenChange={setMenuOpen}
+            />
             <HoverActions m={m} mine={mine} actions={actions} onReact={() => setReactOpen(true)} />
             {reactOpen ? (
-              <AnchoredReactionBar m={m} mine={mine} actions={actions} onClose={() => setReactOpen(false)} />
+              <AnchoredReactionBar
+                m={m}
+                mine={mine}
+                actions={actions}
+                onClose={() => setReactOpen(false)}
+              />
             ) : null}
             <div
               className={cn(
@@ -129,6 +143,7 @@ export function WaBubble({
                     : 'rounded-[7.5px] rounded-tl-none',
               )}
             >
+              {mine && !grouped && m.authorName ? <AuthorTag name={m.authorName} /> : null}
               <BubbleContent message={m} mine={mine} pending={pending} base={base} />
             </div>
             <ReactionChips message={m} mine={mine} actions={actions} />
@@ -136,6 +151,52 @@ export function WaBubble({
         )}
       </div>
     </>
+  );
+}
+
+/**
+ * Colores de autor, calcados de la paleta que usa WhatsApp para los nombres en
+ * los grupos. El indice sale del propio nombre, asi que cada persona conserva
+ * SIEMPRE su color sin guardar nada.
+ */
+/* Cada par es [claro, oscuro]: la burbuja saliente pasa de verde claro
+   (#d9fdd3) a verde oscuro (#005c4b), y un solo tono no contrasta en las dos. */
+const AUTHOR_COLORS: Array<[string, string]> = [
+  ['#1f6fd0', '#8fc9ff'],
+  ['#b34a26', '#ffb59a'],
+  ['#6b52e0', '#c3b5ff'],
+  ['#0a6f66', '#7fe3d6'],
+  ['#a3008f', '#ffa8f0'],
+  ['#7a5f00', '#ffd98a'],
+  ['#b32b43', '#ffa6b4'],
+  ['#26690a', '#a9e88a'],
+];
+
+/** Respaldo con tipo cerrado: el indexado del array es `| undefined`. */
+const AUTHOR_FALLBACK: [string, string] = ['#1f6fd0', '#8fc9ff'];
+
+function authorColor(name: string): [string, string] {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+  return AUTHOR_COLORS[h % AUTHOR_COLORS.length] ?? AUTHOR_FALLBACK;
+}
+
+/**
+ * Quien escribio el mensaje desde la plataforma. Varias personas comparten la
+ * misma linea de WhatsApp, asi que sin esto no hay forma de saber quien le
+ * respondio al cliente. Los automaticos salen como "SmartLogística", que de
+ * paso los distingue de los escritos a mano.
+ */
+function AuthorTag({ name }: { name: string }) {
+  const [light, dark] = authorColor(name);
+  return (
+    <p
+      className="truncate px-2 pt-[5px] text-[12.5px] font-semibold leading-[17px] text-[var(--wa-author)] dark:text-[var(--wa-author-dark)]"
+      style={{ '--wa-author': light, '--wa-author-dark': dark } as CSSProperties}
+      title={name}
+    >
+      {name}
+    </p>
   );
 }
 
@@ -167,12 +228,20 @@ function BareMessage({
         e.preventDefault();
         onMenuChange(anchorAtPoint(e, containerRef.current));
       }}
-      className={cn('group relative flex max-w-[85%] flex-col md:max-w-[65%]', mine ? 'items-end' : 'items-start')}
+      className={cn(
+        'group relative flex max-w-[85%] flex-col md:max-w-[65%]',
+        mine ? 'items-end' : 'items-start',
+      )}
     >
       <MsgMenu m={m} mine={mine} actions={actions} open={menuOpen} onOpenChange={onMenuChange} />
       <HoverActions m={m} mine={mine} actions={actions} onReact={() => setReactOpen(true)} />
       {reactOpen ? (
-        <AnchoredReactionBar m={m} mine={mine} actions={actions} onClose={() => setReactOpen(false)} />
+        <AnchoredReactionBar
+          m={m}
+          mine={mine}
+          actions={actions}
+          onClose={() => setReactOpen(false)}
+        />
       ) : null}
       {sticker ? (
         m.mediaUrl ? (
@@ -182,7 +251,9 @@ function BareMessage({
             <img src={m.mediaUrl} alt="Sticker" decoding="async" className="h-auto w-[180px]" />
           </button>
         ) : (
-          <span className="text-[13px] italic text-[#54656f] dark:text-[#8696a0]">🩵 Sticker (no se pudo descargar)</span>
+          <span className="text-[13px] italic text-[#54656f] dark:text-[#8696a0]">
+            🩵 Sticker (no se pudo descargar)
+          </span>
         )
       ) : (
         <p className="whitespace-pre-wrap break-words text-[44px] leading-[52px]">{m.body}</p>
@@ -236,14 +307,22 @@ function ReactionChips({
     >
       {emojis.join('')}
       {m.reactions.length > 1 ? (
-        <span className="ml-0.5 text-[11px] text-[#667781] dark:text-[#8696a0]">{m.reactions.length}</span>
+        <span className="ml-0.5 text-[11px] text-[#667781] dark:text-[#8696a0]">
+          {m.reactions.length}
+        </span>
       ) : null}
     </button>
   );
 }
 
 /** Cita (respuesta): barrita de color + nombre + resumen, como WhatsApp. */
-function ReplyQuote({ replyTo, mine }: { replyTo: NonNullable<WaMessage['replyTo']>; mine: boolean }) {
+function ReplyQuote({
+  replyTo,
+  mine,
+}: {
+  replyTo: NonNullable<WaMessage['replyTo']>;
+  mine: boolean;
+}) {
   const fromMe = replyTo.direction === 'out';
   const color = fromMe ? '#06cf9c' : '#e17bb5';
   const label = fromMe ? (replyTo.authorName ?? 'Tú') : (replyTo.authorName ?? 'Cliente');
@@ -315,10 +394,20 @@ function BubbleContent({
           {m.kind === 'image' ? (
             <a href={m.mediaUrl} target="_blank" rel="noreferrer" className="block bg-black/5">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={m.mediaUrl} alt={caption ?? 'Imagen'} decoding="async" className="max-h-[320px] w-full min-w-[180px] object-cover" />
+              <img
+                src={m.mediaUrl}
+                alt={caption ?? 'Imagen'}
+                decoding="async"
+                className="max-h-[320px] w-full min-w-[180px] object-cover"
+              />
             </a>
           ) : (
-            <video src={m.mediaUrl} controls preload="metadata" className="block max-h-[320px] w-[280px] max-w-full bg-black" />
+            <video
+              src={m.mediaUrl}
+              controls
+              preload="metadata"
+              className="block max-h-[320px] w-[280px] max-w-full bg-black"
+            />
           )}
           {!caption ? (
             <span className="pointer-events-none absolute bottom-0 right-0 flex items-center gap-1 rounded-tl-md bg-gradient-to-l from-black/45 to-transparent py-0.5 pl-6 pr-1.5">
@@ -355,7 +444,13 @@ function BubbleContent({
   // ===== Medio que no se pudo descargar =====
   if (m.kind !== 'text') {
     const label =
-      m.kind === 'image' ? '📷 Foto' : m.kind === 'video' ? '🎬 Video' : m.kind === 'audio' ? '🎙️ Audio' : '📎 Archivo';
+      m.kind === 'image'
+        ? '📷 Foto'
+        : m.kind === 'video'
+          ? '🎬 Video'
+          : m.kind === 'audio'
+            ? '🎙️ Audio'
+            : '📎 Archivo';
     return (
       <div className="px-2 py-1.5">
         <p className="italic text-[#667781] dark:text-[#8696a0]">
@@ -376,7 +471,12 @@ function BubbleContent({
     <div>
       {m.replyTo ? <ReplyQuote replyTo={m.replyTo} mine={mine} /> : null}
       <div className="relative px-2 pb-[7px] pt-[6px]">
-        <p className={cn('whitespace-pre-wrap break-words', emojiBig && 'text-[28px] leading-[38px]')}>
+        <p
+          className={cn(
+            'whitespace-pre-wrap break-words',
+            emojiBig && 'text-[28px] leading-[38px]',
+          )}
+        >
           {m.body ? renderBodyWithPhones(m.body) : null}
           <span
             className="inline-block h-0"
@@ -429,7 +529,12 @@ function DocCard({ name, url, mine }: { name: string; url: string; mine: boolean
           : 'bg-black/[0.04] hover:bg-black/[0.07] dark:bg-white/5 dark:hover:bg-white/10',
       )}
     >
-      <span className={cn('flex h-9 w-8 shrink-0 items-center justify-center rounded-[5px] text-[9px] font-bold text-white', tone)}>
+      <span
+        className={cn(
+          'flex h-9 w-8 shrink-0 items-center justify-center rounded-[5px] text-[9px] font-bold text-white',
+          tone,
+        )}
+      >
         {ext || 'DOC'}
       </span>
       <span className="min-w-0 flex-1">
