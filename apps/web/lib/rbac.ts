@@ -56,11 +56,11 @@ export function canTransferOrders(role: MaybeRole): boolean {
 
 /**
  * Bandeja de WhatsApp, pestaña de WhatsApp del pedido y envio manual de la
- * confirmacion de direccion. El API lo restringe a administradores
- * (WhatsappService.assertAdmin): el GESTOR no entra.
+ * confirmacion de direccion. El GESTOR SI entra: atender al cliente es parte
+ * del trabajo de pedidos. Espejo de canUseWhatsapp() del API.
  */
 export function canUseWhatsapp(role: MaybeRole): boolean {
-  return isAdmin(role);
+  return isAdmin(role) || role === 'GESTOR';
 }
 
 /** Equipo: crear, editar o retirar miembros (MembersService.assertAdmin). */

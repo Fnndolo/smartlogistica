@@ -30,7 +30,7 @@ import type {
 } from '@smartlogistica/shared';
 import type { Prisma, PrismaClient } from '.prisma/tenant-client';
 
-import { isAdmin } from '../../common/rbac';
+import { canUseWhatsapp, isAdmin } from '../../common/rbac';
 import type { AuthContext } from '../../common/types/authenticated-request';
 import { EnvelopeService } from '../../infrastructure/crypto/envelope.service';
 import { ControlPlaneService } from '../../infrastructure/prisma/control-plane.service';
@@ -148,7 +148,12 @@ export class WhatsappService {
     try {
       const p = (await import('ffmpeg-static')).default as unknown as string | null;
       const fsp = await import('node:fs/promises');
-      const ok = p ? await fsp.access(p).then(() => true, () => false) : false;
+      const ok = p
+        ? await fsp.access(p).then(
+            () => true,
+            () => false,
+          )
+        : false;
       if (ok) this.logger.log(`ffmpeg listo para notas de voz: ${p}`);
       else
         this.logger.error(
@@ -164,7 +169,7 @@ export class WhatsappService {
   // === Conexion 360dialog (Cloud API de Meta) ===
 
   async getDialog360(auth: AuthContext): Promise<Dialog360ConnectionSummary | null> {
-    this.assertAdmin(auth);
+    this.assertConnectionAdmin(auth);
     const { prisma } = getTenantContext();
     const conn = await prisma.dialog360Connection.findFirst({ orderBy: { createdAt: 'desc' } });
     if (!conn) return null;
@@ -177,13 +182,20 @@ export class WhatsappService {
     };
   }
 
-  async testDialog360(input: Dialog360CredentialsInput, auth: AuthContext): Promise<Dialog360TestResult> {
-    this.assertAdmin(auth);
+  async testDialog360(
+    input: Dialog360CredentialsInput,
+    auth: AuthContext,
+  ): Promise<Dialog360TestResult> {
+    this.assertConnectionAdmin(auth);
     try {
       await this.dialog360.getWebhook(this.dialog360.buildHttp(input.apiKey, input.mode));
       return { ok: true };
     } catch (err) {
-      throw translateWaError(err, 'No se pudo conectar a 360dialog (¿API key/modo correctos?)', this.logger);
+      throw translateWaError(
+        err,
+        'No se pudo conectar a 360dialog (¿API key/modo correctos?)',
+        this.logger,
+      );
     }
   }
 
@@ -197,7 +209,7 @@ export class WhatsappService {
     auth: AuthContext,
     publicBaseUrl: string,
   ): Promise<Dialog360ConnectionSummary> {
-    this.assertAdmin(auth);
+    this.assertConnectionAdmin(auth);
     const { tenantId, prisma } = getTenantContext();
 
     const secret = process.env.CONFIRMATION_WEBHOOK_SECRET;
@@ -212,7 +224,11 @@ export class WhatsappService {
     try {
       await this.dialog360.setWebhook(http, webhookUrl);
     } catch (err) {
-      throw translateWaError(err, 'El API key de 360dialog es invalido o no se pudo configurar el webhook', this.logger);
+      throw translateWaError(
+        err,
+        'El API key de 360dialog es invalido o no se pudo configurar el webhook',
+        this.logger,
+      );
     }
 
     const encryptedApiKey = await this.envelope.encryptField(tenantId, input.apiKey);
@@ -231,7 +247,7 @@ export class WhatsappService {
   }
 
   async disconnectDialog360(auth: AuthContext): Promise<void> {
-    this.assertAdmin(auth);
+    this.assertConnectionAdmin(auth);
     const { tenantId, prisma } = getTenantContext();
     await prisma.dialog360Connection.deleteMany({});
     this.waConn.invalidate(tenantId);
@@ -257,7 +273,7 @@ export class WhatsappService {
   // === Hilo por pedido ===
 
   async thread(orderId: string, auth: AuthContext): Promise<WaThread> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { prisma } = getTenantContext();
     const order = await prisma.order.findUnique({
       where: { id: orderId },
@@ -269,7 +285,7 @@ export class WhatsappService {
 
   /** Hilo por TELEFONO (un chat de la bandeja). */
   async threadByPhone(rawPhone: string, auth: AuthContext): Promise<WaThread> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     return this.threadOf(tenDigits(rawPhone), auth.userId);
   }
 
@@ -303,7 +319,9 @@ export class WhatsappService {
       }),
     ]);
     const vtexName =
-      vtexOrder && tenDigits(vtexOrder.customerPhone ?? '') === phone && vtexOrder.customerName?.trim()
+      vtexOrder &&
+      tenDigits(vtexOrder.customerPhone ?? '') === phone &&
+      vtexOrder.customerName?.trim()
         ? vtexOrder.customerName.trim()
         : null;
 
@@ -334,13 +352,21 @@ export class WhatsappService {
   }
 
   /** Envia TEXTO al cliente del pedido y lo guarda en el historial. */
-  async sendText(orderId: string, input: SendWaTextInput, auth: AuthContext): Promise<WaMessageDto> {
+  async sendText(
+    orderId: string,
+    input: SendWaTextInput,
+    auth: AuthContext,
+  ): Promise<WaMessageDto> {
     const { phone, provider } = await this.orderPhone(orderId);
     return this.sendTextCore(phone, provider, input, auth);
   }
 
   /** Envia TEXTO a un chat de la BANDEJA (por telefono). */
-  async sendTextToPhone(rawPhone: string, input: SendWaTextInput, auth: AuthContext): Promise<WaMessageDto> {
+  async sendTextToPhone(
+    rawPhone: string,
+    input: SendWaTextInput,
+    auth: AuthContext,
+  ): Promise<WaMessageDto> {
     const phone = tenDigits(rawPhone);
     if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
     return this.sendTextCore(phone, 'external', input, auth);
@@ -352,7 +378,7 @@ export class WhatsappService {
     input: SendWaTextInput,
     auth: AuthContext,
   ): Promise<WaMessageDto> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
 
     const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
@@ -381,14 +407,30 @@ export class WhatsappService {
     });
     await this.publisher.publishWaMessage(tenantId, prisma, row);
     const quotedId = quoted?.id ?? null;
-    this.dispatchWaSend(tenantId, prisma, row.id, phone, 'No se pudo enviar el mensaje', async () => {
-      // La cita se re-resuelve al DESPACHAR: si lo citado tambien estaba en
-      // cola, para entonces ya tiene su wamid (la cola es por chat, en orden).
-      const q = quotedId
-        ? await prisma.waMessage.findFirst({ where: { id: quotedId }, select: { externalId: true } })
-        : null;
-      return this.dialog360.sendText(d360!.http, d360!.mode, `57${phone}`, input.text, q?.externalId ?? null);
-    });
+    this.dispatchWaSend(
+      tenantId,
+      prisma,
+      row.id,
+      phone,
+      'No se pudo enviar el mensaje',
+      async () => {
+        // La cita se re-resuelve al DESPACHAR: si lo citado tambien estaba en
+        // cola, para entonces ya tiene su wamid (la cola es por chat, en orden).
+        const q = quotedId
+          ? await prisma.waMessage.findFirst({
+              where: { id: quotedId },
+              select: { externalId: true },
+            })
+          : null;
+        return this.dialog360.sendText(
+          d360!.http,
+          d360!.mode,
+          `57${phone}`,
+          input.text,
+          q?.externalId ?? null,
+        );
+      },
+    );
     return this.publisher.toDto(row);
   }
 
@@ -399,7 +441,11 @@ export class WhatsappService {
   }
 
   /** Envia un ARCHIVO a un chat de la BANDEJA (por telefono). */
-  async sendFileToPhone(rawPhone: string, file: UploadedWaFile, auth: AuthContext): Promise<WaMessageDto> {
+  async sendFileToPhone(
+    rawPhone: string,
+    file: UploadedWaFile,
+    auth: AuthContext,
+  ): Promise<WaMessageDto> {
     const phone = tenDigits(rawPhone);
     if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
     return this.sendFileCore(phone, 'external', file, auth);
@@ -411,7 +457,7 @@ export class WhatsappService {
     file: UploadedWaFile,
     auth: AuthContext,
   ): Promise<WaMessageDto> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     if (!this.storage.isConfigured()) {
       throw new BadRequestException('El almacenamiento de archivos no esta configurado');
@@ -442,37 +488,44 @@ export class WhatsappService {
       },
     });
     await this.publisher.publishWaMessage(tenantId, prisma, row);
-    this.dispatchWaSend(tenantId, prisma, row.id, phone, 'No se pudo enviar el archivo', async () => {
-      if (kind === 'audio') {
-        // NOTAS DE VOZ: los navegadores graban webm U Opus-DENTRO-de-mp4 y
-        // WhatsApp no ENTREGA ninguno de los dos (131053 async, aunque el
-        // envio devuelva wamid). SIEMPRE se transcodifica a OGG/Opus (receta
-        // VERIFICADA con entrega real por probe) y se sube por media id.
-        const ogg = await toOggOpus(file.buffer, file.mimetype || '', this.logger);
-        if (!ogg) {
-          throw new BadRequestException(
-            'No se pudo convertir la nota de voz (ffmpeg no disponible en el servidor). Avisa al administrador.',
+    this.dispatchWaSend(
+      tenantId,
+      prisma,
+      row.id,
+      phone,
+      'No se pudo enviar el archivo',
+      async () => {
+        if (kind === 'audio') {
+          // NOTAS DE VOZ: los navegadores graban webm U Opus-DENTRO-de-mp4 y
+          // WhatsApp no ENTREGA ninguno de los dos (131053 async, aunque el
+          // envio devuelva wamid). SIEMPRE se transcodifica a OGG/Opus (receta
+          // VERIFICADA con entrega real por probe) y se sube por media id.
+          const ogg = await toOggOpus(file.buffer, file.mimetype || '', this.logger);
+          if (!ogg) {
+            throw new BadRequestException(
+              'No se pudo convertir la nota de voz (ffmpeg no disponible en el servidor). Avisa al administrador.',
+            );
+          }
+          const mediaId = await this.dialog360.uploadMedia(
+            d360!.apiKey,
+            d360!.mode,
+            ogg.buffer,
+            ogg.mime,
+            'nota-de-voz.ogg',
           );
+          if (!mediaId) throw new BadRequestException('Meta no devolvió el id del audio');
+          return this.dialog360.sendMediaId(d360!.http, d360!.mode, `57${phone}`, 'audio', mediaId);
         }
-        const mediaId = await this.dialog360.uploadMedia(
-          d360!.apiKey,
+        return this.dialog360.sendMediaLink(
+          d360!.http,
           d360!.mode,
-          ogg.buffer,
-          ogg.mime,
-          'nota-de-voz.ogg',
+          `57${phone}`,
+          kind === 'file' ? 'document' : kind,
+          url,
+          kind === 'file' ? name : undefined,
         );
-        if (!mediaId) throw new BadRequestException('Meta no devolvió el id del audio');
-        return this.dialog360.sendMediaId(d360!.http, d360!.mode, `57${phone}`, 'audio', mediaId);
-      }
-      return this.dialog360.sendMediaLink(
-        d360!.http,
-        d360!.mode,
-        `57${phone}`,
-        kind === 'file' ? 'document' : kind,
-        url,
-        kind === 'file' ? name : undefined,
-      );
-    });
+      },
+    );
     return this.publisher.toDto(row);
   }
 
@@ -487,9 +540,25 @@ export class WhatsappService {
    */
   private async ordersByPhone(
     prisma: PrismaClient,
-  ): Promise<Map<string, { name: string | null; shippingState: string | null; shippingStatus: string | null; hasGuide: boolean }>> {
+  ): Promise<
+    Map<
+      string,
+      {
+        name: string | null;
+        shippingState: string | null;
+        shippingStatus: string | null;
+        hasGuide: boolean;
+      }
+    >
+  > {
     const rows = await prisma.$queryRaw<
-      Array<{ ph: string; name: string | null; guide: string | null; state: string | null; status: string | null }>
+      Array<{
+        ph: string;
+        name: string | null;
+        guide: string | null;
+        state: string | null;
+        status: string | null;
+      }>
     >`SELECT DISTINCT ON (ph) ph, name, guide, state, status FROM (
         SELECT RIGHT(regexp_replace("customerPhone", '\\D', '', 'g'), 10) AS ph,
                "customerName" AS name, "guideNumber" AS guide,
@@ -512,7 +581,7 @@ export class WhatsappService {
   }
 
   async inbox(auth: AuthContext): Promise<WaInbox> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { prisma } = getTenantContext();
 
     const [last, unreadRows, contacts] = await Promise.all([
@@ -596,7 +665,7 @@ export class WhatsappService {
 
   /** Operaciones del menu contextual: archivar / silenciar / fijar. */
   async chatOp(rawPhone: string, input: WaChatOpInput, auth: AuthContext): Promise<{ ok: true }> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
     if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
@@ -616,7 +685,7 @@ export class WhatsappService {
 
   /** "Marcar como no leído": corre la marca de lectura ANTES del ultimo entrante. */
   async markChatUnread(rawPhone: string, auth: AuthContext): Promise<{ ok: true }> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
     const lastIn = await prisma.waMessage.findFirst({
@@ -636,7 +705,7 @@ export class WhatsappService {
 
   /** "Vaciar chat": borra el HISTORIAL local (WhatsApp del cliente no se toca). */
   async clearChat(rawPhone: string, auth: AuthContext): Promise<{ ok: true }> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
     await prisma.waMessage.deleteMany({ where: { phone } });
@@ -646,7 +715,7 @@ export class WhatsappService {
 
   /** "Eliminar chat": historial + contacto + marcas de lectura (local). */
   async deleteChat(rawPhone: string, auth: AuthContext): Promise<{ ok: true }> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
     await prisma.waMessage.deleteMany({ where: { phone } });
@@ -658,7 +727,7 @@ export class WhatsappService {
 
   /** Marca un chat como LEIDO para este usuario (apaga el contador verde). */
   async markChatRead(rawPhone: string, auth: AuthContext): Promise<{ ok: true }> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
     if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
@@ -676,7 +745,7 @@ export class WhatsappService {
     input: SetWaLabelsInput,
     auth: AuthContext,
   ): Promise<{ ok: true }> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
     if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
@@ -705,8 +774,12 @@ export class WhatsappService {
   // === Acciones sobre mensajes (menu contextual, como WhatsApp) ===
 
   /** REACCIONA a un mensaje del hilo (emoji vacio = quitar la reaccion). */
-  async react(rawPhone: string, input: SendWaReactionInput, auth: AuthContext): Promise<{ ok: true }> {
-    this.assertAdmin(auth);
+  async react(
+    rawPhone: string,
+    input: SendWaReactionInput,
+    auth: AuthContext,
+  ): Promise<{ ok: true }> {
+    this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
     const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
@@ -715,10 +788,14 @@ export class WhatsappService {
       where: { id: input.messageId, phone },
       select: { id: true, externalId: true, reactions: true },
     });
-    if (!msg?.externalId) throw new NotFoundException('Mensaje no encontrado (o sin id de WhatsApp)');
+    if (!msg?.externalId)
+      throw new NotFoundException('Mensaje no encontrado (o sin id de WhatsApp)');
     // LOCAL PRIMERO (instantaneo): una reaccion del negocio por mensaje.
     // Meta va en segundo plano; si falla, se revierte y se re-publica.
-    const prev = (Array.isArray(msg.reactions) ? msg.reactions : []) as Array<{ emoji: string; mine: boolean }>;
+    const prev = (Array.isArray(msg.reactions) ? msg.reactions : []) as Array<{
+      emoji: string;
+      mine: boolean;
+    }>;
     const rest = prev.filter((r) => !r.mine);
     const next = input.emoji ? [...rest, { emoji: input.emoji, mine: true }] : rest;
     const updated = await prisma.waMessage.update({
@@ -730,23 +807,37 @@ export class WhatsappService {
     const externalId = msg.externalId;
     void (async () => {
       try {
-        await this.dialog360.sendReaction(d360!.http, d360!.mode, `57${phone}`, externalId, input.emoji);
+        await this.dialog360.sendReaction(
+          d360!.http,
+          d360!.mode,
+          `57${phone}`,
+          externalId,
+          input.emoji,
+        );
       } catch (err) {
         this.logger.warn(
           `Reaccion no llego a Meta (se revierte): ${err instanceof Error ? err.message : err}`,
         );
         const reverted = await prisma.waMessage
-          .update({ where: { id: msg.id }, data: { reactions: prev as unknown as Prisma.InputJsonValue } })
+          .update({
+            where: { id: msg.id },
+            data: { reactions: prev as unknown as Prisma.InputJsonValue },
+          })
           .catch(() => null);
-        if (reverted) await this.publisher.publishWaMessage(tenantId, prisma, reverted).catch(() => null);
+        if (reverted)
+          await this.publisher.publishWaMessage(tenantId, prisma, reverted).catch(() => null);
       }
     })();
     return { ok: true };
   }
 
   /** DESTACAR / quitar destacado. */
-  async star(rawPhone: string, input: StarWaMessageInput, auth: AuthContext): Promise<{ ok: true }> {
-    this.assertAdmin(auth);
+  async star(
+    rawPhone: string,
+    input: StarWaMessageInput,
+    auth: AuthContext,
+  ): Promise<{ ok: true }> {
+    this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
     const res = await prisma.waMessage.updateMany({
@@ -762,8 +853,12 @@ export class WhatsappService {
   }
 
   /** ELIMINA un mensaje DE LA PLATAFORMA (WhatsApp no permite borrarlo alla). */
-  async deleteMessage(rawPhone: string, messageId: string, auth: AuthContext): Promise<{ ok: true }> {
-    this.assertAdmin(auth);
+  async deleteMessage(
+    rawPhone: string,
+    messageId: string,
+    auth: AuthContext,
+  ): Promise<{ ok: true }> {
+    this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
     const res = await prisma.waMessage.deleteMany({ where: { id: messageId, phone } });
@@ -773,8 +868,12 @@ export class WhatsappService {
   }
 
   /** REENVIA un mensaje existente a OTRO chat (texto o medio). */
-  async forward(rawPhone: string, input: ForwardWaMessageInput, auth: AuthContext): Promise<WaMessageDto> {
-    this.assertAdmin(auth);
+  async forward(
+    rawPhone: string,
+    input: ForwardWaMessageInput,
+    auth: AuthContext,
+  ): Promise<WaMessageDto> {
+    this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     const to = tenDigits(rawPhone);
     if (to.length < 7) throw new BadRequestException('Teléfono inválido');
@@ -798,30 +897,43 @@ export class WhatsappService {
       },
     });
     await this.publisher.publishWaMessage(tenantId, prisma, row);
-    this.dispatchWaSend(tenantId, prisma, row.id, to, 'No se pudo reenviar el mensaje', async () => {
-      if (src.kind === 'text' || (!src.attachmentKey && !src.mediaUrl)) {
-        return this.dialog360.sendText(d360!.http, d360!.mode, `57${to}`, src.body ?? '');
-      }
-      const url = src.attachmentKey ? await this.storage.getSignedUrl(src.attachmentKey) : src.mediaUrl!;
-      const kind =
-        src.kind === 'file'
-          ? ('document' as const)
-          : (src.kind as 'image' | 'video' | 'audio' | 'sticker');
-      return this.dialog360.sendMediaLink(
-        d360!.http,
-        d360!.mode,
-        `57${to}`,
-        kind,
-        url,
-        kind === 'document' ? (src.body ?? undefined) : undefined,
-      );
-    });
+    this.dispatchWaSend(
+      tenantId,
+      prisma,
+      row.id,
+      to,
+      'No se pudo reenviar el mensaje',
+      async () => {
+        if (src.kind === 'text' || (!src.attachmentKey && !src.mediaUrl)) {
+          return this.dialog360.sendText(d360!.http, d360!.mode, `57${to}`, src.body ?? '');
+        }
+        const url = src.attachmentKey
+          ? await this.storage.getSignedUrl(src.attachmentKey)
+          : src.mediaUrl!;
+        const kind =
+          src.kind === 'file'
+            ? ('document' as const)
+            : (src.kind as 'image' | 'video' | 'audio' | 'sticker');
+        return this.dialog360.sendMediaLink(
+          d360!.http,
+          d360!.mode,
+          `57${to}`,
+          kind,
+          url,
+          kind === 'document' ? (src.body ?? undefined) : undefined,
+        );
+      },
+    );
     return this.publisher.toDto(row);
   }
 
   /** Envia una TARJETA DE CONTACTO. */
-  async sendContact(rawPhone: string, input: SendWaContactInput, auth: AuthContext): Promise<WaMessageDto> {
-    this.assertAdmin(auth);
+  async sendContact(
+    rawPhone: string,
+    input: SendWaContactInput,
+    auth: AuthContext,
+  ): Promise<WaMessageDto> {
+    this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
     if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
@@ -849,12 +961,18 @@ export class WhatsappService {
   // === Stickers: enviar + FAVORITOS del negocio ===
 
   /** Envia un sticker: favorito (stickerId) o el de un mensaje del historial. */
-  async sendSticker(rawPhone: string, input: SendWaStickerInput, auth: AuthContext): Promise<WaMessageDto> {
-    this.assertAdmin(auth);
+  async sendSticker(
+    rawPhone: string,
+    input: SendWaStickerInput,
+    auth: AuthContext,
+  ): Promise<WaMessageDto> {
+    this.assertWhatsappAccess(auth);
     const { prisma } = getTenantContext();
     let key: string | null = null;
     if (input.stickerId) {
-      key = (await prisma.waStickerFav.findUnique({ where: { id: input.stickerId } }))?.attachmentKey ?? null;
+      key =
+        (await prisma.waStickerFav.findUnique({ where: { id: input.stickerId } }))?.attachmentKey ??
+        null;
     } else if (input.messageId) {
       const msg = await prisma.waMessage.findUnique({
         where: { id: input.messageId },
@@ -867,8 +985,12 @@ export class WhatsappService {
   }
 
   /** "Nuevo sticker": sube el webp (el navegador lo convierte), lo envia y lo guarda en favoritos. */
-  async sendStickerUpload(rawPhone: string, file: UploadedWaFile, auth: AuthContext): Promise<WaMessageDto> {
-    this.assertAdmin(auth);
+  async sendStickerUpload(
+    rawPhone: string,
+    file: UploadedWaFile,
+    auth: AuthContext,
+  ): Promise<WaMessageDto> {
+    this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     if (!this.storage.isConfigured()) {
       throw new BadRequestException('El almacenamiento de archivos no esta configurado');
@@ -879,7 +1001,11 @@ export class WhatsappService {
     return this.sendStickerByKey(rawPhone, key, auth);
   }
 
-  private async sendStickerByKey(rawPhone: string, key: string, auth: AuthContext): Promise<WaMessageDto> {
+  private async sendStickerByKey(
+    rawPhone: string,
+    key: string,
+    auth: AuthContext,
+  ): Promise<WaMessageDto> {
     const { tenantId, prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
     if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
@@ -899,26 +1025,33 @@ export class WhatsappService {
       },
     });
     await this.publisher.publishWaMessage(tenantId, prisma, row);
-    this.dispatchWaSend(tenantId, prisma, row.id, phone, 'No se pudo enviar el sticker', async () => {
-      const obj = await this.storage.get(key);
-      if (!obj) throw new NotFoundException('Sticker no disponible en el storage');
-      const webp = await normalizeSticker(obj.buffer);
-      const mediaId = await this.dialog360.uploadMedia(
-        d360!.apiKey,
-        d360!.mode,
-        webp,
-        'image/webp',
-        'sticker.webp',
-      );
-      if (!mediaId) throw new BadRequestException('Meta no devolvió el id del sticker');
-      return this.dialog360.sendMediaId(d360!.http, d360!.mode, `57${phone}`, 'sticker', mediaId);
-    });
+    this.dispatchWaSend(
+      tenantId,
+      prisma,
+      row.id,
+      phone,
+      'No se pudo enviar el sticker',
+      async () => {
+        const obj = await this.storage.get(key);
+        if (!obj) throw new NotFoundException('Sticker no disponible en el storage');
+        const webp = await normalizeSticker(obj.buffer);
+        const mediaId = await this.dialog360.uploadMedia(
+          d360!.apiKey,
+          d360!.mode,
+          webp,
+          'image/webp',
+          'sticker.webp',
+        );
+        if (!mediaId) throw new BadRequestException('Meta no devolvió el id del sticker');
+        return this.dialog360.sendMediaId(d360!.http, d360!.mode, `57${phone}`, 'sticker', mediaId);
+      },
+    );
     return this.publisher.toDto(row);
   }
 
   /** Favoritos del negocio (compartidos), con URL firmada lista para pintar. */
   async listStickerFavs(auth: AuthContext): Promise<Array<{ id: string; url: string }>> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { prisma } = getTenantContext();
     const rows = await prisma.waStickerFav.findMany({ orderBy: { createdAt: 'desc' }, take: 100 });
     const out: Array<{ id: string; url: string }> = [];
@@ -931,7 +1064,7 @@ export class WhatsappService {
 
   /** Agrega a favoritos el sticker de un mensaje del hilo. */
   async addStickerFav(input: AddWaStickerFavInput, auth: AuthContext): Promise<{ ok: true }> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { prisma } = getTenantContext();
     const msg = await prisma.waMessage.findUnique({
       where: { id: input.messageId },
@@ -947,7 +1080,7 @@ export class WhatsappService {
   }
 
   async removeStickerFav(id: string, auth: AuthContext): Promise<{ ok: true }> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { prisma } = getTenantContext();
     await prisma.waStickerFav.deleteMany({ where: { id } });
     return { ok: true };
@@ -1050,27 +1183,50 @@ export class WhatsappService {
           },
         })
         .catch(() => null);
-      this.dispatchWaSend(tenantId, prisma, row.id, phone, 'No se pudo enviar la guía por WhatsApp', async () => {
-        const mediaId = await this.dialog360.uploadMedia(
-          d360.apiKey,
-          d360.mode,
-          rotulo,
-          'application/pdf',
-          fileName,
-        );
-        if (!mediaId) throw new BadRequestException('Meta no devolvió el id del PDF de la guía');
-        const wamid = await this.dialog360.sendTemplate(d360.http, d360.mode, `57${phone}`, tpl.name, tpl.language, [
-          { type: 'header', parameters: [{ type: 'document', document: { id: mediaId, filename: fileName } }] },
-        ]);
-        const textRow = await prisma.waMessage.create({
-          data: { phone, direction: 'out', kind: 'text', body: tpl.body, authorName: 'SmartLogística' },
-        });
-        await this.publisher.publishWaMessage(tenantId, prisma, textRow);
-        // Flujo de venta del RESPALDO: toque 2 en 2 minutos (solo celulares;
-        // el sender re-verifica interes/duplicado antes de salir).
-        await this.upsell.scheduleStep(tenantId, order.id, 2).catch(() => null);
-        return wamid;
-      });
+      this.dispatchWaSend(
+        tenantId,
+        prisma,
+        row.id,
+        phone,
+        'No se pudo enviar la guía por WhatsApp',
+        async () => {
+          const mediaId = await this.dialog360.uploadMedia(
+            d360.apiKey,
+            d360.mode,
+            rotulo,
+            'application/pdf',
+            fileName,
+          );
+          if (!mediaId) throw new BadRequestException('Meta no devolvió el id del PDF de la guía');
+          const wamid = await this.dialog360.sendTemplate(
+            d360.http,
+            d360.mode,
+            `57${phone}`,
+            tpl.name,
+            tpl.language,
+            [
+              {
+                type: 'header',
+                parameters: [{ type: 'document', document: { id: mediaId, filename: fileName } }],
+              },
+            ],
+          );
+          const textRow = await prisma.waMessage.create({
+            data: {
+              phone,
+              direction: 'out',
+              kind: 'text',
+              body: tpl.body,
+              authorName: 'SmartLogística',
+            },
+          });
+          await this.publisher.publishWaMessage(tenantId, prisma, textRow);
+          // Flujo de venta del RESPALDO: toque 2 en 2 minutos (solo celulares;
+          // el sender re-verifica interes/duplicado antes de salir).
+          await this.upsell.scheduleStep(tenantId, order.id, 2).catch(() => null);
+          return wamid;
+        },
+      );
     } catch (err) {
       this.logger.warn(
         `Guia por WhatsApp fallo (${order.id}): ${err instanceof Error ? err.message : err}`,
@@ -1095,7 +1251,7 @@ export class WhatsappService {
    * le falla al que teclea.
    */
   async typing(rawPhone: string, auth: AuthContext): Promise<{ ok: true }> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
     if (phone.length < 7) return { ok: true };
@@ -1138,7 +1294,7 @@ export class WhatsappService {
    * {{1}} nombre, {{2}} productos, {{3}} direccion.
    */
   async listTemplates(orderId: string, auth: AuthContext): Promise<WaTemplateList> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
 
     const order = await prisma.order.findUnique({
@@ -1151,8 +1307,7 @@ export class WhatsappService {
     const cpd = raw.clientProfileData ?? {};
     const a = raw.shippingData?.address ?? {};
     const suggestions = {
-      nombre:
-        `${cpd.firstName ?? ''} ${cpd.lastName ?? ''}`.trim() || (order.customerName ?? ''),
+      nombre: `${cpd.firstName ?? ''} ${cpd.lastName ?? ''}`.trim() || (order.customerName ?? ''),
       productos: order.items.map((i) => `${i.quantity} ${i.name}`).join(', '),
       direccion: [
         [a.street, a.neighborhood, a.city].filter(Boolean).join(', '),
@@ -1167,7 +1322,7 @@ export class WhatsappService {
 
   /** Plantillas para un chat de la BANDEJA (sugerencia: solo el nombre). */
   async listTemplatesForPhone(rawPhone: string, auth: AuthContext): Promise<WaTemplateList> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
     const [contact, order] = phone
@@ -1183,7 +1338,9 @@ export class WhatsappService {
     // Nombre del PEDIDO primero: para las variables de plantilla no sirven
     // los emojis/nombres raros del perfil de WhatsApp.
     const vtexName =
-      order && tenDigits(order.customerPhone ?? '') === phone ? (order.customerName?.trim() ?? '') : '';
+      order && tenDigits(order.customerPhone ?? '') === phone
+        ? (order.customerName?.trim() ?? '')
+        : '';
     return {
       templates: await this.waTemplates(),
       suggestions: { nombre: vtexName || (contact?.name ?? ''), productos: '', direccion: '' },
@@ -1230,7 +1387,7 @@ export class WhatsappService {
     input: SendWaTemplateInput,
     auth: AuthContext,
   ): Promise<WaMessageDto> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
     if (!d360 || d360.mode !== 'production') {
@@ -1260,7 +1417,9 @@ export class WhatsappService {
     const vars = templateVarCount(tpl.body);
     const params = input.params.slice(0, vars);
     if (params.length < vars) {
-      throw new BadRequestException(`La plantilla usa ${vars} variables y llegaron ${params.length}`);
+      throw new BadRequestException(
+        `La plantilla usa ${vars} variables y llegaron ${params.length}`,
+      );
     }
 
     const components =
@@ -1278,14 +1437,25 @@ export class WhatsappService {
         authorId: auth.userId,
         authorName: auth.name?.trim() || auth.email,
         status: 'queued',
-        ...(tpl.buttons.length
-          ? { buttons: tpl.buttons as unknown as Prisma.InputJsonValue }
-          : {}),
+        ...(tpl.buttons.length ? { buttons: tpl.buttons as unknown as Prisma.InputJsonValue } : {}),
       },
     });
     await this.publisher.publishWaMessage(tenantId, prisma, row);
-    this.dispatchWaSend(tenantId, prisma, row.id, phone, '360dialog no pudo enviar la plantilla', () =>
-      this.dialog360.sendTemplate(d360.http, d360.mode, `57${phone}`, tpl.name, tpl.language, components),
+    this.dispatchWaSend(
+      tenantId,
+      prisma,
+      row.id,
+      phone,
+      '360dialog no pudo enviar la plantilla',
+      () =>
+        this.dialog360.sendTemplate(
+          d360.http,
+          d360.mode,
+          `57${phone}`,
+          tpl.name,
+          tpl.language,
+          components,
+        ),
     );
     return this.publisher.toDto(row);
   }
@@ -1307,17 +1477,16 @@ export class WhatsappService {
    * ¿360dialog gobierna este pedido? En PRODUCCION gobierna todo; el SANDBOX
    * solo alcanza el numero de prueba vinculado -> solo pedidos MONTADOS a mano.
    */
-  private d360Governs(
-    d360: { mode: Dialog360Mode } | null,
-    provider: string,
-  ): boolean {
+  private d360Governs(d360: { mode: Dialog360Mode } | null, provider: string): boolean {
     return Boolean(d360 && (d360.mode === 'production' || provider === 'manual'));
   }
 
   /** Corta con error claro si no hay conexion 360dialog que gobierne el pedido. */
   private requireD360(d360: { mode: Dialog360Mode } | null, provider: string): void {
     if (!d360) {
-      throw new BadRequestException('WhatsApp no está conectado. Configura 360dialog en Conexiones.');
+      throw new BadRequestException(
+        'WhatsApp no está conectado. Configura 360dialog en Conexiones.',
+      );
     }
     if (!this.d360Governs(d360, provider)) {
       throw new BadRequestException(
@@ -1342,7 +1511,7 @@ export class WhatsappService {
    * el limite de frescura (si el envio fallo dias atras, igual se puede enviar).
    */
   async sendConfirmationManual(orderId: string, auth: AuthContext): Promise<{ ok: true }> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     await this.sendOrderConfirmation(tenantId, prisma, orderId, { manual: true });
     // Refrescar la tabla (el badge pasa de "Sin enviar" a "Sin responder").
@@ -1455,10 +1624,16 @@ export class WhatsappService {
       let wamid: string | null = null;
       try {
         if (d360.mode === 'sandbox') {
-          wamid = await this.dialog360.sendInteractiveButtons(d360.http, d360.mode, `57${phone}`, rendered, [
-            { id: 'CONFIRMED', title: 'Datos correctos ✅' },
-            { id: 'MODIFY', title: 'Modificar dirección' },
-          ]);
+          wamid = await this.dialog360.sendInteractiveButtons(
+            d360.http,
+            d360.mode,
+            `57${phone}`,
+            rendered,
+            [
+              { id: 'CONFIRMED', title: 'Datos correctos ✅' },
+              { id: 'MODIFY', title: 'Modificar dirección' },
+            ],
+          );
         } else {
           wamid = await this.dialog360.sendTemplate(
             d360.http,
@@ -1475,8 +1650,18 @@ export class WhatsappService {
                   { type: 'text', text: direccion || '—' },
                 ],
               },
-              { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: 'CONFIRMED' }] },
-              { type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: 'MODIFY' }] },
+              {
+                type: 'button',
+                sub_type: 'quick_reply',
+                index: '0',
+                parameters: [{ type: 'payload', payload: 'CONFIRMED' }],
+              },
+              {
+                type: 'button',
+                sub_type: 'quick_reply',
+                index: '1',
+                parameters: [{ type: 'payload', payload: 'MODIFY' }],
+              },
             ],
           );
         }
@@ -1516,7 +1701,6 @@ export class WhatsappService {
       this.logger.log(`Confirmacion Cloud enviada: pedido ${order.externalId} -> ${phone}`);
       return;
     }
-
   }
 
   /**
@@ -1547,7 +1731,7 @@ export class WhatsappService {
     messageId: string,
     auth: AuthContext,
   ): Promise<{ buffer: Buffer; contentType: string }> {
-    this.assertAdmin(auth);
+    this.assertWhatsappAccess(auth);
     const { prisma } = getTenantContext();
     const msg = await prisma.waMessage.findUnique({
       where: { id: messageId },
@@ -1610,7 +1794,12 @@ export class WhatsappService {
           this.logger.warn(`Envio WA en cola fallo (${rowId}): ${detail}`);
         }
         const row = await prisma.waMessage.findUnique({ where: { id: rowId } });
-        if (row) await this.publisher.publishWaMessage(tenantId, prisma, row as WaMessageRow & { phone: string });
+        if (row)
+          await this.publisher.publishWaMessage(
+            tenantId,
+            prisma,
+            row as WaMessageRow & { phone: string },
+          );
       })
       .finally(() => {
         if (this.sendChains.get(chainKey) === next) this.sendChains.delete(chainKey);
@@ -1619,16 +1808,28 @@ export class WhatsappService {
   }
 
   /**
-   * WhatsApp es de ADMINISTRADORES (propietario + admins); operadores y
-   * gestores no. Cubre tanto la CONEXION 360dialog (credenciales) como la
-   * mensajeria al cliente. Si algun dia se quiere dar la mensajeria a los
-   * gestores, hay que PARTIR este helper (uno para la conexion con isAdmin y
-   * otro para mensajeria con canManageOrders), nunca ampliarlo entero: las
-   * credenciales viven detras del mismo gate.
+   * MENSAJERIA: hilos, envios, bandeja, plantillas, reacciones... Admins y
+   * GESTOR, porque atender al cliente es trabajo de pedidos.
+   *
+   * OJO: este helper esta PARTIDO en dos a proposito. Antes uno solo cubria la
+   * mensajeria Y la conexion 360dialog, asi que ampliarlo entero le habria dado
+   * al gestor la llave de las credenciales del negocio. Las credenciales van
+   * por assertConnectionAdmin().
    */
-  private assertAdmin(auth: AuthContext): void {
+  private assertWhatsappAccess(auth: AuthContext): void {
+    if (!canUseWhatsapp(auth)) {
+      throw new ForbiddenException('No tienes permiso para usar WhatsApp');
+    }
+  }
+
+  /**
+   * CONEXION 360dialog (leer el resumen, probar, conectar, desconectar): SOLO
+   * administradores, igual que el resto de conexiones del workspace. Un gestor
+   * no configura ni desconecta el WhatsApp del negocio.
+   */
+  private assertConnectionAdmin(auth: AuthContext): void {
     if (!isAdmin(auth)) {
-      throw new ForbiddenException('WhatsApp es solo para administradores');
+      throw new ForbiddenException('La conexión de WhatsApp es solo para administradores');
     }
   }
 }

@@ -50,6 +50,16 @@ export function canManageOrders(auth: AuthContext): boolean {
 }
 
 /**
+ * WHATSAPP: bandeja, hilo del pedido, enviar, plantillas y confirmacion de
+ * direccion. El GESTOR SI pasa: atender al cliente es parte del trabajo de
+ * pedidos, no configuracion. (Configurar la conexion de 360dialog es otra
+ * cosa y sigue siendo de administradores, por la via de las conexiones.)
+ */
+export function canUseWhatsapp(auth: AuthContext): boolean {
+  return isAdmin(auth) || auth.role === 'GESTOR';
+}
+
+/**
  * TRANSFERIR pedidos: asignar un pedido sin asignar a una sede, moverlo entre
  * sedes o devolverlo a generales. Por instruccion expresa del propietario, la
  * transferencia SOLO la hace un admin — el GESTOR no pasa.

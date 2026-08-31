@@ -52,7 +52,16 @@ const AVATAR_HUES = [
   ['#7d8fe8', '#4a5cc4'],
 ] as const;
 
-const LABEL_COLORS = ['#00a884', '#53bdeb', '#e17bb5', '#ffbc38', '#a791f5', '#fa6533', '#7d8fe8', '#8696a0'];
+const LABEL_COLORS = [
+  '#00a884',
+  '#53bdeb',
+  '#e17bb5',
+  '#ffbc38',
+  '#a791f5',
+  '#fa6533',
+  '#7d8fe8',
+  '#8696a0',
+];
 
 function avatarColors(seed: string): readonly [string, string] {
   let h = 0;
@@ -71,7 +80,15 @@ function initialsOf(name: string | null, phone: string): string {
 }
 
 /** Avatar generado (sin foto: la Cloud API no expone la del contacto). */
-function WaAvatar({ name, phone, size = 48 }: { name: string | null; phone: string; size?: number }) {
+function WaAvatar({
+  name,
+  phone,
+  size = 48,
+}: {
+  name: string | null;
+  phone: string;
+  size?: number;
+}) {
   const [c1, c2] = avatarColors(phone);
   return (
     <span
@@ -168,13 +185,14 @@ export function WhatsappInbox() {
   selectedRef.current = selected;
 
   // WhatsApp es de administradores (el API lo exige): ni gestores ni operadores.
-  const isAdminUser = canUseWhatsapp(me?.role);
+  // Admins y gestores: la bandeja es atencion al cliente, no configuracion.
+  const canWhatsapp = canUseWhatsapp(me?.role);
 
   const { data: inbox, isLoading } = useQuery({
     queryKey: ['wa-inbox'],
     queryFn: () => api.get<WaInbox>('/v1/whatsapp/inbox'),
     refetchInterval: 30_000,
-    enabled: isAdminUser,
+    enabled: canWhatsapp,
   });
 
   // Marcar LEIDO (apaga el contador verde de este usuario).
@@ -301,7 +319,9 @@ export function WhatsappInbox() {
           // ¿Es actualizacion del MISMO mensaje que ya se muestra? -> no
           // volver a contar el no-leido.
           const isUpdateOfShown =
-            existing && msg.createdAt === existing.lastAt && msg.direction === existing.lastDirection;
+            existing &&
+            msg.createdAt === existing.lastAt &&
+            msg.direction === existing.lastDirection;
           const updated: WaInboxItem = {
             phone,
             name: existing?.name ?? null,
@@ -355,8 +375,10 @@ export function WhatsappInbox() {
     [qc],
   );
   const chatOp = useMutation({
-    mutationFn: (vars: { phone: string; patch: { archived?: boolean; muted?: boolean; pinned?: boolean } }) =>
-      api.post<{ ok: true }>(`/v1/whatsapp/chats/${vars.phone}/op`, vars.patch),
+    mutationFn: (vars: {
+      phone: string;
+      patch: { archived?: boolean; muted?: boolean; pinned?: boolean };
+    }) => api.post<{ ok: true }>(`/v1/whatsapp/chats/${vars.phone}/op`, vars.patch),
     onMutate: (vars) => patchChat(vars.phone, vars.patch),
     onError: (err) => {
       void qc.invalidateQueries({ queryKey: ['wa-inbox'] });
@@ -398,7 +420,10 @@ export function WhatsappInbox() {
 
   const chats = inbox?.chats ?? [];
   const labels = inbox?.labels ?? [];
-  const labelColor = useMemo(() => new Map(labels.map((l) => [l.name, l.color] as const)), [labels]);
+  const labelColor = useMemo(
+    () => new Map(labels.map((l) => [l.name, l.color] as const)),
+    [labels],
+  );
   // CHATS con no leidos (sin silenciados ni archivados) — el numerito del chip.
   const unreadChats = chats.filter((c) => c.unread > 0 && !c.muted && !c.archived).length;
 
@@ -423,10 +448,10 @@ export function WhatsappInbox() {
   const selectedChat = chats.find((c) => c.phone === selected) ?? null;
   const menuChat = menu ? (chats.find((c) => c.phone === menu.phone) ?? null) : null;
 
-  if (!isAdminUser) {
+  if (!canWhatsapp) {
     return (
       <p className="m-6 rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
-        WhatsApp es solo para administradores.
+        No tienes permiso para usar WhatsApp.
       </p>
     );
   }
@@ -465,7 +490,11 @@ export function WhatsappInbox() {
         <div className="scrollbar-none flex gap-1.5 overflow-x-auto px-3 pb-2">
           {[
             { id: 'all', label: 'Todos', color: null as string | null },
-            { id: 'unread', label: unreadChats > 0 ? `No leídos ${unreadChats}` : 'No leídos', color: null },
+            {
+              id: 'unread',
+              label: unreadChats > 0 ? `No leídos ${unreadChats}` : 'No leídos',
+              color: null,
+            },
             ...labels.map((l) => ({ id: l.name, label: l.name, color: l.color })),
             { id: 'archived', label: 'Archivados', color: null },
           ].map((f) => (
@@ -480,7 +509,9 @@ export function WhatsappInbox() {
                   : 'border-border text-[#54656f] hover:bg-muted dark:text-[#8696a0]',
               )}
             >
-              {f.color ? <span className="h-2 w-2 rounded-full" style={{ backgroundColor: f.color }} /> : null}
+              {f.color ? (
+                <span className="h-2 w-2 rounded-full" style={{ backgroundColor: f.color }} />
+              ) : null}
               {f.label}
             </button>
           ))}
@@ -555,7 +586,9 @@ export function WhatsappInbox() {
                     <span className="flex min-w-0 items-center gap-1 text-[13px] text-[#667781] dark:text-[#8696a0]">
                       {typing[c.phone] ? (
                         /* Otro admin teclea en este chat (verde, como WhatsApp). */
-                        <span className="truncate font-medium italic text-[#00a884]">escribiendo…</span>
+                        <span className="truncate font-medium italic text-[#00a884]">
+                          escribiendo…
+                        </span>
                       ) : (
                         <>
                           {c.lastDirection === 'out' && c.lastStatus ? (
@@ -576,7 +609,9 @@ export function WhatsappInbox() {
                         </span>
                       ))}
                       {c.muted ? <BellOff className="h-3.5 w-3.5 text-[#8696a0]" /> : null}
-                      {c.pinned ? <Pin className="h-3.5 w-3.5 fill-current text-[#8696a0]" /> : null}
+                      {c.pinned ? (
+                        <Pin className="h-3.5 w-3.5 fill-current text-[#8696a0]" />
+                      ) : null}
                       {c.unread > 0 ? (
                         <span
                           className={cn(
@@ -652,12 +687,20 @@ export function WhatsappInbox() {
           onUnread={() => markUnread.mutate(menu.phone)}
           onLabels={() => setLabelFor(menu.phone)}
           onClear={() => {
-            if (confirm('¿Vaciar este chat? Se borra el historial de la plataforma (el WhatsApp del cliente no se toca).')) {
+            if (
+              confirm(
+                '¿Vaciar este chat? Se borra el historial de la plataforma (el WhatsApp del cliente no se toca).',
+              )
+            ) {
               clearChat.mutate(menu.phone);
             }
           }}
           onDelete={() => {
-            if (confirm('¿Eliminar este chat de la plataforma? Historial y etiquetas se borran (el WhatsApp del cliente no se toca).')) {
+            if (
+              confirm(
+                '¿Eliminar este chat de la plataforma? Historial y etiquetas se borran (el WhatsApp del cliente no se toca).',
+              )
+            ) {
               deleteChat.mutate(menu.phone);
             }
           }}
@@ -729,7 +772,12 @@ function ChatContextMenu({
   );
   return (
     <>
-      <button type="button" className="fixed inset-0 z-40 cursor-default" onClick={onClose} aria-label="Cerrar" />
+      <button
+        type="button"
+        className="fixed inset-0 z-40 cursor-default"
+        onClick={onClose}
+        aria-label="Cerrar"
+      />
       <div
         className="wa-pop fixed z-50 w-[232px] rounded-xl border border-border bg-white py-1.5 shadow-float dark:bg-[#233138]"
         style={{
@@ -738,11 +786,15 @@ function ChatContextMenu({
           transformOrigin: `${anchor.up ? 'bottom' : 'top'} left`,
         }}
       >
-        {item(chat.archived ? ArchiveRestore : Archive, chat.archived ? 'Desarchivar chat' : 'Archivar chat', () =>
-          onOp({ archived: !chat.archived }),
+        {item(
+          chat.archived ? ArchiveRestore : Archive,
+          chat.archived ? 'Desarchivar chat' : 'Archivar chat',
+          () => onOp({ archived: !chat.archived }),
         )}
-        {item(chat.muted ? Bell : BellOff, chat.muted ? 'Activar notificaciones' : 'Silenciar notificaciones', () =>
-          onOp({ muted: !chat.muted }),
+        {item(
+          chat.muted ? Bell : BellOff,
+          chat.muted ? 'Activar notificaciones' : 'Silenciar notificaciones',
+          () => onOp({ muted: !chat.muted }),
         )}
         {item(chat.pinned ? PinOff : Pin, chat.pinned ? 'Desfijar chat' : 'Fijar chat', () =>
           onOp({ pinned: !chat.pinned }),
@@ -791,7 +843,9 @@ function LabelModal({
   const addNew = () => {
     const name = newName.trim();
     if (!name) return;
-    setExtra((prev) => (prev.some((l) => l.name === name) ? prev : [...prev, { name, color: newColor }]));
+    setExtra((prev) =>
+      prev.some((l) => l.name === name) ? prev : [...prev, { name, color: newColor }],
+    );
     setChecked((prev) => new Set(prev).add(name));
     setNewName('');
   };
@@ -811,7 +865,10 @@ function LabelModal({
   });
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={onClose}
+    >
       <div
         className="flex max-h-[80vh] w-full max-w-sm flex-col overflow-hidden rounded-2xl bg-white dark:bg-[#111b21]"
         onClick={(e) => e.stopPropagation()}
@@ -893,7 +950,11 @@ function LabelModal({
           </div>
         </div>
         <div className="flex justify-end gap-4 border-t border-border px-4 py-3">
-          <button type="button" onClick={onClose} className="text-[13px] font-medium uppercase text-[#54656f]">
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-[13px] font-medium uppercase text-[#54656f]"
+          >
             Cancelar
           </button>
           <button
@@ -945,7 +1006,9 @@ function ChatHeader({
             {typingName} está escribiendo…
           </p>
         ) : (
-          <p className="truncate text-[12px] text-[#667781] dark:text-[#8696a0]">+57 {chat.phone}</p>
+          <p className="truncate text-[12px] text-[#667781] dark:text-[#8696a0]">
+            +57 {chat.phone}
+          </p>
         )}
       </div>
       <div className="hidden items-center gap-1 sm:flex">
