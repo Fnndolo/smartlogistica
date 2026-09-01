@@ -26,7 +26,7 @@ import {
   Pill,
   SectionHead,
   tileCls,
-} from '../settings-ui';
+} from '../../settings/settings-ui';
 
 const KINDS: WaFlowKind[] = ['confirmation', 'guide', 'upsell', 'autoreply'];
 

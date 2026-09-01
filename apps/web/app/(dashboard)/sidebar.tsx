@@ -73,7 +73,9 @@ const SUB_BASE =
 
 /** Riel de 3px pegado al borde IZQUIERDO del rail (el padding es px-3 = 12px). */
 function ActiveRail() {
-  return <span className="absolute inset-y-1.5 -left-3 w-[3px] rounded-r-[3px] bg-accent" aria-hidden />;
+  return (
+    <span className="absolute inset-y-1.5 -left-3 w-[3px] rounded-r-[3px] bg-accent" aria-hidden />
+  );
 }
 
 /** Contador de menciones sin leer (item "Menciones" del sidebar). */
@@ -217,6 +219,29 @@ export function Sidebar() {
               </Link>
               {/* Sub-secciones de Pedidos generales, JUSTO debajo de Pedidos
                   (como las sedes): Por preparar y Facturados (por fuera). */}
+              {/* Sub-secciones de WhatsApp: la bandeja y su configuracion.
+                  Los ajustes solo para administradores — la pagina ademas
+                  redirige, esconder el enlace no basta. */}
+              {item.href === '/whatsapp' && isActive && isAdminUser ? (
+                <div className="my-0.5 ml-[22px] flex flex-col gap-px border-l border-rail-line pl-2.5">
+                  {[
+                    { href: '/whatsapp', label: 'Bandeja de entrada' },
+                    { href: '/whatsapp/ajustes', label: 'Ajustes' },
+                  ].map((s) => {
+                    const on = pathname === s.href;
+                    return (
+                      <Link
+                        key={s.href}
+                        href={s.href}
+                        prefetch
+                        className={cn(SUB_BASE, on ? ITEM_ACTIVE : ITEM_IDLE)}
+                      >
+                        <span className="truncate">{s.label}</span>
+                      </Link>
+                    );
+                  })}
+                </div>
+              ) : null}
               {item.href === '/orders' && isActive ? (
                 <div className="my-0.5 ml-[22px] flex flex-col gap-px border-l border-rail-line pl-2.5">
                   {[
@@ -258,11 +283,7 @@ export function Sidebar() {
         </div>
 
         {warehouses.length === 0 ? (
-          <Link
-            href="/warehouses"
-            prefetch
-            className={cn(SUB_BASE, ITEM_IDLE, 'px-2.5')}
-          >
+          <Link href="/warehouses" prefetch className={cn(SUB_BASE, ITEM_IDLE, 'px-2.5')}>
             Crear primera sede
           </Link>
         ) : (

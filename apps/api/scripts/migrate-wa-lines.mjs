@@ -113,6 +113,21 @@ CREATE INDEX IF NOT EXISTS "WaFlow_kind_enabled_idx" ON "WaFlow"("kind", "enable
 CREATE INDEX IF NOT EXISTS "WaFlow_lineId_idx" ON "WaFlow"("lineId");
 `;
 
+/**
+ * El script corre como ADMIN, asi que una tabla CREADA aqui queda a nombre de
+ * `postgres` y el rol con el que se conecta la aplicacion no puede ni leerla
+ * (la app usa `tenant.dbRole`, no el admin — tenant-connection.service.ts:81).
+ * Las tablas que solo se ALTERan no tienen el problema: conservan su dueño.
+ *
+ * Pasó con WaFlow: el endpoint devolvia 500 con un "permission denied" que
+ * desde fuera se veia como un escueto "Internal server error". De ahi este paso.
+ */
+const GRANTS = (role) => `
+ALTER TABLE "WaFlow" OWNER TO "${role}";
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "${role}";
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "${role}";
+`;
+
 async function main() {
   const controlUrl = process.env.CONTROL_PLANE_DATABASE_URL;
   const adminUrl = process.env.TENANT_DB_ADMIN_URL;
@@ -125,7 +140,7 @@ async function main() {
   let tenants;
   try {
     const res = await control.query(
-      `SELECT slug, "dbName" FROM "Tenant" WHERE status = 'ACTIVE' ORDER BY "createdAt" ASC`,
+      `SELECT slug, "dbName", "dbRole" FROM "Tenant" WHERE status = 'ACTIVE' ORDER BY "createdAt" ASC`,
     );
     tenants = res.rows;
   } finally {
@@ -139,6 +154,8 @@ async function main() {
     try {
       await db.connect();
       await db.query(DDL);
+      // Sin esto la app no puede leer la tabla que acabamos de crear.
+      if (t.dbRole) await db.query(GRANTS(t.dbRole));
       const { rows } = await db.query(
         `SELECT (SELECT COUNT(*)::int FROM "WaLine") AS lineas,
                 (SELECT COUNT(*)::int FROM "WaMessage" WHERE "lineId" IS NOT NULL) AS con_linea,
