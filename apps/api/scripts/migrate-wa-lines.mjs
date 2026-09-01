@@ -14,6 +14,12 @@
  *
  * Idempotente. No borra nada.
  *
+ * OJO AL ORDEN: esto RENOMBRA una tabla, asi que el codigo desplegado deja de
+ * encontrarla en el instante en que se corre. Hay que DESPLEGAR PRIMERO el
+ * codigo que usa WaLine y correr la migracion despues — al reves tumba el
+ * listado de pedidos, porque orders.service.ts consulta esa tabla dentro de
+ * list(). (Pasó. De ahi este comentario.)
+ *
  * Correr desde apps/api:  node --env-file=.env.local scripts/migrate-wa-lines.mjs
  */
 import pg from 'pg';
@@ -41,7 +47,11 @@ const DDL = `
 DO $$
 BEGIN
   -- 1. Rename en sitio (solo si aun no se hizo).
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Dialog360Connection')
+  -- table_type='BASE TABLE': information_schema.tables tambien lista VISTAS, y
+  -- durante el despliegue existio una vista "Dialog360Connection" de
+  -- compatibilidad. Sin este filtro, re-correr esto intentaria renombrarla.
+  IF EXISTS (SELECT 1 FROM information_schema.tables
+              WHERE table_name = 'Dialog360Connection' AND table_type = 'BASE TABLE')
      AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'WaLine') THEN
     ALTER TABLE "Dialog360Connection" RENAME TO "WaLine";
   END IF;
