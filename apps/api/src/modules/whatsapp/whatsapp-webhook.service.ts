@@ -54,7 +54,13 @@ export class WhatsappWebhookService {
    * coexistencia — los ECHOES de lo enviado desde el celular/WhatsApp Web.
    * Corre FUERA del contexto tenant (recibe prisma). Best-effort por mensaje.
    */
-  async inboundCloud(tenantId: string, prisma: PrismaClient, payload: unknown): Promise<void> {
+  async inboundCloud(
+    tenantId: string,
+    prisma: PrismaClient,
+    payload: unknown,
+    /** Linea por la que ENTRO. null = la predeterminada (una sola linea). */
+    lineId: string | null = null,
+  ): Promise<void> {
     const root = payload as { entry?: Array<{ changes?: Array<{ value?: Any }> }> };
     const touched = new Set<string>();
 
@@ -68,30 +74,41 @@ export class WhatsappWebhookService {
           if (c?.wa_id && c?.profile?.name) names.set(String(c.wa_id), String(c.profile.name));
         }
         for (const m of v.messages ?? []) {
-          const phone = await this.storeCloudMessage(tenantId, prisma, m, 'in', names);
+          const phone = await this.storeCloudMessage(tenantId, prisma, m, 'in', names, { lineId });
           if (phone) {
             touched.add(phone);
             // El "cerebro" del flujo de confirmacion: botones y captura de la
             // direccion nueva. Best-effort — jamas tumba la recepcion.
-            await this.handleFlowReply(tenantId, prisma, phone, m).catch((err) =>
-              this.logger.warn(`Flujo de confirmacion fallo (${phone}): ${err instanceof Error ? err.message : err}`),
+            await this.handleFlowReply(tenantId, prisma, phone, m, lineId).catch((err) =>
+              this.logger.warn(
+                `Flujo de confirmacion fallo (${phone}): ${err instanceof Error ? err.message : err}`,
+              ),
             );
           }
         }
         // Coexistencia: lo que el negocio envia desde la APP se espeja aqui.
         for (const m of v.message_echoes ?? v.smb_message_echoes ?? []) {
-          const phone = await this.storeCloudMessage(tenantId, prisma, m, 'out', names);
+          const phone = await this.storeCloudMessage(tenantId, prisma, m, 'out', names, { lineId });
           if (phone) touched.add(phone);
         }
         // Ediciones que lleguen en campo propio (formas nuevas de Meta).
         for (const m of v.message_edits ?? []) {
-          const phone = await this.storeCloudMessage(tenantId, prisma, m, 'in', names);
+          const phone = await this.storeCloudMessage(tenantId, prisma, m, 'in', names, { lineId });
           if (phone) touched.add(phone);
         }
         // Diagnostico: campos del webhook que AUN no procesamos — al log.
         const known = [
-          'messaging_product', 'metadata', 'contacts', 'messages', 'message_echoes',
-          'smb_message_echoes', 'message_edits', 'statuses', 'history', 'state_sync', 'errors',
+          'messaging_product',
+          'metadata',
+          'contacts',
+          'messages',
+          'message_echoes',
+          'smb_message_echoes',
+          'message_edits',
+          'statuses',
+          'history',
+          'state_sync',
+          'errors',
         ];
         const extra = Object.keys(v).filter((k) => !known.includes(k));
         if (extra.length > 0) {
@@ -117,9 +134,9 @@ export class WhatsappWebhookService {
           let imported = 0;
           for (const th of h.threads ?? []) {
             for (const hm of th.messages ?? []) {
-              const dir =
-                bizPhone && tenDigits(String(hm?.from ?? '')) === bizPhone ? 'out' : 'in';
+              const dir = bizPhone && tenDigits(String(hm?.from ?? '')) === bizPhone ? 'out' : 'in';
               const phone = await this.storeCloudMessage(tenantId, prisma, hm, dir, names, {
+                lineId,
                 instant: false,
               });
               if (phone) {
@@ -140,7 +157,11 @@ export class WhatsappWebhookService {
           const name = String(s.contact.full_name ?? s.contact.first_name ?? '').trim();
           if (p.length < 7 || !name || s.action === 'remove') continue;
           await prisma.waContact
-            .upsert({ where: { phone: p }, create: { phone: p, contactId: '', name }, update: { name } })
+            .upsert({
+              where: { phone: p },
+              create: { phone: p, contactId: '', name },
+              update: { name },
+            })
             .catch(() => null);
         }
         // Estados: 'failed' = Meta NO entrego (ej. 131049) -> el hilo lo anota
@@ -150,7 +171,9 @@ export class WhatsappWebhookService {
           if (!s?.id) continue;
           if (s.status === 'failed') {
             const phone = await this.handleFailedStatus(tenantId, prisma, s).catch((err) => {
-              this.logger.warn(`Status failed no procesado: ${err instanceof Error ? err.message : err}`);
+              this.logger.warn(
+                `Status failed no procesado: ${err instanceof Error ? err.message : err}`,
+              );
               return null;
             });
             if (phone) touched.add(phone);
@@ -180,8 +203,11 @@ export class WhatsappWebhookService {
     prisma: PrismaClient,
     phone: string,
     m: Any,
+    /** Linea por la que escribio el cliente. Se le contesta por ESA, nunca por
+     *  la predeterminada: responder por otro numero parte la conversacion. */
+    lineId: string | null = null,
   ): Promise<void> {
-    const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
+    const d360 = await this.waConn.forLine(tenantId, prisma, lineId);
     if (!d360) return; // sin conexion no hay como responder
 
     const contact = await prisma.waContact.findUnique({ where: { phone } });
@@ -198,12 +224,30 @@ export class WhatsappWebhookService {
     const say = async (body: string): Promise<void> => {
       const wamid = await this.dialog360.sendText(d360.http, d360.mode, to, body);
       const row = await prisma.waMessage.create({
-        data: { phone, direction: 'out', kind: 'text', body, authorName: 'SmartLogística', externalId: wamid, status: wamid ? 'sent' : null },
+        data: {
+          phone,
+          direction: 'out',
+          kind: 'text',
+          body,
+          authorName: 'SmartLogística',
+          externalId: wamid,
+          status: wamid ? 'sent' : null,
+          lineId: d360.lineId,
+        },
       });
       await this.publisher.publishWaMessage(tenantId, prisma, row);
     };
-    const sayButtons = async (body: string, buttons: Array<{ id: string; title: string }>): Promise<void> => {
-      const wamid = await this.dialog360.sendInteractiveButtons(d360.http, d360.mode, to, body, buttons);
+    const sayButtons = async (
+      body: string,
+      buttons: Array<{ id: string; title: string }>,
+    ): Promise<void> => {
+      const wamid = await this.dialog360.sendInteractiveButtons(
+        d360.http,
+        d360.mode,
+        to,
+        body,
+        buttons,
+      );
       const row = await prisma.waMessage.create({
         data: {
           phone,
@@ -214,11 +258,15 @@ export class WhatsappWebhookService {
           externalId: wamid,
           status: wamid ? 'sent' : null,
           buttons: buttons.map((b) => b.title) as Prisma.InputJsonValue,
+          lineId: d360.lineId,
         },
       });
       await this.publisher.publishWaMessage(tenantId, prisma, row);
     };
-    const setState = async (flowState: FlowState | null, draftAddress: string | null): Promise<void> => {
+    const setState = async (
+      flowState: FlowState | null,
+      draftAddress: string | null,
+    ): Promise<void> => {
       await prisma.waContact.upsert({
         where: { phone },
         create: { phone, contactId: '', flowState, draftAddress },
@@ -252,7 +300,11 @@ export class WhatsappWebhookService {
         }
       }
       // Botones de la PLANTILLA inicial.
-      if (pay === 'CONFIRMED' || btn?.includes('mis datos son correctos') || btn?.includes('datos correctos')) {
+      if (
+        pay === 'CONFIRMED' ||
+        btn?.includes('mis datos son correctos') ||
+        btn?.includes('datos correctos')
+      ) {
         await setState(null, null);
         await this.applyAddressNative(tenantId, prisma, phone, 'confirmed');
         await say(MSG_CONFIRMED);
@@ -324,7 +376,10 @@ export class WhatsappWebhookService {
           action,
           address: address?.trim() || null,
           matched: ids.length,
-          note: ids.length > 0 ? 'Cloud API (flujo nativo)' : 'Cloud API: sin pedido pendiente con ese telefono',
+          note:
+            ids.length > 0
+              ? 'Cloud API (flujo nativo)'
+              : 'Cloud API: sin pedido pendiente con ese telefono',
         },
       })
       .catch(() => null);
@@ -345,7 +400,9 @@ export class WhatsappWebhookService {
   ): Promise<string | null> {
     const wamid = String(s.id);
     const err = Array.isArray(s.errors) ? s.errors[0] : null;
-    const detail = err ? `${err.code ?? ''} ${err.title ?? err.message ?? ''}`.trim() : 'motivo desconocido';
+    const detail = err
+      ? `${err.code ?? ''} ${err.title ?? err.message ?? ''}`.trim()
+      : 'motivo desconocido';
 
     const msg = await prisma.waMessage.findUnique({ where: { externalId: wamid } });
     if (!msg) {
@@ -379,7 +436,9 @@ export class WhatsappWebhookService {
     }
     if (events.length > 0) {
       await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
-      this.logger.warn(`Confirmacion NO entregada (${detail}): ${events.length} pedido(s) vuelven a "Sin enviar"`);
+      this.logger.warn(
+        `Confirmacion NO entregada (${detail}): ${events.length} pedido(s) vuelven a "Sin enviar"`,
+      );
     }
 
     // ¿Era la GUIA del pedido (marcador guide:<orderId>)? Avisar en el CHAT
@@ -431,7 +490,10 @@ export class WhatsappWebhookService {
    * ✓✓ quedaba pegado hasta un reintento). Se guarda aqui y se aplica apenas
    * el wamid quede escrito (dispatchWaSend / eco de coexistencia).
    */
-  private readonly statusStash = new Map<string, { status: string; error: string | null; at: number }>();
+  private readonly statusStash = new Map<
+    string,
+    { status: string; error: string | null; at: number }
+  >();
 
   private stashStatus(wamid: string, status: string, error: string | null): void {
     const rank: Record<string, number> = { sent: 1, delivered: 2, read: 3, failed: 4 };
@@ -499,7 +561,7 @@ export class WhatsappWebhookService {
     m: Any,
     direction: 'in' | 'out',
     names: Map<string, string>,
-    opts: { instant?: boolean } = {},
+    opts: { instant?: boolean; lineId?: string | null } = {},
   ): Promise<string | null> {
     try {
       const rawPhone = direction === 'in' ? m.from : (m.to ?? m.recipient_id ?? m.from);
@@ -553,7 +615,9 @@ export class WhatsappWebhookService {
         }
         // CAPTURA para diagnostico: el payload queda en la DB (WebhookEvent
         // provider 'wa-debug') para implementar la forma exacta con datos.
-        this.logger.warn(`Edicion no aplicada (forma desconocida): ${JSON.stringify(m).slice(0, 800)}`);
+        this.logger.warn(
+          `Edicion no aplicada (forma desconocida): ${JSON.stringify(m).slice(0, 800)}`,
+        );
         await prisma.webhookEvent
           .create({
             data: {
@@ -595,7 +659,8 @@ export class WhatsappWebhookService {
       // REACCION: no es una burbuja — se pega al mensaje reaccionado (como en
       // WhatsApp). emoji vacio = quitar la reaccion. mine = reaccion del negocio.
       if (type === 'reaction') {
-        const targetWamid = typeof m.reaction?.message_id === 'string' ? m.reaction.message_id : null;
+        const targetWamid =
+          typeof m.reaction?.message_id === 'string' ? m.reaction.message_id : null;
         if (!targetWamid) return null;
         const target = await prisma.waMessage.findUnique({
           where: { externalId: targetWamid },
@@ -636,7 +701,7 @@ export class WhatsappWebhookService {
         body = media.caption ?? media.filename ?? null;
         // Bajar el medio YA (la URL de Meta expira en 5 min) y guardarlo nuestro.
         if (media.id) {
-          const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
+          const d360 = await this.waConn.forLine(tenantId, prisma, opts.lineId ?? null);
           if (d360 && this.storage.isConfigured()) {
             const bin = await this.dialog360.downloadMedia(d360.http, d360.mode, String(media.id));
             if (bin) {
@@ -662,7 +727,8 @@ export class WhatsappWebhookService {
           (m as Any).__failedMediaId = String(media.id);
         }
       } else if (type === 'interactive') {
-        body = m.interactive?.button_reply?.title ?? m.interactive?.list_reply?.title ?? '[interacción]';
+        body =
+          m.interactive?.button_reply?.title ?? m.interactive?.list_reply?.title ?? '[interacción]';
       } else if (type === 'button') {
         body = m.button?.text ?? '[botón]';
       } else if (type === 'location') {
@@ -704,6 +770,7 @@ export class WhatsappWebhookService {
         data: {
           phone,
           direction,
+          lineId: opts.lineId ?? null,
           kind,
           body,
           attachmentKey,
@@ -714,9 +781,7 @@ export class WhatsappWebhookService {
           // contactId reutilizado como stash de diagnostico del media id fallido.
           contactId: (m as Any).__failedMediaId ? `media:${(m as Any).__failedMediaId}` : null,
           authorName:
-            direction === 'out'
-              ? 'WhatsApp (celular)'
-              : (names.get(String(rawPhone)) ?? null),
+            direction === 'out' ? 'WhatsApp (celular)' : (names.get(String(rawPhone)) ?? null),
           externalId,
         },
       });

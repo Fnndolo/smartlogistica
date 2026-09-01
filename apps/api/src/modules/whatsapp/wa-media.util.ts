@@ -36,7 +36,29 @@ export async function toOggOpus(
     // por probe: el mismo audio limpio ENTREGA, con metadata NO).
     await run(
       ffmpegPath,
-      ['-y', '-i', inPath, '-vn', '-map_metadata', '-1', '-map', '0:a:0', '-c:a', 'libopus', '-b:a', '32k', '-ar', '48000', '-ac', '1', '-fflags', '+bitexact', '-flags:a', '+bitexact', outPath],
+      [
+        '-y',
+        '-i',
+        inPath,
+        '-vn',
+        '-map_metadata',
+        '-1',
+        '-map',
+        '0:a:0',
+        '-c:a',
+        'libopus',
+        '-b:a',
+        '32k',
+        '-ar',
+        '48000',
+        '-ac',
+        '1',
+        '-fflags',
+        '+bitexact',
+        '-flags:a',
+        '+bitexact',
+        outPath,
+      ],
       { timeout: 30_000 },
     );
     const out = await fs.readFile(outPath);

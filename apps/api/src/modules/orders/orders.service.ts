@@ -313,9 +313,14 @@ export class OrdersService {
                 distinct: ['orderId'],
               })
               .then((g) => new Set(g.map((x) => x.orderId))),
-            // Conexion de WhatsApp (360dialog, con su modo).
-            prisma.dialog360Connection
-              .findFirst({ select: { createdAt: true, mode: true } })
+            // Linea de WhatsApp predeterminada (con su modo). El corte de
+            // "desde cuando la plataforma manda las confirmaciones" es su fecha
+            // de alta, asi que se toma la MAS ANTIGUA.
+            prisma.waLine
+              .findFirst({
+                orderBy: { createdAt: 'asc' },
+                select: { createdAt: true, mode: true },
+              })
               .then((d360) => ({ d360 })),
           ]);
 

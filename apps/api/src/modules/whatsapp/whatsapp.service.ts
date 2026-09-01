@@ -171,7 +171,9 @@ export class WhatsappService {
   async getDialog360(auth: AuthContext): Promise<Dialog360ConnectionSummary | null> {
     this.assertConnectionAdmin(auth);
     const { prisma } = getTenantContext();
-    const conn = await prisma.dialog360Connection.findFirst({ orderBy: { createdAt: 'desc' } });
+    const conn = await prisma.waLine.findFirst({
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+    });
     if (!conn) return null;
     return {
       mode: (conn.mode === 'sandbox' ? 'sandbox' : 'production') as Dialog360Mode,
@@ -232,10 +234,37 @@ export class WhatsappService {
     }
 
     const encryptedApiKey = await this.envelope.encryptField(tenantId, input.apiKey);
-    await prisma.dialog360Connection.deleteMany({});
-    const conn = await prisma.dialog360Connection.create({
-      data: { encryptedApiKey, mode: input.mode, webhookUrl, status: 'connected', lastError: null },
+    // Antes esto hacia deleteMany() y volvia a crear: era lo que IMPEDIA una
+    // segunda linea. Ahora actualiza la linea predeterminada (o crea la primera
+    // si el tenant aun no tiene ninguna) y deja en paz a las demas.
+    const existing = await prisma.waLine.findFirst({
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+      select: { id: true },
     });
+    const conn = existing
+      ? await prisma.waLine.update({
+          where: { id: existing.id },
+          data: {
+            encryptedApiKey,
+            provider: 'dialog360',
+            mode: input.mode,
+            webhookUrl,
+            status: 'connected',
+            lastError: null,
+          },
+        })
+      : await prisma.waLine.create({
+          data: {
+            label: 'WhatsApp',
+            provider: 'dialog360',
+            encryptedApiKey,
+            mode: input.mode,
+            webhookUrl,
+            status: 'connected',
+            lastError: null,
+            isDefault: true,
+          },
+        });
     this.waConn.invalidate(tenantId);
     return {
       mode: input.mode,
@@ -249,7 +278,13 @@ export class WhatsappService {
   async disconnectDialog360(auth: AuthContext): Promise<void> {
     this.assertConnectionAdmin(auth);
     const { tenantId, prisma } = getTenantContext();
-    await prisma.dialog360Connection.deleteMany({});
+    // Solo la linea predeterminada: con varias conectadas, "desconectar" desde
+    // la tarjeta de Conexiones no puede llevarse todas por delante.
+    const target = await prisma.waLine.findFirst({
+      orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
+      select: { id: true },
+    });
+    if (target) await prisma.waLine.delete({ where: { id: target.id } });
     this.waConn.invalidate(tenantId);
   }
 
@@ -291,7 +326,7 @@ export class WhatsappService {
 
   private async threadOf(phone: string, userId: string): Promise<WaThread> {
     const { prisma } = getTenantContext();
-    const conn = await prisma.dialog360Connection.findFirst({ select: { id: true } });
+    const conn = await prisma.waLine.findFirst({ select: { id: true } });
     if (!phone) {
       return {
         phone: null,
@@ -397,6 +432,7 @@ export class WhatsappService {
       data: {
         phone,
         direction: 'out',
+        lineId: d360?.lineId ?? null,
         kind: 'text',
         body: input.text,
         replyToId: quoted?.id ?? null,
@@ -479,6 +515,7 @@ export class WhatsappService {
       data: {
         phone,
         direction: 'out',
+        lineId: d360?.lineId ?? null,
         kind,
         body: name,
         attachmentKey: key,
@@ -538,9 +575,7 @@ export class WhatsappService {
    * para la pastilla de la bandeja. customerPhone se guarda CRUDO -> se
    * normaliza en SQL.
    */
-  private async ordersByPhone(
-    prisma: PrismaClient,
-  ): Promise<
+  private async ordersByPhone(prisma: PrismaClient): Promise<
     Map<
       string,
       {
@@ -887,6 +922,7 @@ export class WhatsappService {
       data: {
         phone: to,
         direction: 'out',
+        lineId: d360?.lineId ?? null,
         kind: src.kind,
         body: src.body,
         attachmentKey: src.attachmentKey,
@@ -944,6 +980,7 @@ export class WhatsappService {
       data: {
         phone,
         direction: 'out',
+        lineId: d360?.lineId ?? null,
         kind: 'text',
         body: `👤 ${input.name}\n${input.phone}`,
         authorId: auth.userId,
@@ -1017,6 +1054,7 @@ export class WhatsappService {
       data: {
         phone,
         direction: 'out',
+        lineId: d360?.lineId ?? null,
         kind: 'sticker',
         attachmentKey: key,
         authorId: auth.userId,
@@ -1164,6 +1202,7 @@ export class WhatsappService {
         data: {
           phone,
           direction: 'out',
+          lineId: d360?.lineId ?? null,
           kind: 'file',
           body: fileName,
           attachmentKey: rotuloKey,
@@ -1215,6 +1254,7 @@ export class WhatsappService {
             data: {
               phone,
               direction: 'out',
+              lineId: d360?.lineId ?? null,
               kind: 'text',
               body: tpl.body,
               authorName: 'SmartLogística',
@@ -1432,6 +1472,7 @@ export class WhatsappService {
       data: {
         phone,
         direction: 'out',
+        lineId: d360?.lineId ?? null,
         kind: 'text',
         body: renderTemplateBody(tpl.body, params),
         authorId: auth.userId,
@@ -1501,8 +1542,13 @@ export class WhatsappService {
    * Corre FUERA del contexto tenant (recibe prisma). Best-effort por mensaje.
    * La fachada delega TODO el lado de recepcion en WhatsappWebhookService.
    */
-  async inboundCloud(tenantId: string, prisma: PrismaClient, payload: unknown): Promise<void> {
-    return this.webhook.inboundCloud(tenantId, prisma, payload);
+  async inboundCloud(
+    tenantId: string,
+    prisma: PrismaClient,
+    payload: unknown,
+    lineId: string | null = null,
+  ): Promise<void> {
+    return this.webhook.inboundCloud(tenantId, prisma, payload, lineId);
   }
 
   /**
@@ -1686,6 +1732,7 @@ export class WhatsappService {
           data: {
             phone,
             direction: 'out',
+            lineId: d360?.lineId ?? null,
             kind: 'text',
             body: rendered,
             authorName: 'SmartLogística',

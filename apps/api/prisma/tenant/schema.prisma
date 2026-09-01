@@ -210,24 +210,89 @@ model WaMessage {
   // Destacado (estrella), como en WhatsApp.
   starred       Boolean  @default(false)
   // Id del mensaje en WhatsApp (wamid de la Cloud API): dedup de reentregas.
+  // NO se le agrega la linea: los wamid de Meta son unicos globalmente y
+  // meterla debilitaria el dedup de reentregas.
   externalId    String?  @unique
+  // Por que LINEA salio o entro. null = mensajes anteriores a las lineas.
+  lineId        String?
   createdAt     DateTime @default(now())
 
   @@index([phone, createdAt])
+  @@index([lineId, createdAt])
 }
 
-// Conexion a 360dialog (Cloud API de Meta, BSP api-first). Singleton: los
-// envios salen por la Cloud API y el webhook recibe TODO (mensajes, medios,
-// echoes del celular con coexistencia).
-model Dialog360Connection {
-  id              String   @id @default(cuid())
+/// LINEA de WhatsApp: un numero conectado. Antes se llamaba
+/// Dialog360Connection y era un singleton forzado (el servicio hacia
+/// deleteMany antes de crear); ahora pueden convivir varias, cada una con su
+/// proveedor, sus credenciales y sus flujos.
+///
+/// El CUERPO de los mensajes es Cloud API de Meta en los dos proveedores: lo
+/// unico que cambia es la URL base, la cabecera de auth y como se verifica el
+/// webhook. Por eso el cliente HTTP se reusa entero.
+model WaLine {
+  id     String @id @default(cuid())
+  /// Nombre visible ("Ventas", "Soporte"). Es lo que distingue una linea de
+  /// otra en la interfaz.
+  label  String
+  /// 'dialog360' (BSP) | 'meta' (Cloud API nativa).
+  provider String @default("dialog360")
+  /// Numero en E.164 tal como lo reporta el proveedor (+573001234567).
+  phone  String?
+  /// Prefijo de pais para normalizar telefonos de esta linea (Colombia = 57).
+  countryCode String @default("57")
+
+  // --- Credenciales (cifradas con la DEK del tenant) ---
+  /// 360dialog: la D360-API-KEY. Meta: el token permanente de la App.
   encryptedApiKey Bytes
-  mode            String   @default("production") // sandbox | production
-  webhookUrl      String?
-  status          String   @default("connected")
-  lastError       String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  /// Solo Meta: secreto de la App, para validar la firma del webhook.
+  encryptedAppSecret Bytes?
+  /// Solo Meta: id del numero y de la WABA (van en la URL de la Cloud API).
+  phoneNumberId String?
+  wabaId        String?
+  /// Solo Meta: token del challenge GET del webhook. No es secreto.
+  verifyToken   String?
+
+  mode       String   @default("production") // sandbox | production
+  webhookUrl String?
+  /// La linea que se usa cuando ninguna regla dice otra cosa.
+  isDefault  Boolean  @default(false)
+  status     String   @default("connected")
+  lastError  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  flows WaFlow[]
+
+  @@index([status])
+}
+
+/// MENSAJE AUTOMATICO configurable. Los cuatro `kind` son fijos porque cada uno
+/// tiene guardas propias en codigo (frescura, idempotencia, maquina de estados);
+/// lo que es DATO es si esta encendido, por que linea sale, a que tiendas
+/// aplica y sus textos.
+///
+/// Si NO existe ninguna fila de un kind, ese flujo se comporta exactamente como
+/// antes (defaults de codigo). En cuanto existe una, manda la tabla.
+model WaFlow {
+  id      String  @id @default(cuid())
+  /// confirmation | guide | upsell | autoreply
+  kind    String
+  lineId  String
+  enabled Boolean @default(true)
+  /// Fuentes a las que aplica: ["*"] = todas, o ["vtex:tienda-a", "manual:krediya"].
+  scope   Json    @default("[\"*\"]")
+  /// Ajustes propios del kind (textos, tiempos, orden de plantillas).
+  config  Json    @default("{}")
+  /// Desempate cuando dos reglas encajan (mayor gana). El alcance exacto
+  /// siempre gana sobre "*", pase lo que pase con la prioridad.
+  priority Int     @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  line WaLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+
+  @@index([kind, enabled])
+  @@index([lineId])
 }
 
 // Contacto de WhatsApp por telefono (nombre + estado del flujo de confirmacion).

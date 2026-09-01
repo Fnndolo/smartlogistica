@@ -23,7 +23,12 @@ import { WhatsappService } from './whatsapp.service';
  * enviado desde el celular). Se configura AUTOMATICAMENTE al conectar 360dialog
  * en Conexiones. Mismo secreto que los demas webhooks.
  *
- * URL: POST /v1/webhooks/dialog360/<tenantSlug>?token=<CONFIRMATION_WEBHOOK_SECRET>
+ * URL: POST /v1/webhooks/dialog360/<tenantSlug>?token=<SECRET>&line=<lineId>
+ *
+ * `line` dice POR QUE NUMERO entro el mensaje. Es opcional a proposito: la
+ * primera linea se registro en 360dialog sin el, y sin el se cae a la linea
+ * predeterminada — que con un solo numero es exactamente lo correcto. Las
+ * lineas nuevas si se registran con el, y entonces el enrutado es exacto.
  */
 @Controller('webhooks/dialog360')
 export class Dialog360WebhookController {
@@ -42,6 +47,7 @@ export class Dialog360WebhookController {
   async receive(
     @Param('tenantSlug') tenantSlug: string,
     @Query('token') token: string | undefined,
+    @Query('line') line: string | undefined,
     @Body() body: unknown,
   ): Promise<{ ok: true }> {
     this.assertToken(token);
@@ -55,7 +61,7 @@ export class Dialog360WebhookController {
     // y la descarga de medios puede tomar segundos.
     void (async () => {
       const { client } = await this.tenants.getForTenant(tenant.id);
-      await this.whatsapp.inboundCloud(tenant.id, client, body);
+      await this.whatsapp.inboundCloud(tenant.id, client, body, line?.trim() || null);
     })().catch((err) => {
       this.logger.error(
         `Webhook Cloud en background fallo: ${err instanceof Error ? err.message : err}`,

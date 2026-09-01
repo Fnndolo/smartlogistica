@@ -82,7 +82,8 @@ export function isPhoneOrder(rawPayload: unknown): boolean {
   const raw = (rawPayload ?? {}) as { items?: Array<Record<string, unknown>> };
   const items = Array.isArray(raw.items) ? raw.items : [];
   const CAT = /smartphone|celular/i;
-  const NAME = /\b(celular|smartphone|iphone|galaxy|xiaomi|redmi|poco|motorola|moto\s|honor|infinix|tecno|oppo|realme|vivo|samsung)\b/i;
+  const NAME =
+    /\b(celular|smartphone|iphone|galaxy|xiaomi|redmi|poco|motorola|moto\s|honor|infinix|tecno|oppo|realme|vivo|samsung)\b/i;
   for (const it of items) {
     const info = (it.additionalInfo ?? {}) as { categories?: Array<{ name?: unknown }> };
     if ((info.categories ?? []).some((c) => CAT.test(String(c?.name ?? '')))) return true;
@@ -104,7 +105,11 @@ export class WaUpsellService {
   ) {}
 
   /** Toque 1: tras el "gracias por confirmar" — busca el pedido del telefono. */
-  async scheduleAfterConfirmation(tenantId: string, prisma: PrismaClient, rawPhone: string): Promise<void> {
+  async scheduleAfterConfirmation(
+    tenantId: string,
+    prisma: PrismaClient,
+    rawPhone: string,
+  ): Promise<void> {
     try {
       const phone = tenDigits(rawPhone);
       if (phone.length < 7) return;
@@ -118,20 +123,24 @@ export class WaUpsellService {
       if (!order || !isPhoneOrder(order.rawPayload)) return;
       await this.scheduleStep(tenantId, order.id, 1);
     } catch (err) {
-      this.logger.warn(`Upsell post-confirmacion fallo: ${err instanceof Error ? err.message : err}`);
+      this.logger.warn(
+        `Upsell post-confirmacion fallo: ${err instanceof Error ? err.message : err}`,
+      );
     }
   }
 
   /** Encola un toque diferido (+2 min). Dedupe por jobId: nunca dos veces. */
   async scheduleStep(tenantId: string, orderId: string, step: 1 | 2): Promise<void> {
     try {
-      await this.queue.add(
-        'step',
-        { tenantId, orderId, step } satisfies UpsellJob,
-        { delay: STEP_DELAY_MS, jobId: `upsell:${orderId}:${step}`, attempts: 3 },
-      );
+      await this.queue.add('step', { tenantId, orderId, step } satisfies UpsellJob, {
+        delay: STEP_DELAY_MS,
+        jobId: `upsell:${orderId}:${step}`,
+        attempts: 3,
+      });
     } catch (err) {
-      this.logger.warn(`Upsell no encolado (${orderId} paso ${step}): ${err instanceof Error ? err.message : err}`);
+      this.logger.warn(
+        `Upsell no encolado (${orderId} paso ${step}): ${err instanceof Error ? err.message : err}`,
+      );
     }
   }
 
@@ -140,7 +149,12 @@ export class WaUpsellService {
    * montado, o directo el paso 3 desde el refresco de envios). Re-verifica
    * TODO: pedido de celular, telefono, no-interesado, no-duplicado.
    */
-  async runStep(tenantId: string, prisma: PrismaClient, orderId: string, step: 1 | 2 | 3): Promise<void> {
+  async runStep(
+    tenantId: string,
+    prisma: PrismaClient,
+    orderId: string,
+    step: 1 | 2 | 3,
+  ): Promise<void> {
     const order = await prisma.order.findUnique({
       where: { id: orderId },
       select: { id: true, customerPhone: true, customerName: true, rawPayload: true },
@@ -151,7 +165,10 @@ export class WaUpsellService {
     if (!isPhoneOrder(order.rawPayload)) return;
 
     // ¿Ya toco el boton alguna vez? El flujo esta CANCELADO para este chat.
-    const contact = await prisma.waContact.findUnique({ where: { phone }, select: { labels: true } });
+    const contact = await prisma.waContact.findUnique({
+      where: { phone },
+      select: { labels: true },
+    });
     const labels = Array.isArray(contact?.labels) ? (contact?.labels as unknown[]).map(String) : [];
     if (labels.includes(INTERESTED_LABEL)) return;
 
@@ -179,9 +196,14 @@ export class WaUpsellService {
         return;
       }
       const nombre = (order.customerName ?? '').trim().split(/\s+/)[0] || 'Hola';
-      wamid = await this.dialog360.sendTemplate(d360.http, d360.mode, `57${phone}`, tpl.name, tpl.language, [
-        { type: 'body', parameters: [{ type: 'text', text: nombre }] },
-      ]);
+      wamid = await this.dialog360.sendTemplate(
+        d360.http,
+        d360.mode,
+        `57${phone}`,
+        tpl.name,
+        tpl.language,
+        [{ type: 'body', parameters: [{ type: 'text', text: nombre }] }],
+      );
       body = tpl.body.replace('{{1}}', nombre);
       buttons = [UPSELL_TEMPLATE_BUTTON];
     } else {
@@ -189,15 +211,20 @@ export class WaUpsellService {
       // interactuar; si la ventana cerro, queda la bolita roja con motivo).
       body = step === 1 ? MSG_STEP1 : MSG_STEP2;
       buttons = [UPSELL_BUTTON.title];
-      wamid = await this.dialog360.sendInteractiveButtons(d360.http, d360.mode, `57${phone}`, body, [
-        UPSELL_BUTTON,
-      ]);
+      wamid = await this.dialog360.sendInteractiveButtons(
+        d360.http,
+        d360.mode,
+        `57${phone}`,
+        body,
+        [UPSELL_BUTTON],
+      );
     }
 
     const row = await prisma.waMessage.create({
       data: {
         phone,
         direction: 'out',
+        lineId: d360.lineId,
         kind: 'text',
         body,
         buttons: buttons as unknown as Prisma.InputJsonValue,
@@ -223,7 +250,9 @@ export class WaUpsellService {
   /** Paso 3 directo (transicion a ENTREGADO): sin delay, best-effort. */
   triggerDelivered(tenantId: string, prisma: PrismaClient, orderId: string): void {
     void this.runStep(tenantId, prisma, orderId, 3).catch((err) =>
-      this.logger.warn(`Upsell entregado fallo (${orderId}): ${err instanceof Error ? err.message : err}`),
+      this.logger.warn(
+        `Upsell entregado fallo (${orderId}): ${err instanceof Error ? err.message : err}`,
+      ),
     );
   }
 
@@ -249,7 +278,10 @@ export class WaUpsellService {
         update: {},
       })
       .catch(() => null);
-    const contact = await prisma.waContact.findUnique({ where: { phone }, select: { labels: true } });
+    const contact = await prisma.waContact.findUnique({
+      where: { phone },
+      select: { labels: true },
+    });
     const labels = Array.isArray(contact?.labels) ? (contact?.labels as unknown[]).map(String) : [];
     if (!labels.includes(INTERESTED_LABEL)) {
       const next = [...labels, INTERESTED_LABEL];

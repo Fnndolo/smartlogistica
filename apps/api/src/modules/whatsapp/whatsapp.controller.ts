@@ -124,21 +124,30 @@ export class WhatsappInboxController {
   /** Marcar como leido (apaga el contador verde de ESTE usuario). */
   @Post('chats/:phone/read')
   @HttpCode(200)
-  async read(@Param('phone') phone: string, @CurrentUser() user: AuthContext): Promise<{ ok: true }> {
+  async read(
+    @Param('phone') phone: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ ok: true }> {
     return this.whatsapp.markChatRead(phone, user);
   }
 
   /** "Escribiendo...": avisa a los demas admins y al celular del cliente. */
   @Post('chats/:phone/typing')
   @HttpCode(200)
-  async typing(@Param('phone') phone: string, @CurrentUser() user: AuthContext): Promise<{ ok: true }> {
+  async typing(
+    @Param('phone') phone: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ ok: true }> {
     return this.whatsapp.typing(phone, user);
   }
 
   /** Marcar como NO leido (corre la marca antes del ultimo entrante). */
   @Post('chats/:phone/unread')
   @HttpCode(200)
-  async unread(@Param('phone') phone: string, @CurrentUser() user: AuthContext): Promise<{ ok: true }> {
+  async unread(
+    @Param('phone') phone: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ ok: true }> {
     return this.whatsapp.markChatUnread(phone, user);
   }
 
@@ -156,14 +165,20 @@ export class WhatsappInboxController {
   /** Vaciar chat (borra el historial LOCAL). */
   @Delete('chats/:phone/messages')
   @HttpCode(200)
-  async clearChat(@Param('phone') phone: string, @CurrentUser() user: AuthContext): Promise<{ ok: true }> {
+  async clearChat(
+    @Param('phone') phone: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ ok: true }> {
     return this.whatsapp.clearChat(phone, user);
   }
 
   /** Eliminar chat (historial + contacto, LOCAL). */
   @Delete('chats/:phone')
   @HttpCode(200)
-  async deleteChat(@Param('phone') phone: string, @CurrentUser() user: AuthContext): Promise<{ ok: true }> {
+  async deleteChat(
+    @Param('phone') phone: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ ok: true }> {
     return this.whatsapp.deleteChat(phone, user);
   }
 

@@ -62,7 +62,11 @@ export class Dialog360Client {
    * ~25s o hasta que salga el mensaje. OJO: marca ese entrante como LEIDO
    * en el celular del cliente (sus chulitos se ponen azules).
    */
-  async sendTypingIndicator(http: AxiosInstance, mode: Dialog360Mode, messageId: string): Promise<void> {
+  async sendTypingIndicator(
+    http: AxiosInstance,
+    mode: Dialog360Mode,
+    messageId: string,
+  ): Promise<void> {
     await http.post(this.messagesPath(mode), {
       messaging_product: 'whatsapp',
       status: 'read',
@@ -161,13 +165,16 @@ export class Dialog360Client {
     const fd = new FormData();
     fd.append('messaging_product', 'whatsapp');
     fd.append('file', new Blob([new Uint8Array(buffer)], { type: mime }), filename);
-    const res = await fetch(
-      `${this.baseUrl(mode)}${mode === 'sandbox' ? '/v1/media' : '/media'}`,
-      { method: 'POST', headers: { 'D360-API-KEY': apiKey }, body: fd },
-    );
-    const body = (await res.json().catch(() => null)) as
-      | { id?: string; media?: Array<{ id?: string }>; error?: unknown }
-      | null;
+    const res = await fetch(`${this.baseUrl(mode)}${mode === 'sandbox' ? '/v1/media' : '/media'}`, {
+      method: 'POST',
+      headers: { 'D360-API-KEY': apiKey },
+      body: fd,
+    });
+    const body = (await res.json().catch(() => null)) as {
+      id?: string;
+      media?: Array<{ id?: string }>;
+      error?: unknown;
+    } | null;
     if (!res.ok) {
       throw new Error(
         `Media upload HTTP ${res.status}: ${JSON.stringify(body ?? '').slice(0, 300)}`,
@@ -316,7 +323,10 @@ export class Dialog360Client {
     const isBinary = (contentType: string): boolean =>
       Boolean(contentType) && !contentType.includes('json') && !contentType.includes('html');
 
-    const paths = mode === 'sandbox' ? [`/v1/media/${mediaId}`, `/${mediaId}`] : [`/${mediaId}`, `/v1/media/${mediaId}`];
+    const paths =
+      mode === 'sandbox'
+        ? [`/v1/media/${mediaId}`, `/${mediaId}`]
+        : [`/${mediaId}`, `/v1/media/${mediaId}`];
     for (const path of paths) {
       try {
         const res = await http.get(path, { responseType: 'arraybuffer' });
@@ -356,9 +366,7 @@ export class Dialog360Client {
           }
         }
       } catch (err) {
-        this.logger.warn(
-          `Media ${mediaId} via ${path} fallo: ${(err as Error).message}`,
-        );
+        this.logger.warn(`Media ${mediaId} via ${path} fallo: ${(err as Error).message}`);
         continue;
       }
     }

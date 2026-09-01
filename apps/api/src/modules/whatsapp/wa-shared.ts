@@ -68,7 +68,11 @@ export function waTypeOf(mime: string): 'image' | 'video' | 'audio' | 'file' {
  * incluye el detalle real que devolvio el servidor (leccion aprendida: un
  * generico "rechazo el token" escondia "number blocked due to lack of payment").
  */
-export function translateWaError(err: unknown, fallback: string, logger: Logger): BadRequestException {
+export function translateWaError(
+  err: unknown,
+  fallback: string,
+  logger: Logger,
+): BadRequestException {
   if (isAxiosError(err)) {
     const status = err.response?.status;
     const data = err.response?.data as
