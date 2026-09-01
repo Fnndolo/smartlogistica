@@ -7,6 +7,7 @@ import { RealtimeService } from '../../infrastructure/realtime/realtime.service'
 import { StorageService } from '../../infrastructure/storage/storage.service';
 import { Dialog360Client } from './dialog360-client.service';
 import { WaConnectionService } from './wa-connection.service';
+import { WaFlowService } from './wa-flow.service';
 import { WaPublisherService } from './wa-publisher.service';
 import { WaUpsellService } from './wa-upsell.service';
 import { normBtn, tenDigits } from './wa-shared';
@@ -45,6 +46,7 @@ export class WhatsappWebhookService {
     private readonly storage: StorageService,
     private readonly realtime: RealtimeService,
     private readonly waConn: WaConnectionService,
+    private readonly flows: WaFlowService,
     private readonly publisher: WaPublisherService,
     private readonly upsell: WaUpsellService,
   ) {}
@@ -209,6 +211,16 @@ export class WhatsappWebhookService {
   ): Promise<void> {
     const d360 = await this.waConn.forLine(tenantId, prisma, lineId);
     if (!d360) return; // sin conexion no hay como responder
+
+    // ¿El bot esta encendido para la tienda de este cliente? Se mira contra su
+    // pedido mas reciente. Sin filas configuradas devuelve siempre "si", que es
+    // el comportamiento de antes.
+    const lastOrder = await prisma.order.findFirst({
+      where: { customerPhone: { endsWith: phone } },
+      orderBy: { marketplaceCreatedAt: 'desc' },
+      select: { provider: true, accountName: true },
+    });
+    if (lastOrder && !(await this.flows.resolve(prisma, 'autoreply', lastOrder))) return;
 
     const contact = await prisma.waContact.findUnique({ where: { phone } });
     const state = (contact?.flowState ?? null) as FlowState | null;

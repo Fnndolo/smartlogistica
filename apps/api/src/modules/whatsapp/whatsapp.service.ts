@@ -39,6 +39,7 @@ import { StorageService } from '../../infrastructure/storage/storage.service';
 import { getTenantContext } from '../../infrastructure/tenant-context';
 import { Dialog360Client } from './dialog360-client.service';
 import { WaConnectionService } from './wa-connection.service';
+import { WaFlowService } from './wa-flow.service';
 import { normalizeSticker, toOggOpus } from './wa-media.util';
 import { WaPublisherService } from './wa-publisher.service';
 import { WaUpsellService } from './wa-upsell.service';
@@ -135,6 +136,7 @@ export class WhatsappService {
     private readonly realtime: RealtimeService,
     private readonly control: ControlPlaneService,
     private readonly waConn: WaConnectionService,
+    private readonly flows: WaFlowService,
     private readonly publisher: WaPublisherService,
     private readonly webhook: WhatsappWebhookService,
     private readonly upsell: WaUpsellService,
@@ -1183,6 +1185,12 @@ export class WhatsappService {
     try {
       const phone = order.customerPhone ? tenDigits(order.customerPhone) : '';
       if (phone.length < 7) return;
+      // ¿Encendido para la tienda de este pedido? Sin filas, siempre si.
+      const ref = await prisma.order.findUnique({
+        where: { id: order.id },
+        select: { provider: true, accountName: true },
+      });
+      if (ref && !(await this.flows.resolve(prisma, 'guide', ref))) return;
       const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
       if (!d360 || d360.mode !== 'production') return;
       const list = await this.cachedTemplates(tenantId, d360.http).catch(() => []);
@@ -1608,6 +1616,10 @@ export class WhatsappService {
       // (un backfill de pedidos viejos JAMAS escribe a nadie).
       if (order.status !== 'ready-for-handling') return;
       if (Date.now() - order.marketplaceCreatedAt.getTime() > CONFIRMATION_MAX_AGE_MS) return;
+      // ¿Este flujo esta encendido para la tienda de este pedido? Sin filas
+      // configuradas devuelve siempre "si", que es el comportamiento de antes.
+      const flow = await this.flows.resolve(prisma, 'confirmation', order);
+      if (!flow) return;
     }
     const phone = order.customerPhone ? tenDigits(order.customerPhone) : '';
     if (!phone) return fail('Este pedido no tiene teléfono del cliente');

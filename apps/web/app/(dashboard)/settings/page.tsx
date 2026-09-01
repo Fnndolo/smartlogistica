@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { Boxes, Building2, Link2, Mail, Package, Users } from 'lucide-react';
+import { Boxes, Building2, Link2, Mail, MessageCircle, Package, Users } from 'lucide-react';
 import type { Platform, SessionUser, VtexFees } from '@smartlogistica/shared';
 
 import {
@@ -147,6 +147,18 @@ export default async function SettingsPage() {
                 description="Como los «Mis paquetes» de tu panel de Skydropx (su API no los deja traer): al generar en modo Skydropx los eliges y llenan medidas y peso de un clic. Independientes de los paquetes de Coordinadora."
               />
             </div>
+          </section>
+        ) : null}
+
+        {isOwner ? (
+          <section className="space-y-2.5">
+            <SectionHead>WhatsApp</SectionHead>
+            <SettingsLink
+              href="/settings/whatsapp"
+              icon={<MessageCircle />}
+              title="Configuración de WhatsApp"
+              description="Los números conectados y los mensajes que salen solos: confirmación del pedido, guía, respaldo post-venta y las respuestas automáticas. Aquí se encienden y se apagan."
+            />
           </section>
         ) : null}
       </div>

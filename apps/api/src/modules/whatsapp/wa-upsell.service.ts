@@ -9,6 +9,7 @@ import { RealtimeService } from '../../infrastructure/realtime/realtime.service'
 import { tenantContext } from '../../infrastructure/tenant-context';
 import { Dialog360Client } from './dialog360-client.service';
 import { WaConnectionService } from './wa-connection.service';
+import { WaFlowService } from './wa-flow.service';
 import { WaPublisherService } from './wa-publisher.service';
 import { normBtn, tenDigits } from './wa-shared';
 
@@ -100,6 +101,7 @@ export class WaUpsellService {
     @InjectQueue(QUEUE_WA_UPSELL) private readonly queue: Queue,
     private readonly dialog360: Dialog360Client,
     private readonly waConn: WaConnectionService,
+    private readonly flows: WaFlowService,
     private readonly publisher: WaPublisherService,
     private readonly realtime: RealtimeService,
   ) {}
@@ -157,9 +159,19 @@ export class WaUpsellService {
   ): Promise<void> {
     const order = await prisma.order.findUnique({
       where: { id: orderId },
-      select: { id: true, customerPhone: true, customerName: true, rawPayload: true },
+      select: {
+        id: true,
+        customerPhone: true,
+        customerName: true,
+        rawPayload: true,
+        provider: true,
+        accountName: true,
+      },
     });
     if (!order?.customerPhone) return;
+    // ¿Encendido para la tienda de este pedido? Sin filas configuradas
+    // devuelve siempre "si" (el comportamiento de antes, intacto).
+    if (!(await this.flows.resolve(prisma, 'upsell', order))) return;
     const phone = tenDigits(order.customerPhone);
     if (phone.length < 7) return;
     if (!isPhoneOrder(order.rawPayload)) return;
