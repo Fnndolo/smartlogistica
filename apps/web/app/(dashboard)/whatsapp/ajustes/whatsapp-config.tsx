@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Loader2, MessageCircle, Phone, Sparkles } from 'lucide-react';
+import { AlertTriangle, Loader2, MessageCircle, Phone, Plus, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   WA_FLOW_HELP,
@@ -13,6 +13,7 @@ import {
 } from '@smartlogistica/shared';
 
 import { Button } from '@/components/ui/button';
+import { FlowDrawer, type FlowSession } from './flow-drawer';
 import { ApiError, api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 
@@ -40,6 +41,9 @@ const KINDS: WaFlowKind[] = ['confirmation', 'guide', 'upsell', 'autoreply'];
  */
 export function WhatsappConfig({ initial }: { initial?: WaConfigOverview }) {
   const qc = useQueryClient();
+  // Una SOLA instancia del panel para toda la pantalla: montar uno por fila
+  // multiplicaria los portales y los bloqueos de scroll.
+  const [session, setSession] = useState<FlowSession | null>(null);
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['wa-config'],
@@ -189,10 +193,21 @@ export function WhatsappConfig({ initial }: { initial?: WaConfigOverview }) {
               flows={byKind.get(kind) ?? []}
               showScope={data.showScope}
               sources={data.sources}
+              onEdit={(flow) =>
+                setSession({ id: `${kind}-${flow?.id ?? 'nuevo'}-${Date.now()}`, kind, flow })
+              }
             />
           ))}
         </div>
       </section>
+
+      {/* key = apertura: cada vez que se abre, el formulario nace limpio. */}
+      <FlowDrawer
+        key={session?.id ?? 'cerrado'}
+        session={session}
+        data={data}
+        onClose={() => setSession(null)}
+      />
     </div>
   );
 }
@@ -203,11 +218,13 @@ function FlowRow({
   flows,
   showScope,
   sources,
+  onEdit,
 }: {
   kind: WaFlowKind;
   flows: WaFlow[];
   showScope: boolean;
   sources: WaConfigOverview['sources'];
+  onEdit: (flow: WaFlow | null) => void;
 }) {
   const qc = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
@@ -251,6 +268,14 @@ function FlowRow({
             {WA_FLOW_HELP[kind]}
           </p>
         </div>
+        {/* Se puede configurar este solo, sin tomar el control de los cuatro. */}
+        <Button
+          variant="ghost"
+          onClick={() => onEdit(null)}
+          className={cn(BTN_GHOST_CLS, BTN_SM_CLS, 'shrink-0')}
+        >
+          Configurar
+        </Button>
       </div>
     );
   }
@@ -294,18 +319,38 @@ function FlowRow({
               </p>
             </div>
 
-            <Switch
-              on={f.enabled}
-              busy={busy === f.id}
-              label={`${f.enabled ? 'Apagar' : 'Encender'} ${WA_FLOW_LABEL[kind]}`}
-              onToggle={() => {
-                setBusy(f.id);
-                toggle.mutate(f);
-              }}
-            />
+            <div className="flex shrink-0 items-center gap-2.5">
+              <Switch
+                on={f.enabled}
+                busy={busy === f.id}
+                label={`${f.enabled ? 'Apagar' : 'Encender'} ${WA_FLOW_LABEL[kind]}`}
+                onToggle={() => {
+                  setBusy(f.id);
+                  toggle.mutate(f);
+                }}
+              />
+              <Button
+                variant="ghost"
+                onClick={() => onEdit(f)}
+                className={cn(BTN_GHOST_CLS, BTN_SM_CLS)}
+              >
+                Editar
+              </Button>
+            </div>
           </div>
         ))}
       </div>
+
+      {showScope ? (
+        <Button
+          variant="ghost"
+          onClick={() => onEdit(null)}
+          className={cn(BTN_GHOST_CLS, BTN_SM_CLS)}
+        >
+          <Plus />
+          Otra regla para otra tienda
+        </Button>
+      ) : null}
 
       {!flows.some((f) => f.enabled) ? (
         <p className="flex items-start gap-2.5 rounded-[11px] bg-amber-500/10 px-3.5 py-2.5 text-[12.5px] leading-[1.45] text-amber-600 dark:text-amber-400">
