@@ -1,25 +1,35 @@
 import { Injectable } from '@nestjs/common';
 import type { AxiosInstance } from 'axios';
-import type { Dialog360Mode } from '@smartlogistica/shared';
+import type { Dialog360Mode, WaProvider } from '@smartlogistica/shared';
 import type { PrismaClient } from '.prisma/tenant-client';
 
 import { EnvelopeService } from '../../infrastructure/crypto/envelope.service';
 import { Dialog360Client } from './dialog360-client.service';
+import { WaClientFactory } from './wa-client.factory';
+import type { WaClient } from './wa-client.port';
 
 /**
- * Credenciales 360dialog LISTAS para usar. Servicio propio porque lo
+ * Credenciales de WhatsApp LISTAS para usar. Servicio propio porque lo
  * necesitan DOS lados: los envios (WhatsappService) y la recepcion
  * (WhatsappWebhookService) — asi ninguno depende del otro.
  */
 type D360Ready = {
-  http: AxiosInstance;
+  /** Con QUE se habla. Es lo unico que deberia usar el codigo de negocio: no
+   *  sabe ni le importa si detras hay 360dialog o la API nativa de Meta. */
+  client: WaClient;
+  /** Sigue aqui porque las guardas de sandbox son de 360dialog y las lee el
+   *  negocio. `http` y `apiKey` NO estan a proposito: sacarlos convirtio en
+   *  error de compilacion cualquier sitio que siguiera hablando con el
+   *  proveedor a mano en vez de por el puerto. */
   mode: Dialog360Mode;
-  apiKey: string;
   /** Que LINEA es. Viaja con las credenciales para poder sellar cada mensaje
    *  con el numero por el que salio, sin volver a consultar. */
   lineId: string;
   label: string;
-  provider: string;
+  provider: WaProvider;
+  /** Solo con la API nativa de Meta (en 360dialog van null). */
+  phoneNumberId: string | null;
+  wabaId: string | null;
 } | null;
 
 /** Cache de credenciales listas por tenant: sin el, CADA envio y CADA medio
@@ -33,6 +43,7 @@ export class WaConnectionService {
   constructor(
     private readonly dialog360: Dialog360Client,
     private readonly envelope: EnvelopeService,
+    private readonly clients: WaClientFactory,
   ) {}
 
   /**
@@ -66,12 +77,13 @@ export class WaConnectionService {
       const apiKey = await this.envelope.decryptField(tenantId, conn.encryptedApiKey);
       const mode: Dialog360Mode = conn.mode === 'sandbox' ? 'sandbox' : 'production';
       value = {
-        http: this.dialog360.buildHttp(apiKey, mode),
+        client: this.clients.create(conn, apiKey),
         mode,
-        apiKey,
         lineId: conn.id,
         label: conn.label,
-        provider: conn.provider,
+        provider: conn.provider === 'meta' ? 'meta' : 'dialog360',
+        phoneNumberId: conn.phoneNumberId,
+        wabaId: conn.wabaId,
       };
     }
     this.cache.set(key, { at: Date.now(), value });

@@ -53,7 +53,8 @@ export class WebhooksController {
   @Public()
   @Post('vtex/:tenantSlug')
   @HttpCode(200)
-  @Throttle({ default: { limit: 1000, ttl: 60_000 } })
+  // Ver la nota del webhook de WhatsApp: la clave tiene que ser 'global'.
+  @Throttle({ global: { limit: 1000, ttl: 60_000 } })
   async vtex(
     @Param('tenantSlug') tenantSlug: string,
     @Query('account') accountName: string | undefined,

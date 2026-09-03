@@ -1,5 +1,4 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
-import type { AxiosInstance } from 'axios';
 import type {
   CreateWaTemplateInput,
   WaFlowKind,
@@ -10,9 +9,9 @@ import type {
 import { isAdmin } from '../../common/rbac';
 import { getTenantContext } from '../../infrastructure/tenant-context';
 import type { AuthContext } from '../../common/types/authenticated-request';
-import { Dialog360Client } from './dialog360-client.service';
+import type { WaClient } from './wa-client.port';
 import { WaConnectionService } from './wa-connection.service';
-import { translateWaError } from './wa-shared';
+import { isD360Sandbox, translateWaError } from './wa-shared';
 
 /** Una plantilla sin el cruce con los mensajes automaticos. */
 type RawTemplate = Omit<WaTemplateDetail, 'usedBy'>;
@@ -34,10 +33,7 @@ type RawTemplate = Omit<WaTemplateDetail, 'usedBy'>;
 export class WaTemplateService {
   private readonly logger = new Logger(WaTemplateService.name);
 
-  constructor(
-    private readonly dialog360: Dialog360Client,
-    private readonly waConn: WaConnectionService,
-  ) {}
+  constructor(private readonly waConn: WaConnectionService) {}
 
   /** Cache corta por LINEA: listar cuesta ~0.5-1s contra 360dialog. */
   private readonly cache = new Map<string, { at: number; list: RawTemplate[] }>();
@@ -49,12 +45,13 @@ export class WaTemplateService {
     const { tenantId, prisma } = getTenantContext();
     const conn = await this.waConn.forLine(tenantId, prisma, lineId);
     if (!conn) throw new BadRequestException('No hay ninguna línea de WhatsApp conectada');
-    // El sandbox no tiene WABA propia: no hay plantillas que administrar.
-    if (conn.mode !== 'production') {
+    // El sandbox de 360dialog no tiene WABA propia: no hay plantillas que
+    // administrar. Una linea de Meta SIEMPRE las tiene.
+    if (isD360Sandbox(conn)) {
       return { lineId: conn.lineId, lineLabel: conn.label, templates: [] };
     }
 
-    const raw = await this.cached(tenantId, conn.lineId, conn.http);
+    const raw = await this.cached(tenantId, conn.lineId, conn.client);
     const usage = await this.usage(conn.lineId);
     return {
       lineId: conn.lineId,
@@ -73,13 +70,13 @@ export class WaTemplateService {
     const { tenantId, prisma } = getTenantContext();
     const conn = await this.waConn.forLine(tenantId, prisma, input.lineId);
     if (!conn) throw new BadRequestException('Esa línea de WhatsApp ya no existe');
-    if (conn.mode !== 'production') {
-      throw new BadRequestException('El sandbox no tiene plantillas propias');
+    if (isD360Sandbox(conn)) {
+      throw new BadRequestException('El sandbox de 360dialog no tiene plantillas propias');
     }
 
     // Se comprueba ANTES de llamar a Meta: su error por nombre repetido es
     // ilegible, y el nombre es lo unico que ya no se puede cambiar despues.
-    const existing = await this.cached(tenantId, conn.lineId, conn.http);
+    const existing = await this.cached(tenantId, conn.lineId, conn.client);
     if (existing.some((t) => t.name === input.name && t.language === input.language)) {
       throw new BadRequestException(
         `Ya existe una plantilla llamada "${input.name}" en ese idioma`,
@@ -87,7 +84,7 @@ export class WaTemplateService {
     }
 
     try {
-      await this.dialog360.createTemplate(conn.http, input);
+      await conn.client.createTemplate(input);
     } catch (err) {
       throw translateWaError(err, 'Meta no aceptó la plantilla', this.logger);
     }
@@ -95,7 +92,7 @@ export class WaTemplateService {
 
     // Se relee para devolver lo que quedo DE VERDAD en la WABA: Meta
     // recategoriza por su cuenta (una de servicio le puede volver publicidad).
-    const after = await this.cached(tenantId, conn.lineId, conn.http).catch(
+    const after = await this.cached(tenantId, conn.lineId, conn.client).catch(
       () => [] as RawTemplate[],
     );
     const saved = after.find((t) => t.name === input.name);
@@ -114,6 +111,7 @@ export class WaTemplateService {
       variables: input.examples.length,
       examples: input.examples,
       createdAt: null,
+      templateId: null,
       usedBy: [],
     };
   }
@@ -137,7 +135,7 @@ export class WaTemplateService {
     }
 
     try {
-      await this.dialog360.deleteTemplate(conn.http, name);
+      await conn.client.deleteTemplate(name);
     } catch (err) {
       throw translateWaError(err, 'No se pudo borrar la plantilla', this.logger);
     }
@@ -166,17 +164,13 @@ export class WaTemplateService {
     return out;
   }
 
-  private async cached(
-    tenantId: string,
-    lineId: string,
-    http: AxiosInstance,
-  ): Promise<RawTemplate[]> {
+  private async cached(tenantId: string, lineId: string, client: WaClient): Promise<RawTemplate[]> {
     const key = `${tenantId}:${lineId}`;
     const hit = this.cache.get(key);
     if (hit && Date.now() - hit.at < WaTemplateService.TTL_MS) return hit.list;
     let list: RawTemplate[];
     try {
-      list = await this.dialog360.listTemplatesDetailed(http);
+      list = await client.listTemplatesDetailed();
     } catch (err) {
       throw translateWaError(err, 'No se pudieron cargar las plantillas', this.logger);
     }

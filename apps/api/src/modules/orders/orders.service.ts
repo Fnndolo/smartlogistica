@@ -72,6 +72,7 @@ import { MktDocumentService } from '../marketplaces/vtex/mkt-document.service';
 import { VtexClient } from '../marketplaces/vtex/vtex-client.service';
 import { DispatchRelationService } from '../marketplaces/skydropx/dispatch-relation.service';
 import { SkydropxService } from '../marketplaces/skydropx/skydropx.service';
+import { waCanReachCustomers } from '../whatsapp/wa-shared';
 import { WaUpsellService } from '../whatsapp/wa-upsell.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { WarehousesService } from '../warehouses/warehouses.service';
@@ -295,7 +296,9 @@ export class OrdersService {
             new Map<string, UnreadInfo>(),
             new Map<string, OrderSummary['reactions']>(),
             new Set<string>(),
-            { d360: null } as { d360: { createdAt: Date; mode: string } | null },
+            { d360: null } as {
+              d360: { createdAt: Date; mode: string; provider: string } | null;
+            },
           ]
         : await Promise.all([
             prisma.orderMessage
@@ -319,7 +322,10 @@ export class OrdersService {
             prisma.waLine
               .findFirst({
                 orderBy: { createdAt: 'asc' },
-                select: { createdAt: true, mode: true },
+                // `provider` va aqui porque la regla de "¿alcanza a un cliente
+                // real?" depende de el: el sandbox es de 360dialog, Meta no
+                // tiene. Sin traerlo, una linea de Meta se juzgaba por casualidad.
+                select: { createdAt: true, mode: true, provider: true },
               })
               .then((d360) => ({ d360 })),
           ]);
@@ -333,7 +339,7 @@ export class OrdersService {
     const waStateOf = (o: OrderWithItems): OrderSummary['waConfirmation'] => {
       if (!o.customerPhone) return null;
       if (o.provider !== 'vtex' && o.provider !== 'manual') return null;
-      const governs = waConn.d360 && (o.provider === 'manual' || waConn.d360.mode === 'production');
+      const governs = waCanReachCustomers(waConn.d360, o.provider);
       if (!governs) return null;
       if (waSent.has(o.id)) return 'sent';
       const since =

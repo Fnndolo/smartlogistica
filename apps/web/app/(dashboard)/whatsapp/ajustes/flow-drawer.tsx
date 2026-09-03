@@ -392,7 +392,7 @@ function TemplatePicker({
   chosen: string[];
   onChange: (names: string[]) => void;
 }) {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, error } = useQuery({
     queryKey: ['wa-templates', lineId],
     queryFn: () =>
       api.get<WaTemplateListForLine>(
@@ -422,6 +422,13 @@ function TemplatePicker({
       </p>
       {isLoading ? (
         <p className="mt-2 text-[12px] text-hint">Cargando…</p>
+      ) : error ? (
+        // "No pude preguntarle a la WABA" NO es lo mismo que "no hay
+        // plantillas": confundirlos hace que un fallo de credenciales parezca
+        // una cuenta vacia y nadie lo investiga.
+        <p className="mt-2 text-[12px] text-destructive">
+          {error instanceof ApiError ? error.message : 'No se pudieron cargar las plantillas.'}
+        </p>
       ) : sorted.length === 0 ? (
         <p className="mt-2 text-[12px] text-hint">
           Esta línea no tiene plantillas aprobadas todavía.

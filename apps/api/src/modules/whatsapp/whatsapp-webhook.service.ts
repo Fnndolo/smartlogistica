@@ -27,6 +27,21 @@ type Any = Record<string, any>;
  * contactos (state_sync), estados de entrega y el flujo de confirmacion.
  * WhatsappService (la fachada) delega aqui su inboundCloud.
  */
+/**
+ * Campos del webhook que SI traen mensajes. Meta suscribe la app a varios y
+ * manda todos por la misma URL; 360dialog solo reenvia estos.
+ */
+const MESSAGE_FIELDS = [
+  'messages',
+  'message_echoes',
+  'smb_message_echoes',
+  // Coexistencia: el historial del celular y la libreta de contactos llegan
+  // por campos propios y SI se procesan mas abajo.
+  'history',
+  'smb_app_state_sync',
+  'state_sync',
+];
+
 @Injectable()
 export class WhatsappWebhookService {
   private readonly logger = new Logger(WhatsappWebhookService.name);
@@ -53,25 +68,53 @@ export class WhatsappWebhookService {
     /** Linea por la que ENTRO. null = la predeterminada (una sola linea). */
     lineId: string | null = null,
   ): Promise<void> {
-    const root = payload as { entry?: Array<{ changes?: Array<{ value?: Any }> }> };
+    const root = payload as {
+      entry?: Array<{ changes?: Array<{ field?: unknown; value?: Any }> }>;
+    };
     const touched = new Set<string>();
+
+    // Con UNA sola linea, y solo entonces, "la unica que hay" es una respuesta
+    // correcta a "¿por donde entro esto?". Con dos o mas hay que mirar el
+    // sobre: caer en la PREDETERMINADA seria adivinar, y adivinar mal aqui
+    // significa contestarle al cliente por un numero que el nunca uso.
+    const soleLine =
+      lineId === null && (await prisma.waLine.count()) === 1
+        ? ((await this.waConn.forLine(tenantId, prisma, null))?.lineId ?? null)
+        : null;
 
     for (const entry of root.entry ?? []) {
       for (const change of entry.changes ?? []) {
         const v = change.value;
         if (!v || typeof v !== 'object') continue;
+        // De que linea es ESTE lote. El `?line=` manda cuando viene; si no
+        // (la linea vieja de 360dialog se registro sin el), se identifica por
+        // el numero que el propio sobre declara. Si nada lo identifica queda
+        // null, que es el comportamiento de siempre: la fila no miente y el
+        // enrutado del chat se apoya en el ultimo SALIENTE, que si sabe por
+        // donde salio.
+        const resolved = lineId ?? (await this.lineFromMetadata(prisma, v)) ?? soleLine;
+        // Meta manda por el MISMO webhook campos que no son mensajes
+        // (aprobaciones de plantilla, calidad del numero, cambios de cuenta).
+        // Sin este filtro cada uno acabaria en el diagnostico de abajo, que
+        // escribe una fila en la base: ruido constante y creciente.
+        if (typeof change.field === 'string' && !MESSAGE_FIELDS.includes(change.field)) {
+          this.logger.log(`Webhook Cloud: campo '${change.field}' ignorado (no es de mensajes)`);
+          continue;
+        }
         // Nombre del contacto segun WhatsApp (viene junto a los mensajes).
         const names = new Map<string, string>();
         for (const c of v.contacts ?? []) {
           if (c?.wa_id && c?.profile?.name) names.set(String(c.wa_id), String(c.profile.name));
         }
         for (const m of v.messages ?? []) {
-          const phone = await this.storeCloudMessage(tenantId, prisma, m, 'in', names, { lineId });
+          const phone = await this.storeCloudMessage(tenantId, prisma, m, 'in', names, {
+            lineId: resolved,
+          });
           if (phone) {
             touched.add(phone);
             // El "cerebro" del flujo de confirmacion: botones y captura de la
             // direccion nueva. Best-effort — jamas tumba la recepcion.
-            await this.handleFlowReply(tenantId, prisma, phone, m, lineId).catch((err) =>
+            await this.handleFlowReply(tenantId, prisma, phone, m, resolved).catch((err) =>
               this.logger.warn(
                 `Flujo de confirmacion fallo (${phone}): ${err instanceof Error ? err.message : err}`,
               ),
@@ -80,12 +123,16 @@ export class WhatsappWebhookService {
         }
         // Coexistencia: lo que el negocio envia desde la APP se espeja aqui.
         for (const m of v.message_echoes ?? v.smb_message_echoes ?? []) {
-          const phone = await this.storeCloudMessage(tenantId, prisma, m, 'out', names, { lineId });
+          const phone = await this.storeCloudMessage(tenantId, prisma, m, 'out', names, {
+            lineId: resolved,
+          });
           if (phone) touched.add(phone);
         }
         // Ediciones que lleguen en campo propio (formas nuevas de Meta).
         for (const m of v.message_edits ?? []) {
-          const phone = await this.storeCloudMessage(tenantId, prisma, m, 'in', names, { lineId });
+          const phone = await this.storeCloudMessage(tenantId, prisma, m, 'in', names, {
+            lineId: resolved,
+          });
           if (phone) touched.add(phone);
         }
         // Diagnostico: campos del webhook que AUN no procesamos — al log.
@@ -232,7 +279,7 @@ export class WhatsappWebhookService {
 
     const to = `57${phone}`;
     const say = async (body: string): Promise<void> => {
-      const wamid = await this.dialog360.sendText(d360.http, d360.mode, to, body);
+      const wamid = await d360.client.sendText(to, body);
       const row = await prisma.waMessage.create({
         data: {
           phone,
@@ -251,13 +298,7 @@ export class WhatsappWebhookService {
       body: string,
       buttons: Array<{ id: string; title: string }>,
     ): Promise<void> => {
-      const wamid = await this.dialog360.sendInteractiveButtons(
-        d360.http,
-        d360.mode,
-        to,
-        body,
-        buttons,
-      );
+      const wamid = await d360.client.sendInteractiveButtons(to, body, buttons);
       const row = await prisma.waMessage.create({
         data: {
           phone,
@@ -565,6 +606,34 @@ export class WhatsappWebhookService {
    * Guarda UN mensaje del payload Cloud (con dedup por wamid). Devuelve el
    * telefono. `instant:false` (import de historial) no publica SSE por mensaje.
    */
+  /**
+   * De que linea es un lote del webhook, segun lo que el propio sobre declara.
+   *
+   * `phone_number_id` es el UNICO identificador que distingue numeros: el id de
+   * la WABA lo comparten todos los numeros de la cuenta. Si no viene, se
+   * intenta por el numero visible, y solo si casa con UNA linea: dos lineas con
+   * el mismo numero visible no se pueden desempatar y es mejor null que un
+   * sello inventado.
+   */
+  private async lineFromMetadata(prisma: PrismaClient, v: Any): Promise<string | null> {
+    const pnid = v?.metadata?.phone_number_id;
+    if (typeof pnid === 'string' && pnid) {
+      const byId = await prisma.waLine
+        .findFirst({ where: { phoneNumberId: pnid }, select: { id: true } })
+        .catch(() => null);
+      if (byId) return byId.id;
+    }
+    const shown = tenDigits(String(v?.metadata?.display_phone_number ?? ''));
+    if (shown.length >= 7) {
+      const rows = await prisma.waLine
+        .findMany({ where: { phone: { not: null } }, select: { id: true, phone: true } })
+        .catch(() => []);
+      const hits = rows.filter((l) => tenDigits(l.phone ?? '') === shown);
+      if (hits.length === 1) return hits[0].id;
+    }
+    return null;
+  }
+
   private async storeCloudMessage(
     tenantId: string,
     prisma: PrismaClient,
@@ -713,7 +782,7 @@ export class WhatsappWebhookService {
         if (media.id) {
           const d360 = await this.waConn.forLine(tenantId, prisma, opts.lineId ?? null);
           if (d360 && this.storage.isConfigured()) {
-            const bin = await this.dialog360.downloadMedia(d360.http, d360.mode, String(media.id));
+            const bin = await d360.client.downloadMedia(String(media.id));
             if (bin) {
               const ext = (bin.mime.split('/')[1] ?? 'bin').split(';')[0].trim();
               const key = `tenants/${tenantId}/whatsapp/${phone}/${randomUUID()}.${ext}`;

@@ -43,7 +43,11 @@ export class Dialog360WebhookController {
   @Public()
   @Post(':tenantSlug')
   @HttpCode(200)
-  @Throttle({ default: { limit: 3000, ttl: 60_000 } })
+  // OJO con la clave: el unico limitador registrado se llama 'global'
+  // (app.module.ts). Con 'default' este decorador no aplicaba nada y el tope
+  // real eran 100/min — un pico de mensajes devolvia 429 al proveedor, que
+  // reintenta, que amplifica el pico.
+  @Throttle({ global: { limit: 3000, ttl: 60_000 } })
   async receive(
     @Param('tenantSlug') tenantSlug: string,
     @Query('token') token: string | undefined,

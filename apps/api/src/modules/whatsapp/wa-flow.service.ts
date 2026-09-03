@@ -25,6 +25,7 @@ import { EnvelopeService } from '../../infrastructure/crypto/envelope.service';
 import { ControlPlaneService } from '../../infrastructure/prisma/control-plane.service';
 import { getTenantContext } from '../../infrastructure/tenant-context';
 import { Dialog360Client } from './dialog360-client.service';
+import { WaClientFactory } from './wa-client.factory';
 import { WaConnectionService } from './wa-connection.service';
 import {
   DEFAULT_CONFIRMATION_MAX_AGE_HOURS,
@@ -68,6 +69,7 @@ export class WaFlowService {
     private readonly envelope: EnvelopeService,
     private readonly dialog360: Dialog360Client,
     private readonly waConn: WaConnectionService,
+    private readonly clients: WaClientFactory,
   ) {}
 
   /**
@@ -199,7 +201,8 @@ export class WaFlowService {
     const encryptedAppSecret = input.appSecret
       ? await this.envelope.encryptField(tenantId, input.appSecret)
       : null;
-    const verifyToken = input.provider === 'meta' ? randomBytes(16).toString('hex') : null;
+    const isMeta = input.provider === 'meta';
+    const verifyToken = isMeta ? randomBytes(16).toString('hex') : null;
 
     const line = await prisma.waLine.create({
       data: {
@@ -211,39 +214,53 @@ export class WaFlowService {
         wabaId: input.wabaId ?? null,
         verifyToken,
         countryCode: input.countryCode,
-        mode: input.mode,
-        status: 'connected',
+        // `mode` es de 360dialog: Meta no tiene un host de pruebas aparte.
+        mode: isMeta ? 'production' : input.mode,
+        // Meta no queda lista hasta que llame al GET de verificacion, y eso
+        // depende de que alguien pegue la URL en el panel de la App.
+        status: isMeta ? 'pending' : 'connected',
       },
     });
 
-    const webhookUrl =
-      `${publicBaseUrl.replace(/\/$/, '')}/v1/webhooks/dialog360/${encodeURIComponent(tenant.slug)}` +
-      `?token=${encodeURIComponent(secret)}&line=${encodeURIComponent(line.id)}`;
+    // Cada proveedor entra por SU ruta. La de 360dialog no se toca: esta
+    // registrada en su servidor y es por donde recibe el numero que ya atiende.
+    const base = `${publicBaseUrl.replace(/\/$/, '')}/v1/webhooks`;
+    const slug = encodeURIComponent(tenant.slug);
+    const webhookUrl = isMeta
+      ? `${base}/meta/${slug}?line=${encodeURIComponent(line.id)}`
+      : `${base}/dialog360/${slug}?token=${encodeURIComponent(secret)}&line=${encodeURIComponent(line.id)}`;
 
-    if (input.provider === 'dialog360') {
-      try {
-        await this.dialog360.setWebhook(
-          this.dialog360.buildHttp(input.apiKey, input.mode),
-          webhookUrl,
-        );
-      } catch (err) {
-        // Credencial mala: no se deja una linea muerta en la lista.
-        await prisma.waLine.delete({ where: { id: line.id } }).catch(() => null);
-        throw new BadRequestException(
-          `No se pudo conectar con 360dialog: ${(err as Error).message}`.slice(0, 300),
-        );
-      }
+    // Se valida la credencial de VERDAD, con los dos proveedores. Antes solo se
+    // comprobaba 360dialog: una linea de Meta con un token malo se guardaba
+    // igual y fallaba mucho despues, al intentar enviar.
+    let phone: string | null = null;
+    try {
+      const client = this.clients.create(line, input.apiKey);
+      phone = (await client.verifyCredentials()).phone;
+      await client.registerWebhook(webhookUrl);
+    } catch (err) {
+      // Credencial mala: no se deja una linea muerta en la lista.
+      await prisma.waLine.delete({ where: { id: line.id } }).catch(() => null);
+      throw new BadRequestException(
+        `No se pudo conectar con ${isMeta ? 'Meta' : '360dialog'}: ${(err as Error).message}`.slice(
+          0,
+          300,
+        ),
+      );
     }
 
     const saved = await prisma.waLine.update({
       where: { id: line.id },
-      data: { webhookUrl },
+      data: { webhookUrl, ...(phone ? { phone } : {}) },
     });
 
-    // Predeterminada: si es la primera, siempre; si lo pidieron, se la quita a
-    // la anterior (dos predeterminadas serian un empate sin desempate).
+    // Predeterminada: si es la PRIMERA linea del tenant, siempre; si no, solo
+    // si lo pidieron explicitamente. Es importante que sea explicito: la
+    // predeterminada es por donde sale todo lo que no dice por donde ir, asi
+    // que una linea nueva que se auto-nombrase predeterminada le robaria el
+    // trafico al numero que ya atiende clientes.
     const count = await prisma.waLine.count();
-    if (input.isDefault || count === 1) await this.makeDefault(saved.id);
+    if (count === 1 || input.isDefault) await this.makeDefault(saved.id);
 
     this.waConn.invalidate(tenantId);
     const fresh = await prisma.waLine.findUnique({ where: { id: saved.id } });
@@ -439,7 +456,9 @@ function toLineSummary(r: {
     phone: r.phone,
     mode: r.mode === 'sandbox' ? 'sandbox' : 'production',
     isDefault: r.isDefault,
-    status: r.status === 'error' ? 'error' : 'connected',
+    // 'pending' es real y hay que dejarlo pasar: es una linea de Meta a la que
+    // aun no le han pegado el webhook en su panel, y la UI lo pinta en ambar.
+    status: r.status === 'error' ? 'error' : r.status === 'pending' ? 'pending' : 'connected',
     lastError: r.lastError,
     webhookUrl: r.webhookUrl,
     verifyToken: r.verifyToken,

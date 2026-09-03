@@ -1,6 +1,6 @@
 import { BadRequestException, type Logger } from '@nestjs/common';
 import { isAxiosError } from 'axios';
-import type { WaMessage as WaMessageDto } from '@smartlogistica/shared';
+import type { Dialog360Mode, WaMessage as WaMessageDto, WaProvider } from '@smartlogistica/shared';
 
 /**
  * Helpers PUROS del modulo de WhatsApp (sin estado ni dependencias Nest):
@@ -141,3 +141,43 @@ export const MSG_STEP2 =
 export const DEFAULT_CONFIRMATION_MAX_AGE_HOURS = 48;
 /** Minutos entre los toques 1 y 2 del respaldo. */
 export const DEFAULT_UPSELL_STEP_DELAY_MINUTES = 2;
+
+/* ------------------------ ¿ESTA LINEA ALCANZA CLIENTES? ------------------------ */
+
+/** Lo minimo de una linea para decidir si puede escribirle a un cliente real. */
+export interface WaReachRef {
+  /** `string` y no la union a proposito: esto se compara muchas veces contra
+   *  filas crudas de la base, donde la columna es texto. Estrecharlo aqui
+   *  obligaria a castear en cada consulta y el cast es justo lo que esconde el
+   *  fallo que este helper existe para evitar. */
+  provider: string;
+  mode: string;
+}
+
+/**
+ * El SANDBOX de 360dialog, que solo puede escribirle a su numero de prueba.
+ *
+ * `mode` es un concepto de 360dialog: tiene un host de pruebas aparte. En Meta
+ * un numero de prueba vive en una WABA normal — mismo host, mismo
+ * comportamiento — asi que la pregunta no significa nada ahi y la respuesta es
+ * siempre no. Preguntarlo por `mode` a secas funcionaba solo por casualidad:
+ * las lineas de Meta nacen con mode='production'.
+ */
+export function isD360Sandbox(ready: WaReachRef | null | undefined): boolean {
+  return Boolean(ready && ready.provider === 'dialog360' && ready.mode === 'sandbox');
+}
+
+/**
+ * ¿Se le puede escribir a un cliente REAL por esta linea?
+ *
+ * La excepcion de los pedidos montados a mano se conserva tal cual: en sandbox
+ * se dejan pasar porque el destinatario es el numero de pruebas del propio
+ * equipo, no un cliente.
+ */
+export function waCanReachCustomers<T extends WaReachRef>(
+  ready: T | null | undefined,
+  orderProvider?: string,
+): ready is T {
+  if (!ready) return false;
+  return !isD360Sandbox(ready) || orderProvider === 'manual';
+}

@@ -56,7 +56,9 @@ export class ConfirmationWebhookController {
   @Public()
   @Post(':tenantSlug')
   @HttpCode(200)
-  @Throttle({ default: { limit: 600, ttl: 60_000 } })
+  // El limitador configurado se llama 'global': con cualquier otra clave el
+  // decorador no hace NADA y manda el tope general de 100/min.
+  @Throttle({ global: { limit: 600, ttl: 60_000 } })
   async confirm(
     @Param('tenantSlug') tenantSlug: string,
     @Query('token') token: string | undefined,
@@ -88,7 +90,8 @@ export class ConfirmationWebhookController {
   /** Compara el token con el secreto (tiempo constante). */
   private assertToken(token: string | undefined): void {
     const secret = process.env.CONFIRMATION_WEBHOOK_SECRET;
-    if (!secret) throw new ForbiddenException('Webhook no configurado (falta CONFIRMATION_WEBHOOK_SECRET)');
+    if (!secret)
+      throw new ForbiddenException('Webhook no configurado (falta CONFIRMATION_WEBHOOK_SECRET)');
     const a = Buffer.from(token ?? '');
     const b = Buffer.from(secret);
     if (a.length !== b.length || !timingSafeEqual(a, b)) {

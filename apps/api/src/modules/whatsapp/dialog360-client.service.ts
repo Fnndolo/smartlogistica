@@ -1,11 +1,10 @@
 import { Agent as HttpsAgent } from 'node:https';
 import { Injectable, Logger } from '@nestjs/common';
 import axios, { type AxiosInstance } from 'axios';
-import type {
-  CreateWaTemplateInput,
-  Dialog360Mode,
-  WaTemplateDetail,
-} from '@smartlogistica/shared';
+import type { CreateWaTemplateInput, Dialog360Mode } from '@smartlogistica/shared';
+
+import type { WaTemplateRaw } from './wa-client.port';
+import { buildTemplateComponents, mapTemplateRow } from './wa-template-mapper';
 
 const TIMEOUT_MS = 30_000;
 
@@ -298,44 +297,15 @@ export class Dialog360Client {
    * `listTemplates` de arriba se queda corto a proposito (el picker de "/"
    * solo pinta el cuerpo).
    */
-  async listTemplatesDetailed(
-    http: AxiosInstance,
-  ): Promise<Array<Omit<WaTemplateDetail, 'usedBy'>>> {
+  async listTemplatesDetailed(http: AxiosInstance): Promise<WaTemplateRaw[]> {
     const res = await http.get('/v1/configs/templates', { params: { limit: 200 } });
-    const list: Any[] = res.data?.waba_templates ?? res.data?.templates ?? [];
-    return list.map((tpl) => {
-      const comps: Any[] = Array.isArray(tpl.components) ? tpl.components : [];
-      const head = comps.find((c) => c?.type === 'HEADER');
-      const body = comps.find((c) => c?.type === 'BODY');
-      const foot = comps.find((c) => c?.type === 'FOOTER');
-      const btns = comps.find((c) => c?.type === 'BUTTONS');
-      const bodyText = String(body?.text ?? '');
-      const rejected = String(tpl.rejected_reason ?? '');
-      return {
-        id: String(tpl.id ?? tpl.external_id ?? tpl.name ?? ''),
-        name: String(tpl.name ?? ''),
-        language: String(tpl.language ?? 'es'),
-        category: String(tpl.category ?? ''),
-        status: String(tpl.status ?? '').toLowerCase(),
-        rejectedReason: rejected && rejected !== 'NONE' ? rejected : null,
-        header: head
-          ? { format: String(head.format ?? 'TEXT'), text: String(head.text ?? '') }
-          : null,
-        body: bodyText,
-        footer: foot ? String(foot.text ?? '') : null,
-        buttons: ((btns?.buttons ?? []) as Any[])
-          .map((b) => ({
-            type: String(b?.type) === 'URL' ? ('URL' as const) : ('QUICK_REPLY' as const),
-            text: String(b?.text ?? ''),
-            ...(b?.url ? { url: String(b.url) } : {}),
-          }))
-          .filter((b) => b.text.length > 0),
-        variables: new Set([...bodyText.matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((m) => m[1])).size,
-        // Meta anida los ejemplos: [[ "valor1", "valor2" ]].
-        examples: ((body?.example?.body_text?.[0] ?? []) as Any[]).map((v) => String(v)),
-        createdAt: tpl.created_at ? String(tpl.created_at) : null,
-      };
-    });
+    const list = res.data?.waba_templates ?? res.data?.templates;
+    // Si el sobre no es el esperado se LANZA: devolver [] haria que un fallo de
+    // permisos se leyera como "esta WABA no tiene plantillas".
+    if (!Array.isArray(list)) {
+      throw new Error('360dialog devolvió las plantillas en un formato inesperado');
+    }
+    return (list as Any[]).map(mapTemplateRow);
   }
 
   /**
@@ -346,30 +316,11 @@ export class Dialog360Client {
     http: AxiosInstance,
     input: CreateWaTemplateInput,
   ): Promise<{ status: string }> {
-    const components: Any[] = [];
-    if (input.header) components.push({ type: 'HEADER', format: 'TEXT', text: input.header });
-    components.push({
-      type: 'BODY',
-      text: input.body,
-      // Sin `example` Meta rechaza cualquier plantilla con variables.
-      ...(input.examples.length > 0 ? { example: { body_text: [input.examples] } } : {}),
-    });
-    if (input.footer) components.push({ type: 'FOOTER', text: input.footer });
-    if (input.buttons.length > 0) {
-      components.push({
-        type: 'BUTTONS',
-        buttons: input.buttons.map((b) =>
-          b.type === 'URL'
-            ? { type: 'URL', text: b.text, url: b.url }
-            : { type: 'QUICK_REPLY', text: b.text },
-        ),
-      });
-    }
     const res = await http.post('/v1/configs/templates', {
       name: input.name,
       language: input.language,
       category: input.category,
-      components,
+      components: buildTemplateComponents(input),
     });
     return { status: String(res.data?.status ?? 'pending').toLowerCase() };
   }

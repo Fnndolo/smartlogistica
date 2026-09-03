@@ -23,7 +23,9 @@ export const waLineSummarySchema = z.object({
   phone: z.string().nullable().default(null),
   mode: z.enum(['sandbox', 'production']),
   isDefault: z.boolean(),
-  status: z.enum(['connected', 'error']),
+  /** connected = lista. pending = alta hecha, falta que Meta verifique el
+   *  webhook (solo pasa con la API nativa). error = la credencial fallo. */
+  status: z.enum(['connected', 'pending', 'error']),
   lastError: z.string().nullable().default(null),
   /** URL a la que el proveedor debe mandar los mensajes de ESTA linea. En Meta
    *  hay que pegarla a mano en el panel de la App; en 360dialog se configura
@@ -132,13 +134,28 @@ export const createWaLineSchema = z
     /** Solo Meta. */
     phoneNumberId: z.string().trim().max(40).optional(),
     wabaId: z.string().trim().max(40).optional(),
-    appSecret: z.string().trim().max(200).optional(),
+    appSecret: z.string().trim().min(16, 'App Secret muy corto').max(200).optional(),
     /** Marcarla como la que se usa cuando ninguna regla dice otra cosa. */
     isDefault: z.boolean().default(false),
   })
   .refine((v) => v.provider !== 'meta' || (v.phoneNumberId && v.wabaId), {
     message: 'Con la API de Meta hacen falta el ID del número y el de la WABA',
     path: ['phoneNumberId'],
+  })
+  // `mode` es un concepto de 360dialog (tiene un host de pruebas aparte). En
+  // Meta un numero de prueba vive en una WABA normal: no hay otro host ni otro
+  // comportamiento, asi que ofrecerlo seria mentir.
+  .refine((v) => v.provider !== 'meta' || v.mode !== 'sandbox', {
+    message: 'La API de Meta no tiene modo de pruebas',
+    path: ['mode'],
+  })
+  // NO es opcional aunque lo parezca: sin App Secret no hay forma de comprobar
+  // que un mensaje entrante viene de verdad de Meta, y el webhook — que es una
+  // ruta publica — rechaza todo lo que no pueda verificar. Una linea sin el se
+  // veria conectada y no recibiria ni un mensaje.
+  .refine((v) => v.provider !== 'meta' || Boolean(v.appSecret?.trim()), {
+    message: 'Con la API de Meta hace falta el App Secret: sin él no se puede verificar la firma',
+    path: ['appSecret'],
   });
 export type CreateWaLineInput = z.infer<typeof createWaLineSchema>;
 
@@ -228,6 +245,9 @@ export const waTemplateDetailSchema = z.object({
   /** Los valores de ejemplo con los que se aprobo. */
   examples: z.array(z.string()).default([]),
   createdAt: z.string().nullable().default(null),
+  /** Id de la plantilla en Meta. Solo con la API nativa: es lo que haria falta
+   *  para editarla (POST /{templateId}). Con 360dialog va null. */
+  templateId: z.string().nullable().default(null),
   /** Mensajes automaticos que la nombran: borrarla los dejaria sin plantilla. */
   usedBy: z.array(waFlowKindSchema).default([]),
 });
@@ -249,9 +269,14 @@ export function waTemplateVars(body: string): number[] {
 }
 
 /**
- * Crear una plantilla. No hay "editar": ni Meta ni 360dialog dejan cambiarle
- * el cuerpo a una plantilla aprobada (el proveedor responde 405), asi que
- * modificar es borrar y volver a crear — y eso reabre la aprobacion de Meta.
+ * Crear una plantilla.
+ *
+ * No hay "editar", y el motivo NO es Meta: Meta si deja editar una plantilla
+ * ya creada (POST /{templateId}). Quien no deja es 360dialog, que responde 405
+ * a PATCH y a PUT (verificado contra su API). Como el negocio puede tener una
+ * linea de cada proveedor, un boton de editar que solo funciona en una de las
+ * dos seria peor que no tenerlo: aqui modificar es duplicar y borrar la vieja.
+ * Editar ademas devuelve la plantilla a revision, o sea que tampoco es gratis.
  */
 export const createWaTemplateSchema = z
   .object({

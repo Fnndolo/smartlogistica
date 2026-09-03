@@ -31,6 +31,11 @@ import {
 } from '../../settings/settings-ui';
 import { TemplateDrawer, type TemplateSeed } from './template-drawer';
 
+/** El modo de pruebas es de 360dialog: Meta no tiene, y ahi nunca aplica. */
+function isD360Sandbox(line: WaLineSummary | undefined): boolean {
+  return line?.provider === 'dialog360' && line.mode === 'sandbox';
+}
+
 /**
  * LAS PLANTILLAS de Meta.
  *
@@ -67,7 +72,7 @@ export function TemplatesSection({ lines }: { lines: WaLineSummary[] }) {
           onClick={() =>
             setSeed({ key: `nueva-${Date.now()}`, lineId: active?.id ?? '', template: null })
           }
-          disabled={!active || active.mode === 'sandbox'}
+          disabled={!active || isD360Sandbox(active)}
           className={cn(BTN_PRIMARY_CLS, BTN_SM_CLS, 'shrink-0')}
         >
           <Plus />
@@ -102,9 +107,9 @@ export function TemplatesSection({ lines }: { lines: WaLineSummary[] }) {
         </div>
       ) : null}
 
-      {active?.mode === 'sandbox' ? (
+      {isD360Sandbox(active) ? (
         <div className={EMPTY_CLS}>
-          La línea de pruebas no tiene plantillas propias: usa las de 360dialog.
+          La línea de pruebas de 360dialog no tiene plantillas propias: usa las suyas.
         </div>
       ) : isLoading ? (
         <div className="flex justify-center py-8">
@@ -124,7 +129,12 @@ export function TemplatesSection({ lines }: { lines: WaLineSummary[] }) {
           </div>
         </div>
       ) : (data?.templates.length ?? 0) === 0 ? (
-        <div className={EMPTY_CLS}>Esta línea todavía no tiene ninguna plantilla.</div>
+        <div className={EMPTY_CLS}>
+          Esta línea todavía no tiene ninguna plantilla.
+          {active?.status === 'pending'
+            ? ' Puede que aún no hayas terminado de conectarla en el panel de Meta.'
+            : ''}
+        </div>
       ) : (
         <div className="grid gap-2.5">
           {data?.templates.map((t) => (

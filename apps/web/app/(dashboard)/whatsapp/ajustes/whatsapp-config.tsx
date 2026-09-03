@@ -145,6 +145,10 @@ export function WhatsappConfig({ initial }: { initial?: WaConfigOverview }) {
                       <Pill tone="bad" dot>
                         Con error
                       </Pill>
+                    ) : l.status === 'pending' ? (
+                      <Pill tone="warn" dot>
+                        Falta pegar el webhook
+                      </Pill>
                     ) : (
                       <Pill tone="ok" dot>
                         Conectada
@@ -153,8 +157,14 @@ export function WhatsappConfig({ initial }: { initial?: WaConfigOverview }) {
                   </div>
                   <p className="mt-[3px] text-[12px] text-muted-foreground">
                     {l.provider === 'meta' ? 'API de Meta' : '360dialog'}
-                    <span className="px-1.5 text-border">·</span>
-                    {l.mode === 'sandbox' ? 'Pruebas' : 'Producción'}
+                    {/* El modo de pruebas es de 360dialog: en Meta no existe y
+                        anunciar "Producción" seria decir algo que no significa nada. */}
+                    {l.provider === 'dialog360' ? (
+                      <>
+                        <span className="px-1.5 text-border">·</span>
+                        {l.mode === 'sandbox' ? 'Pruebas' : 'Producción'}
+                      </>
+                    ) : null}
                     {l.phone ? (
                       <>
                         <span className="px-1.5 text-border">·</span>
@@ -164,6 +174,13 @@ export function WhatsappConfig({ initial }: { initial?: WaConfigOverview }) {
                   </p>
                   {l.lastError ? (
                     <p className="mt-1 text-[12px] text-destructive">{l.lastError}</p>
+                  ) : null}
+                  {l.status === 'pending' && l.provider === 'meta' ? (
+                    <p className="mt-1 max-w-[70ch] text-[12px] leading-[1.5] text-amber-600 dark:text-amber-400">
+                      Esta línea no recibe mensajes todavía. Pega su URL y su token en el panel de tu
+                      App de Meta y suscríbete al campo <b>messages</b>; en cuanto Meta verifique la
+                      URL, pasa a conectada sola.
+                    </p>
                   ) : null}
                 </div>
                 <LineActions line={l} canRemove={data.lines.length > 1} />

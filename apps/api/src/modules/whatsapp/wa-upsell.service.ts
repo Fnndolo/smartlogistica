@@ -17,6 +17,7 @@ import {
   MSG_STEP2,
   normBtn,
   tenDigits,
+  waCanReachCustomers,
 } from './wa-shared';
 
 /**
@@ -203,14 +204,14 @@ export class WaUpsellService {
     // Por que NUMERO sale: el que diga el flujo de esta tienda. Sin filas
     // configuradas es la predeterminada, que es lo de siempre.
     const d360 = await this.waConn.forLine(tenantId, prisma, flow.lineId);
-    if (!d360 || d360.mode !== 'production') return;
+    if (!waCanReachCustomers(d360)) return;
 
     let wamid: string | null = null;
     let body: string;
     let buttons: string[] = [];
     if (step === 3) {
       // ENTREGADO -> plantilla (no depende de la ventana de 24h).
-      const list = await this.dialog360.listTemplates(d360.http).catch(() => []);
+      const list = await d360.client.listTemplates().catch(() => []);
       // Si la configuracion nombra plantillas, mandan esas; si no, las de
       // siempre. Gana la PRIMERA que Meta tenga aprobada.
       const priority = flow.config.templateNames?.length
@@ -224,14 +225,9 @@ export class WaUpsellService {
         return;
       }
       const nombre = (order.customerName ?? '').trim().split(/\s+/)[0] || 'Hola';
-      wamid = await this.dialog360.sendTemplate(
-        d360.http,
-        d360.mode,
-        `57${phone}`,
-        tpl.name,
-        tpl.language,
-        [{ type: 'body', parameters: [{ type: 'text', text: nombre }] }],
-      );
+      wamid = await d360.client.sendTemplate(`57${phone}`, tpl.name, tpl.language, [
+        { type: 'body', parameters: [{ type: 'text', text: nombre }] },
+      ]);
       body = tpl.body.replace('{{1}}', nombre);
       buttons = [UPSELL_TEMPLATE_BUTTON];
     } else {
@@ -240,13 +236,7 @@ export class WaUpsellService {
       const custom = step === 1 ? flow.config.step1Text : flow.config.step2Text;
       body = custom?.trim() || (step === 1 ? MSG_STEP1 : MSG_STEP2);
       buttons = [UPSELL_BUTTON.title];
-      wamid = await this.dialog360.sendInteractiveButtons(
-        d360.http,
-        d360.mode,
-        `57${phone}`,
-        body,
-        [UPSELL_BUTTON],
-      );
+      wamid = await d360.client.sendInteractiveButtons(`57${phone}`, body, [UPSELL_BUTTON]);
     }
 
     const row = await prisma.waMessage.create({

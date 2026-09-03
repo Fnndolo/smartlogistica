@@ -23,6 +23,12 @@ async function bootstrap(): Promise<void> {
     rawBody: true,
   });
 
+  // El limite por defecto de Nest es 100 kb y los lotes de historial de
+  // WhatsApp llegan a 3 MB: sin esto Meta recibe 413 y reintenta durante dias.
+  // `useBodyParser` conserva el registro de `rawBody` (que la firma del webhook
+  // necesita); un `app.use(bodyParser.json(...))` a mano si lo romperia.
+  app.useBodyParser('json', { limit: '5mb' });
+
   app.useLogger(app.get(Logger));
   app.use(helmet({ contentSecurityPolicy: false }));
   app.use(cookieParser());

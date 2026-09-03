@@ -1,5 +1,6 @@
 'use client';
 
+import type React from 'react';
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, Copy } from 'lucide-react';
@@ -64,7 +65,7 @@ export function LineDrawer({
           ? {
               phoneNumberId: phoneNumberId.trim(),
               wabaId: wabaId.trim(),
-              ...(appSecret.trim() ? { appSecret: appSecret.trim() } : {}),
+              appSecret: appSecret.trim(),
             }
           : {}),
       }),
@@ -74,7 +75,7 @@ export function LineDrawer({
         // Con Meta falta un paso MANUAL: sin pegar el webhook en su panel, no
         // entra ni un mensaje. Por eso el panel no se cierra todavia.
         setDone(line);
-        toast.success('Línea creada — falta pegar el webhook en Meta');
+        toast.success('Línea creada. Falta un paso en el panel de Meta para que reciba mensajes.');
       } else {
         toast.success(`${line.label} conectada`);
         onClose();
@@ -86,7 +87,8 @@ export function LineDrawer({
   const valid =
     label.trim().length >= 2 &&
     apiKey.trim().length >= 10 &&
-    (provider === 'dialog360' || (phoneNumberId.trim() && wabaId.trim()));
+    (provider === 'dialog360' ||
+      (phoneNumberId.trim() && wabaId.trim() && appSecret.trim().length >= 16));
 
   return (
     <SideDrawer
@@ -132,7 +134,7 @@ export function LineDrawer({
               <ProviderPick
                 on={provider === 'dialog360'}
                 title="360dialog"
-                help="El intermedario que ya usas. Solo pide la API key y el webhook se configura solo."
+                help="El intermediario que ya usas. Solo pide la API key y el webhook se configura solo."
                 onPick={() => setProvider('dialog360')}
               />
               <ProviderPick
@@ -208,7 +210,7 @@ export function LineDrawer({
               </div>
               <div>
                 <Label className={LABEL_CLS} htmlFor="appSecret">
-                  App Secret <span className="font-normal normal-case text-hint">(opcional)</span>
+                  App Secret
                 </Label>
                 <Input
                   id="appSecret"
@@ -219,7 +221,9 @@ export function LineDrawer({
                   className={cn(FIELD_CLS, 'mt-1.5')}
                 />
                 <p className="mt-1.5 text-[11.5px] text-hint">
-                  Sirve para comprobar que los mensajes entrantes vienen de verdad de Meta.
+                  Con él se comprueba que los mensajes entrantes vienen de verdad de Meta. Sin él la
+                  línea puede enviar, pero no recibiría nada: está en Configuración → Básica de tu
+                  App.
                 </p>
               </div>
             </>
@@ -264,13 +268,52 @@ function MetaWebhookStep({ line }: { line: WaLineSummary }) {
   return (
     <div className="space-y-4">
       <p className="rounded-[11px] bg-amber-500/10 px-3.5 py-2.5 text-[12.5px] leading-[1.5] text-amber-600 dark:text-amber-400">
-        <b>{line.label}</b> quedó creada, pero <b>todavía no recibe mensajes</b>. Pega estos dos
-        valores en el panel de tu App de Meta, en Webhooks → WhatsApp Business Account, y suscríbete
-        al campo <b>messages</b>.
+        <b>{line.label}</b> ya puede <b>enviar</b>, pero <b>todavía no recibe</b>. Faltan dos pasos
+        en el panel de tu App de Meta, y los dos son obligatorios.
       </p>
-      <CopyRow label="URL de devolución de llamada" value={line.webhookUrl ?? ''} />
-      <CopyRow label="Token de verificación" value={line.verifyToken ?? ''} />
+      <ol className="space-y-3">
+        <Step n={1} title="Pega estos dos valores en Webhooks">
+          <CopyRow label="URL de devolución de llamada" value={line.webhookUrl ?? ''} />
+          <CopyRow label="Token de verificación" value={line.verifyToken ?? ''} />
+          <p className="mt-2 text-[11.5px] leading-[1.45] text-hint">
+            Al guardar, Meta llama a esa URL para comprobarla. En cuanto lo haga, la línea pasa a
+            «Conectada» sola — no hay que volver aquí.
+          </p>
+        </Step>
+        <Step n={2} title="Suscríbete al campo messages">
+          <p className="text-[12px] leading-[1.5] text-muted-foreground">
+            En la misma pantalla, en la lista de campos del webhook, marca <b>messages</b>. Es un
+            paso aparte y el fallo más común: sin él la URL se verifica, parece que todo funciona y
+            no llega ni un solo mensaje.
+          </p>
+        </Step>
+      </ol>
     </div>
+  );
+}
+
+function Step({
+  n,
+  title,
+  children,
+}: {
+  n: number;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <li className="flex gap-2.5">
+      <span
+        aria-hidden
+        className="mt-0.5 grid h-[22px] w-[22px] shrink-0 place-items-center rounded-full bg-wash-strong text-[11px] font-black text-accent-ink"
+      >
+        {n}
+      </span>
+      <div className="min-w-0 flex-1">
+        <b className="block text-[13px] font-extrabold">{title}</b>
+        <div className="mt-1.5">{children}</div>
+      </div>
+    </li>
   );
 }
 

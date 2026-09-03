@@ -1,6 +1,9 @@
 import { Module } from '@nestjs/common';
 
 import { Dialog360Client } from './dialog360-client.service';
+import { MetaClient } from './meta-client.service';
+import { MetaWebhookController } from './meta-webhook.controller';
+import { WaClientFactory } from './wa-client.factory';
 import { WaConnectionService } from './wa-connection.service';
 import { WaConfigController } from './wa-config.controller';
 import { WaFlowService } from './wa-flow.service';
@@ -22,6 +25,7 @@ import { Dialog360WebhookController } from './whatsapp-webhook.controller';
     WhatsappInboxController,
     OrderWhatsappController,
     Dialog360WebhookController,
+    MetaWebhookController,
     WaConfigController,
   ],
   providers: [
@@ -34,6 +38,8 @@ import { Dialog360WebhookController } from './whatsapp-webhook.controller';
     WaUpsellService,
     WaUpsellProcessor,
     Dialog360Client,
+    MetaClient,
+    WaClientFactory,
   ],
   exports: [WhatsappService, WaUpsellService, WaFlowService],
 })

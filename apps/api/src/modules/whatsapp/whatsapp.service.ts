@@ -38,6 +38,7 @@ import { RealtimeService } from '../../infrastructure/realtime/realtime.service'
 import { StorageService } from '../../infrastructure/storage/storage.service';
 import { getTenantContext } from '../../infrastructure/tenant-context';
 import { Dialog360Client } from './dialog360-client.service';
+import type { WaClient, WaTemplateLite } from './wa-client.port';
 import { WaConnectionService } from './wa-connection.service';
 import { WaFlowService } from './wa-flow.service';
 import { normalizeSticker, toOggOpus } from './wa-media.util';
@@ -45,13 +46,16 @@ import { WaPublisherService } from './wa-publisher.service';
 import { WaUpsellService } from './wa-upsell.service';
 import {
   DEFAULT_CONFIRMATION_MAX_AGE_HOURS,
+  isD360Sandbox,
   renderTemplateBody,
   templateVarCount,
   tenDigits,
   translateWaError,
+  waCanReachCustomers,
   waKindOf,
   waTypeOf,
   type WaMessageRow,
+  type WaReachRef,
 } from './wa-shared';
 import { WhatsappWebhookService } from './whatsapp-webhook.service';
 
@@ -292,10 +296,7 @@ export class WhatsappService {
   }
 
   /** Plantillas de la WABA con CACHE de 60s (cada relectura cuesta ~0.5-1s). */
-  private readonly tplCache = new Map<
-    string,
-    { at: number; list: Awaited<ReturnType<Dialog360Client['listTemplates']>> }
-  >();
+  private readonly tplCache = new Map<string, { at: number; list: WaTemplateLite[] }>();
 
   /**
    * Se cachea POR LINEA, no por tenant: cada numero tiene su propia WABA y sus
@@ -305,12 +306,12 @@ export class WhatsappService {
   private async cachedTemplates(
     tenantId: string,
     lineId: string,
-    http: AxiosInstance,
-  ): Promise<Awaited<ReturnType<Dialog360Client['listTemplates']>>> {
+    client: WaClient,
+  ): Promise<WaTemplateLite[]> {
     const key = `${tenantId}:${lineId}`;
     const hit = this.tplCache.get(key);
     if (hit && Date.now() - hit.at < 60_000) return hit.list;
-    const list = await this.dialog360.listTemplates(http);
+    const list = await client.listTemplates();
     this.tplCache.set(key, { at: Date.now(), list });
     return list;
   }
@@ -468,13 +469,7 @@ export class WhatsappService {
               select: { externalId: true },
             })
           : null;
-        return this.dialog360.sendText(
-          d360!.http,
-          d360!.mode,
-          `57${phone}`,
-          input.text,
-          q?.externalId ?? null,
-        );
+        return d360!.client.sendText(`57${phone}`, input.text, q?.externalId ?? null);
       },
     );
     return this.publisher.toDto(row);
@@ -553,19 +548,11 @@ export class WhatsappService {
               'No se pudo convertir la nota de voz (ffmpeg no disponible en el servidor). Avisa al administrador.',
             );
           }
-          const mediaId = await this.dialog360.uploadMedia(
-            d360!.apiKey,
-            d360!.mode,
-            ogg.buffer,
-            ogg.mime,
-            'nota-de-voz.ogg',
-          );
+          const mediaId = await d360!.client.uploadMedia(ogg.buffer, ogg.mime, 'nota-de-voz.ogg');
           if (!mediaId) throw new BadRequestException('Meta no devolvió el id del audio');
-          return this.dialog360.sendMediaId(d360!.http, d360!.mode, `57${phone}`, 'audio', mediaId);
+          return d360!.client.sendMediaId(`57${phone}`, 'audio', mediaId);
         }
-        return this.dialog360.sendMediaLink(
-          d360!.http,
-          d360!.mode,
+        return d360!.client.sendMediaLink(
           `57${phone}`,
           kind === 'file' ? 'document' : kind,
           url,
@@ -874,13 +861,7 @@ export class WhatsappService {
     const externalId = msg.externalId;
     void (async () => {
       try {
-        await this.dialog360.sendReaction(
-          d360!.http,
-          d360!.mode,
-          `57${phone}`,
-          externalId,
-          input.emoji,
-        );
+        await d360!.client.sendReaction(`57${phone}`, externalId, input.emoji);
       } catch (err) {
         this.logger.warn(
           `Reaccion no llego a Meta (se revierte): ${err instanceof Error ? err.message : err}`,
@@ -973,7 +954,7 @@ export class WhatsappService {
       'No se pudo reenviar el mensaje',
       async () => {
         if (src.kind === 'text' || (!src.attachmentKey && !src.mediaUrl)) {
-          return this.dialog360.sendText(d360!.http, d360!.mode, `57${to}`, src.body ?? '');
+          return d360!.client.sendText(`57${to}`, src.body ?? '');
         }
         const url = src.attachmentKey
           ? await this.storage.getSignedUrl(src.attachmentKey)
@@ -982,9 +963,7 @@ export class WhatsappService {
           src.kind === 'file'
             ? ('document' as const)
             : (src.kind as 'image' | 'video' | 'audio' | 'sticker');
-        return this.dialog360.sendMediaLink(
-          d360!.http,
-          d360!.mode,
+        return d360!.client.sendMediaLink(
           `57${to}`,
           kind,
           url,
@@ -1022,7 +1001,7 @@ export class WhatsappService {
     });
     await this.publisher.publishWaMessage(tenantId, prisma, row);
     this.dispatchWaSend(tenantId, prisma, row.id, phone, 'No se pudo enviar el contacto', () =>
-      this.dialog360.sendContact(d360!.http, d360!.mode, `57${phone}`, input.name, input.phone),
+      d360!.client.sendContact(`57${phone}`, input.name, input.phone),
     );
     return this.publisher.toDto(row);
   }
@@ -1105,15 +1084,9 @@ export class WhatsappService {
         const obj = await this.storage.get(key);
         if (!obj) throw new NotFoundException('Sticker no disponible en el storage');
         const webp = await normalizeSticker(obj.buffer);
-        const mediaId = await this.dialog360.uploadMedia(
-          d360!.apiKey,
-          d360!.mode,
-          webp,
-          'image/webp',
-          'sticker.webp',
-        );
+        const mediaId = await d360!.client.uploadMedia(webp, 'image/webp', 'sticker.webp');
         if (!mediaId) throw new BadRequestException('Meta no devolvió el id del sticker');
-        return this.dialog360.sendMediaId(d360!.http, d360!.mode, `57${phone}`, 'sticker', mediaId);
+        return d360!.client.sendMediaId(`57${phone}`, 'sticker', mediaId);
       },
     );
     return this.publisher.toDto(row);
@@ -1225,8 +1198,8 @@ export class WhatsappService {
       // Por que NUMERO sale: el que diga el flujo de esta tienda. Sin filas
       // configuradas devuelve la predeterminada, que es lo de siempre.
       const d360 = await this.waConn.forLine(tenantId, prisma, flow?.lineId ?? null);
-      if (!d360 || d360.mode !== 'production') return;
-      const list = await this.cachedTemplates(tenantId, d360.lineId, d360.http).catch(() => []);
+      if (!waCanReachCustomers(d360)) return;
+      const list = await this.cachedTemplates(tenantId, d360.lineId, d360.client).catch(() => []);
       const tpl = this.guideTemplatesFor(carrier)
         .map((n) => list.find((x) => x.name === n && x.status === 'approved'))
         .find(Boolean);
@@ -1270,27 +1243,14 @@ export class WhatsappService {
         phone,
         'No se pudo enviar la guía por WhatsApp',
         async () => {
-          const mediaId = await this.dialog360.uploadMedia(
-            d360.apiKey,
-            d360.mode,
-            rotulo,
-            'application/pdf',
-            fileName,
-          );
+          const mediaId = await d360.client.uploadMedia(rotulo, 'application/pdf', fileName);
           if (!mediaId) throw new BadRequestException('Meta no devolvió el id del PDF de la guía');
-          const wamid = await this.dialog360.sendTemplate(
-            d360.http,
-            d360.mode,
-            `57${phone}`,
-            tpl.name,
-            tpl.language,
-            [
-              {
-                type: 'header',
-                parameters: [{ type: 'document', document: { id: mediaId, filename: fileName } }],
-              },
-            ],
-          );
+          const wamid = await d360.client.sendTemplate(`57${phone}`, tpl.name, tpl.language, [
+            {
+              type: 'header',
+              parameters: [{ type: 'document', document: { id: mediaId, filename: fileName } }],
+            },
+          ]);
           const textRow = await prisma.waMessage.create({
             data: {
               phone,
@@ -1350,14 +1310,14 @@ export class WhatsappService {
       void (async () => {
         try {
           const d360 = await this.waConn.forPhone(tenantId, prisma, phone);
-          if (!d360 || d360.mode !== 'production') return;
+          if (!waCanReachCustomers(d360)) return;
           const lastIn = await prisma.waMessage.findFirst({
             where: { phone, direction: 'in', externalId: { not: null } },
             orderBy: { createdAt: 'desc' },
             select: { externalId: true },
           });
           if (lastIn?.externalId) {
-            await this.dialog360.sendTypingIndicator(d360.http, d360.mode, lastIn.externalId);
+            await d360.client.sendTypingIndicator(lastIn.externalId);
           }
         } catch {
           /* best-effort: sin indicador no pasa nada */
@@ -1440,9 +1400,9 @@ export class WhatsappService {
     const { tenantId, prisma } = getTenantContext();
     const d360 = await this.waConn.forPhone(tenantId, prisma, phone);
     // El sandbox no tiene WABA propia con plantillas: lista vacia (la UI lo dice).
-    if (!d360 || d360.mode !== 'production') return [];
+    if (!waCanReachCustomers(d360)) return [];
     try {
-      const list = await this.cachedTemplates(tenantId, d360.lineId, d360.http);
+      const list = await this.cachedTemplates(tenantId, d360.lineId, d360.client);
       return list.map((t) => ({ ...t, variables: templateVarCount(t.body) }));
     } catch (err) {
       throw translateWaError(err, 'No se pudieron cargar las plantillas de la WABA', this.logger);
@@ -1478,7 +1438,7 @@ export class WhatsappService {
     this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     const d360 = await this.waConn.forPhone(tenantId, prisma, phone);
-    if (!d360 || d360.mode !== 'production') {
+    if (!waCanReachCustomers(d360)) {
       throw new BadRequestException(
         'Las plantillas requieren la conexión de 360dialog en producción',
       );
@@ -1489,7 +1449,7 @@ export class WhatsappService {
     // cada envio pagaba una vuelta extra a 360dialog (~0.5-1s).
     let all;
     try {
-      all = await this.cachedTemplates(tenantId, d360.lineId, d360.http);
+      all = await this.cachedTemplates(tenantId, d360.lineId, d360.client);
     } catch (err) {
       throw translateWaError(err, 'No se pudieron cargar las plantillas de la WABA', this.logger);
     }
@@ -1536,15 +1496,7 @@ export class WhatsappService {
       row.id,
       phone,
       '360dialog no pudo enviar la plantilla',
-      () =>
-        this.dialog360.sendTemplate(
-          d360.http,
-          d360.mode,
-          `57${phone}`,
-          tpl.name,
-          tpl.language,
-          components,
-        ),
+      () => d360.client.sendTemplate(`57${phone}`, tpl.name, tpl.language, components),
     );
     return this.publisher.toDto(row);
   }
@@ -1566,15 +1518,15 @@ export class WhatsappService {
    * ¿360dialog gobierna este pedido? En PRODUCCION gobierna todo; el SANDBOX
    * solo alcanza el numero de prueba vinculado -> solo pedidos MONTADOS a mano.
    */
-  private d360Governs(d360: { mode: Dialog360Mode } | null, provider: string): boolean {
-    return Boolean(d360 && (d360.mode === 'production' || provider === 'manual'));
+  private d360Governs(d360: WaReachRef | null, provider: string): boolean {
+    return waCanReachCustomers(d360, provider);
   }
 
-  /** Corta con error claro si no hay conexion 360dialog que gobierne el pedido. */
-  private requireD360(d360: { mode: Dialog360Mode } | null, provider: string): void {
+  /** Corta con error claro si no hay linea de WhatsApp que alcance al cliente. */
+  private requireD360(d360: WaReachRef | null, provider: string): void {
     if (!d360) {
       throw new BadRequestException(
-        'WhatsApp no está conectado. Configura 360dialog en Conexiones.',
+        'WhatsApp no está conectado. Conecta un número en Ajustes › WhatsApp.',
       );
     }
     if (!this.d360Governs(d360, provider)) {
@@ -1707,9 +1659,9 @@ export class WhatsappService {
       // (la original con emojis primero; si Meta aun no la aprueba, la sobria).
       // Asi el cambio se activa SOLO, sin redesplegar, y el hilo guarda el
       // texto REAL de la que salio. Si la consulta falla: defaults del env.
-      if (d360.mode === 'production') {
+      if (!isD360Sandbox(d360)) {
         try {
-          const list = await this.cachedTemplates(tenantId, d360.lineId, d360.http);
+          const list = await this.cachedTemplates(tenantId, d360.lineId, d360.client);
           // Si la configuracion nombra plantillas, mandan esas.
           const priority = flow?.config.templateNames?.length
             ? flow.config.templateNames
@@ -1729,47 +1681,34 @@ export class WhatsappService {
       }
       let wamid: string | null = null;
       try {
-        if (d360.mode === 'sandbox') {
-          wamid = await this.dialog360.sendInteractiveButtons(
-            d360.http,
-            d360.mode,
-            `57${phone}`,
-            rendered,
-            [
-              { id: 'CONFIRMED', title: 'Datos correctos ✅' },
-              { id: 'MODIFY', title: 'Modificar dirección' },
-            ],
-          );
+        if (isD360Sandbox(d360)) {
+          wamid = await d360.client.sendInteractiveButtons(`57${phone}`, rendered, [
+            { id: 'CONFIRMED', title: 'Datos correctos ✅' },
+            { id: 'MODIFY', title: 'Modificar dirección' },
+          ]);
         } else {
-          wamid = await this.dialog360.sendTemplate(
-            d360.http,
-            d360.mode,
-            `57${phone}`,
-            tplName,
-            tplLang,
-            [
-              {
-                type: 'body',
-                parameters: [
-                  { type: 'text', text: nombre },
-                  { type: 'text', text: productos || '—' },
-                  { type: 'text', text: direccion || '—' },
-                ],
-              },
-              {
-                type: 'button',
-                sub_type: 'quick_reply',
-                index: '0',
-                parameters: [{ type: 'payload', payload: 'CONFIRMED' }],
-              },
-              {
-                type: 'button',
-                sub_type: 'quick_reply',
-                index: '1',
-                parameters: [{ type: 'payload', payload: 'MODIFY' }],
-              },
-            ],
-          );
+          wamid = await d360.client.sendTemplate(`57${phone}`, tplName, tplLang, [
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', text: nombre },
+                { type: 'text', text: productos || '—' },
+                { type: 'text', text: direccion || '—' },
+              ],
+            },
+            {
+              type: 'button',
+              sub_type: 'quick_reply',
+              index: '0',
+              parameters: [{ type: 'payload', payload: 'CONFIRMED' }],
+            },
+            {
+              type: 'button',
+              sub_type: 'quick_reply',
+              index: '1',
+              parameters: [{ type: 'payload', payload: 'MODIFY' }],
+            },
+          ]);
         }
       } catch (err) {
         if (err instanceof BadRequestException) throw err;
@@ -1798,7 +1737,7 @@ export class WhatsappService {
             authorName: 'SmartLogística',
             externalId: wamid,
             status: wamid ? 'sent' : null,
-            buttons: (d360.mode === 'sandbox'
+            buttons: (isD360Sandbox(d360)
               ? ['Datos correctos ✅', 'Modificar dirección']
               : tplButtons) as unknown as Prisma.InputJsonValue,
           },

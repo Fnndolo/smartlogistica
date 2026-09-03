@@ -60,6 +60,14 @@ import { WhatsappModule } from './modules/whatsapp/whatsapp.module';
         },
       },
     }),
+    // OJO: el limitador se llama 'global'. Un @Throttle({ default: ... }) NO
+    // aplica nada — la guarda solo lee la metadata del nombre registrado — y
+    // rige este tope de 100/min. Los tres webhooks ya usan la clave correcta;
+    // los de auth y el SSE de pedidos siguen con 'default' A PROPOSITO: hoy el
+    // tracker es req.ip y, sin `trust proxy` y con el web haciendo de proxy,
+    // TODO el trafico llega con la misma IP. Activar 5/min en el login dejaria
+    // a la empresa entera con cinco inicios de sesion por minuto entre todos.
+    // Para arreglarlo de verdad hay que keyear por sesion, no por IP.
     ThrottlerModule.forRoot([{ name: 'global', ttl: 60_000, limit: 100 }]),
     CryptoModule,
     PrismaModule,
