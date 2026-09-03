@@ -10,18 +10,8 @@ import { WaConnectionService } from './wa-connection.service';
 import { WaFlowService } from './wa-flow.service';
 import { WaPublisherService } from './wa-publisher.service';
 import { WaUpsellService } from './wa-upsell.service';
-import { normBtn, tenDigits } from './wa-shared';
+import { MSG_ASK_ADDRESS, MSG_CONFIRMED, MSG_RETRY_ADDRESS, normBtn, tenDigits } from './wa-shared';
 
-const MSG_CONFIRMED =
-  '¡Muchas gracias por confirmar 🙌 Su pedido ya quedó en alistamiento. Puede seguir el ' +
-  'estado de su pedido desde la app de ADDI. Si hay alguna novedad con su pedido, le ' +
-  'avisamos enseguida. 😊';
-const MSG_ASK_ADDRESS =
-  '¡Claro! 😊 Para modificar tu dirección de entrega, escríbela completa en un solo mensaje ' +
-  'y sin agregar palabras adicionales.\n\nEjemplo:\nCalle 123 # 1-2, barrio San José, Medellín, ' +
-  'Antioquia\n\nPor favor, envía únicamente la dirección con ese formato para poder actualizarla ' +
-  'correctamente';
-const MSG_RETRY_ADDRESS = 'Por favor vuelve a enviar tu dirección, en un ÚNICO mensaje.';
 const msgConfirmDraft = (direccion: string): string =>
   `Le confirmo, su nueva dirección es:\n${direccion}\n\n¿Es correcto?`;
 
@@ -218,9 +208,17 @@ export class WhatsappWebhookService {
     const lastOrder = await prisma.order.findFirst({
       where: { customerPhone: { endsWith: phone } },
       orderBy: { marketplaceCreatedAt: 'desc' },
-      select: { provider: true, accountName: true },
+      select: { provider: true, accountName: true, rawPayload: true },
     });
-    if (lastOrder && !(await this.flows.resolve(prisma, 'autoreply', lastOrder))) return;
+    const flow = lastOrder ? await this.flows.resolve(prisma, 'autoreply', lastOrder) : null;
+    if (lastOrder && !flow) return;
+
+    // Los textos de la configuracion mandan; si estan vacios, los de siempre.
+    // Se resuelven AQUI, una vez, para que las tres ramas de abajo no tengan
+    // que acordarse de mirar la configuracion.
+    const txtConfirmed = flow?.config.confirmedReply?.trim() || MSG_CONFIRMED;
+    const txtAskAddress = flow?.config.askAddress?.trim() || MSG_ASK_ADDRESS;
+    const txtRetryAddress = flow?.config.retryAddress?.trim() || MSG_RETRY_ADDRESS;
 
     const contact = await prisma.waContact.findUnique({ where: { phone } });
     const state = (contact?.flowState ?? null) as FlowState | null;
@@ -300,14 +298,14 @@ export class WhatsappWebhookService {
           const addr = contact?.draftAddress?.trim() ?? '';
           await setState(null, null);
           if (addr) await this.applyAddressNative(tenantId, prisma, phone, 'modified', addr);
-          await say(MSG_CONFIRMED);
+          await say(txtConfirmed);
           // Flujo de venta del RESPALDO: toque 1 en 2 minutos (solo celulares).
           await this.upsell.scheduleAfterConfirmation(tenantId, prisma, phone);
           return;
         }
         if (pay === 'DRAFT_NO' || btn?.includes('no es correcto')) {
           await setState('awaiting_address_retry', null);
-          await say(MSG_RETRY_ADDRESS);
+          await say(txtRetryAddress);
           return;
         }
       }
@@ -319,14 +317,14 @@ export class WhatsappWebhookService {
       ) {
         await setState(null, null);
         await this.applyAddressNative(tenantId, prisma, phone, 'confirmed');
-        await say(MSG_CONFIRMED);
+        await say(txtConfirmed);
         // Flujo de venta del RESPALDO: toque 1 en 2 minutos (solo celulares).
         await this.upsell.scheduleAfterConfirmation(tenantId, prisma, phone);
         return;
       }
       if (pay === 'MODIFY' || btn?.includes('modificar')) {
         await setState('awaiting_address', null);
-        await say(MSG_ASK_ADDRESS);
+        await say(txtAskAddress);
         return;
       }
       return;

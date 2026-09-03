@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   WA_FLOW_HELP,
@@ -11,6 +11,7 @@ import {
   type WaFlowConfig,
   type WaFlowKind,
   type WaLineSummary,
+  type WaTemplateListForLine,
 } from '@smartlogistica/shared';
 
 import { Button } from '@/components/ui/button';
@@ -43,20 +44,21 @@ const TEXT_FIELDS: Record<
   WaFlowKind,
   Array<{ key: keyof WaFlowConfig; label: string; help?: string; long?: boolean }>
 > = {
-  confirmation: [
-    {
-      key: 'confirmedReply',
-      label: 'Respuesta al confirmar',
-      help: 'Lo que se le contesta al cliente cuando toca «Sí, está bien».',
-      long: true,
-    },
-  ],
+  confirmation: [],
   guide: [],
   upsell: [
     { key: 'step1Text', label: 'Primer toque', long: true },
     { key: 'step2Text', label: 'Segundo toque', long: true },
   ],
+  // La respuesta al confirmar la manda el BOT, no la confirmacion: se edita
+  // aqui porque es aqui donde se lee.
   autoreply: [
+    {
+      key: 'confirmedReply',
+      label: 'Cuando el cliente confirma',
+      help: 'Lo que se le contesta al tocar «Mis datos son correctos».',
+      long: true,
+    },
     { key: 'askAddress', label: 'Cuando pide la dirección nueva', long: true },
     { key: 'retryAddress', label: 'Si la dirección no se entiende', long: true },
   ],
@@ -294,6 +296,17 @@ export function FlowDrawer({
           </div>
         ))}
 
+        {kind !== 'autoreply' ? (
+          <TemplatePicker
+            lineId={lineId}
+            kind={kind}
+            chosen={config.templateNames ?? []}
+            onChange={(names) =>
+              setConfig((c) => ({ ...c, templateNames: names.length ? names : undefined }))
+            }
+          />
+        ) : null}
+
         {kind === 'guide' ? (
           <p className="text-[12px] leading-[1.5] text-hint">
             La plantilla se elige sola según la transportadora del envío (cada una tiene su enlace
@@ -357,5 +370,102 @@ function Check({ on, label, onToggle }: { on: boolean; label: string; onToggle: 
       </span>
       <span className="min-w-0 flex-1 truncate font-semibold">{label}</span>
     </button>
+  );
+}
+
+/**
+ * Que PLANTILLA usa este mensaje automatico.
+ *
+ * Se guarda una LISTA por orden de preferencia, no una sola: Meta puede tener
+ * una plantilla en revision o desactivarla sin avisar, y con una sola elegida
+ * el mensaje simplemente dejaria de salir. Gana la primera que este aprobada
+ * en el momento de enviar; vacio = las que trae el sistema.
+ */
+function TemplatePicker({
+  lineId,
+  kind,
+  chosen,
+  onChange,
+}: {
+  lineId: string;
+  kind: WaFlowKind;
+  chosen: string[];
+  onChange: (names: string[]) => void;
+}) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['wa-templates', lineId],
+    queryFn: () =>
+      api.get<WaTemplateListForLine>(
+        `/v1/whatsapp/config/templates?line=${encodeURIComponent(lineId)}`,
+      ),
+    enabled: Boolean(lineId),
+  });
+
+  // Solo las aprobadas: ofrecer una pendiente seria ofrecer un mensaje que no
+  // va a salir. Las ya elegidas van primero, en su orden de preferencia.
+  const approved = (data?.templates ?? []).filter((t) => t.status === 'approved');
+  const picked = chosen
+    .map((n) => approved.find((t) => t.name === n))
+    .filter((t): t is (typeof approved)[number] => Boolean(t));
+  const sorted = [...picked, ...approved.filter((t) => !chosen.includes(t.name))];
+
+  const toggle = (name: string) =>
+    onChange(chosen.includes(name) ? chosen.filter((n) => n !== name) : [...chosen, name]);
+
+  return (
+    <div>
+      <Label className={LABEL_CLS}>Plantilla</Label>
+      <p className="mt-1 text-[11.5px] leading-[1.45] text-hint">
+        {kind === 'guide'
+          ? 'Vacío = la que corresponda a la transportadora del envío.'
+          : 'Vacío = la que trae el sistema. Si eliges varias, gana la primera aprobada.'}
+      </p>
+      {isLoading ? (
+        <p className="mt-2 text-[12px] text-hint">Cargando…</p>
+      ) : sorted.length === 0 ? (
+        <p className="mt-2 text-[12px] text-hint">
+          Esta línea no tiene plantillas aprobadas todavía.
+        </p>
+      ) : (
+        <div className="mt-2 grid gap-1.5">
+          {sorted.map((t, i) => {
+            const order = chosen.indexOf(t.name);
+            return (
+              <button
+                key={t.name}
+                type="button"
+                onClick={() => toggle(t.name)}
+                aria-pressed={order >= 0}
+                className={cn(
+                  'flex w-full items-start gap-2.5 rounded-[10px] border bg-card px-3 py-2 text-left transition-colors [transition-duration:140ms]',
+                  order >= 0
+                    ? 'border-accent ring-1 ring-accent'
+                    : 'border-input hover:border-accent',
+                  FOCUS_RING,
+                )}
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    'mt-[1px] grid h-4 w-4 shrink-0 place-items-center rounded-[5px] border text-[10px] font-black',
+                    order >= 0
+                      ? 'border-accent bg-accent text-accent-foreground'
+                      : 'border-input text-transparent',
+                  )}
+                >
+                  {order >= 0 ? order + 1 : i}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <b className="block font-mono text-[12px] font-bold">{t.name}</b>
+                  <span className="mt-0.5 line-clamp-2 block text-[11.5px] leading-[1.4] text-hint">
+                    {t.body}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }

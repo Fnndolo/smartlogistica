@@ -11,7 +11,13 @@ import { Dialog360Client } from './dialog360-client.service';
 import { WaConnectionService } from './wa-connection.service';
 import { WaFlowService } from './wa-flow.service';
 import { WaPublisherService } from './wa-publisher.service';
-import { normBtn, tenDigits } from './wa-shared';
+import {
+  DEFAULT_UPSELL_STEP_DELAY_MINUTES,
+  MSG_STEP1,
+  MSG_STEP2,
+  normBtn,
+  tenDigits,
+} from './wa-shared';
 
 /**
  * FLUJO DE VENTA del RESPALDO de telefonos (complementa el de confirmacion):
@@ -45,32 +51,11 @@ const UPSELL_TEMPLATE_PRIORITY = [
 const INTERESTED_LABEL = 'Interesado';
 const INTERESTED_COLOR = '#f59e0b';
 
-const STEP_DELAY_MS = 2 * 60_000;
+const STEP_DELAY_MS = DEFAULT_UPSELL_STEP_DELAY_MINUTES * 60_000;
 
 // COPY DE VENTA: pre-vende completo (necesidad + cobertura + precio + cuotas)
 // para que el boton sea la DECISION de compra — el asesor solo coordina las
 // cuotas y el medio de pago.
-const MSG_STEP1 =
-  'Mientras preparamos su envío 📦, piense en esto un segundo:\n\n' +
-  'Usted acaba de invertir en un equipo nuevo. Ahora imagine que a los pocos días se lo roban en la calle 🚨 o se le va al piso y la pantalla no sobrevive 📱💥… tocaría empezar de cero, pagando todo otra vez.\n\n' +
-  'Para que esa NUNCA sea su historia, existe el RESPALDO de Smart Gadgets 🛡️:\n\n' +
-  '✅ Cubre ROBO, caídas y accidentes\n' +
-  '✅ Protección por UN AÑO completo\n' +
-  '✅ Cuesta solo el 10% del valor de su equipo\n' +
-  '✅ Y lo paga en cuotas cómodas con Addi 💙\n\n' +
-  'Estrenar tranquilo cuesta poquito — perder el equipo cuesta TODO.\n\n' +
-  'Toque el botón y su asesor le confirma de una vez las cuotas y el medio de pago 👇';
-
-const MSG_STEP2 =
-  '🚚 ¡Su equipo ya va en camino!\n\n' +
-  'Y justo ahora toca decidir algo importante: ¿qué pasa si se lo roban 🚨 o se le cae al tercer día de estreno? 📱💥 Nadie lo planea — por eso es lo que más duele en el bolsillo.\n\n' +
-  'Con el RESPALDO de Smart Gadgets eso deja de ser un riesgo:\n\n' +
-  '✅ ROBO, caídas y accidentes cubiertos\n' +
-  '✅ UN AÑO completo de protección\n' +
-  '✅ Solo el 10% del valor de su equipo\n' +
-  '✅ En cuotas cómodas con Addi 💙\n\n' +
-  'Su equipo llega en cualquier momento — que llegue ya protegido.\n\n' +
-  'Toque el botón y su asesor le confirma de una vez las cuotas y el medio de pago 👇';
 
 interface UpsellJob {
   tenantId: string;
@@ -123,7 +108,7 @@ export class WaUpsellService {
       });
       const order = candidates.find((o) => tenDigits(o.customerPhone ?? '') === phone);
       if (!order || !isPhoneOrder(order.rawPayload)) return;
-      await this.scheduleStep(tenantId, order.id, 1);
+      await this.scheduleStep(tenantId, order.id, 1, prisma);
     } catch (err) {
       this.logger.warn(
         `Upsell post-confirmacion fallo: ${err instanceof Error ? err.message : err}`,
@@ -131,11 +116,34 @@ export class WaUpsellService {
     }
   }
 
-  /** Encola un toque diferido (+2 min). Dedupe por jobId: nunca dos veces. */
-  async scheduleStep(tenantId: string, orderId: string, step: 1 | 2): Promise<void> {
+  /**
+   * Encola un toque diferido. Dedupe por jobId: nunca dos veces.
+   *
+   * La espera sale de la configuracion de la tienda del pedido; sin ella, los
+   * 2 minutos de siempre. Se resuelve al ENCOLAR porque es cuando se fija el
+   * retraso: cambiarla despues no mueve lo que ya esta en cola.
+   */
+  async scheduleStep(
+    tenantId: string,
+    orderId: string,
+    step: 1 | 2,
+    prisma?: PrismaClient,
+  ): Promise<void> {
+    let delay = STEP_DELAY_MS;
+    if (prisma) {
+      const ref = await prisma.order
+        .findUnique({
+          where: { id: orderId },
+          select: { provider: true, accountName: true, rawPayload: true },
+        })
+        .catch(() => null);
+      const flow = ref ? await this.flows.resolve(prisma, 'upsell', ref) : null;
+      const minutes = flow?.config.stepDelayMinutes;
+      if (minutes) delay = minutes * 60_000;
+    }
     try {
       await this.queue.add('step', { tenantId, orderId, step } satisfies UpsellJob, {
-        delay: STEP_DELAY_MS,
+        delay,
         jobId: `upsell:${orderId}:${step}`,
         attempts: 3,
       });
@@ -171,7 +179,8 @@ export class WaUpsellService {
     if (!order?.customerPhone) return;
     // ¿Encendido para la tienda de este pedido? Sin filas configuradas
     // devuelve siempre "si" (el comportamiento de antes, intacto).
-    if (!(await this.flows.resolve(prisma, 'upsell', order))) return;
+    const flow = await this.flows.resolve(prisma, 'upsell', order);
+    if (!flow) return;
     const phone = tenDigits(order.customerPhone);
     if (phone.length < 7) return;
     if (!isPhoneOrder(order.rawPayload)) return;
@@ -191,7 +200,9 @@ export class WaUpsellService {
     });
     if (sent) return;
 
-    const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
+    // Por que NUMERO sale: el que diga el flujo de esta tienda. Sin filas
+    // configuradas es la predeterminada, que es lo de siempre.
+    const d360 = await this.waConn.forLine(tenantId, prisma, flow.lineId);
     if (!d360 || d360.mode !== 'production') return;
 
     let wamid: string | null = null;
@@ -200,9 +211,14 @@ export class WaUpsellService {
     if (step === 3) {
       // ENTREGADO -> plantilla (no depende de la ventana de 24h).
       const list = await this.dialog360.listTemplates(d360.http).catch(() => []);
-      const tpl = UPSELL_TEMPLATE_PRIORITY.map((n) =>
-        list.find((x) => x.name === n && x.status === 'approved'),
-      ).find(Boolean);
+      // Si la configuracion nombra plantillas, mandan esas; si no, las de
+      // siempre. Gana la PRIMERA que Meta tenga aprobada.
+      const priority = flow.config.templateNames?.length
+        ? flow.config.templateNames
+        : UPSELL_TEMPLATE_PRIORITY;
+      const tpl = priority
+        .map((n) => list.find((x) => x.name === n && x.status === 'approved'))
+        .find(Boolean);
       if (!tpl) {
         this.logger.warn('Upsell paso 3: sin plantilla de respaldo APROBADA en la WABA aun');
         return;
@@ -221,7 +237,8 @@ export class WaUpsellService {
     } else {
       // Toques 1 y 2: mensaje de SESION con boton (el cliente acaba de
       // interactuar; si la ventana cerro, queda la bolita roja con motivo).
-      body = step === 1 ? MSG_STEP1 : MSG_STEP2;
+      const custom = step === 1 ? flow.config.step1Text : flow.config.step2Text;
+      body = custom?.trim() || (step === 1 ? MSG_STEP1 : MSG_STEP2);
       buttons = [UPSELL_BUTTON.title];
       wamid = await this.dialog360.sendInteractiveButtons(
         d360.http,

@@ -44,6 +44,7 @@ import { normalizeSticker, toOggOpus } from './wa-media.util';
 import { WaPublisherService } from './wa-publisher.service';
 import { WaUpsellService } from './wa-upsell.service';
 import {
+  DEFAULT_CONFIRMATION_MAX_AGE_HOURS,
   renderTemplateBody,
   templateVarCount,
   tenDigits,
@@ -64,7 +65,7 @@ const THREAD_TAKE = 500;
  * handleFlowReply (webhook de la Cloud API).
  */
 /** Solo pedidos RECIENTES: un backfill de pedidos viejos JAMAS debe escribirle a nadie. */
-const CONFIRMATION_MAX_AGE_MS = 48 * 3_600_000;
+const CONFIRMATION_MAX_AGE_MS = DEFAULT_CONFIRMATION_MAX_AGE_HOURS * 3_600_000;
 
 // ============ Confirmacion NATIVA por Cloud API (360dialog) ============
 // La plantilla inicial (aprobada en la WABA; en sandbox se emula con texto +
@@ -296,14 +297,21 @@ export class WhatsappService {
     { at: number; list: Awaited<ReturnType<Dialog360Client['listTemplates']>> }
   >();
 
+  /**
+   * Se cachea POR LINEA, no por tenant: cada numero tiene su propia WABA y sus
+   * propias plantillas. Con una sola clave por tenant, el segundo numero veria
+   * — y trataria de enviar — las plantillas del primero.
+   */
   private async cachedTemplates(
     tenantId: string,
+    lineId: string,
     http: AxiosInstance,
   ): Promise<Awaited<ReturnType<Dialog360Client['listTemplates']>>> {
-    const hit = this.tplCache.get(tenantId);
+    const key = `${tenantId}:${lineId}`;
+    const hit = this.tplCache.get(key);
     if (hit && Date.now() - hit.at < 60_000) return hit.list;
     const list = await this.dialog360.listTemplates(http);
-    this.tplCache.set(tenantId, { at: Date.now(), list });
+    this.tplCache.set(key, { at: Date.now(), list });
     return list;
   }
 
@@ -418,7 +426,7 @@ export class WhatsappService {
     this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
 
-    const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
+    const d360 = await this.waConn.forPhone(tenantId, prisma, phone);
     this.requireD360(d360, provider);
     // Responder CITANDO: el mensaje citado debe ser de este mismo hilo.
     let quoted: { id: string; externalId: string | null } | null = null;
@@ -500,7 +508,7 @@ export class WhatsappService {
     if (!this.storage.isConfigured()) {
       throw new BadRequestException('El almacenamiento de archivos no esta configurado');
     }
-    const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
+    const d360 = await this.waConn.forPhone(tenantId, prisma, phone);
     this.requireD360(d360, provider);
 
     const name = file.originalname || 'archivo';
@@ -841,7 +849,7 @@ export class WhatsappService {
     this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
-    const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
+    const d360 = await this.waConn.forPhone(tenantId, prisma, phone);
     this.requireD360(d360, 'external');
     const msg = await prisma.waMessage.findFirst({
       where: { id: input.messageId, phone },
@@ -936,7 +944,7 @@ export class WhatsappService {
     const { tenantId, prisma } = getTenantContext();
     const to = tenDigits(rawPhone);
     if (to.length < 7) throw new BadRequestException('Teléfono inválido');
-    const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
+    const d360 = await this.waConn.forPhone(tenantId, prisma, to);
     this.requireD360(d360, 'external');
     const src = await prisma.waMessage.findUnique({ where: { id: input.messageId } });
     if (!src) throw new NotFoundException('Mensaje no encontrado');
@@ -997,7 +1005,7 @@ export class WhatsappService {
     const { tenantId, prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
     if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
-    const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
+    const d360 = await this.waConn.forPhone(tenantId, prisma, phone);
     this.requireD360(d360, 'external');
     // ACK PRIMERO: la tarjeta aparece YA con relojito; Meta en segundo plano.
     const row = await prisma.waMessage.create({
@@ -1070,7 +1078,7 @@ export class WhatsappService {
     const { tenantId, prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
     if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
-    const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
+    const d360 = await this.waConn.forPhone(tenantId, prisma, phone);
     this.requireD360(d360, 'external');
     // ACK PRIMERO: el sticker aparece YA (desde nuestro storage); normalizar
     // (<100KB 512x512), subir a Meta y enviar corre en la cola del chat.
@@ -1210,12 +1218,15 @@ export class WhatsappService {
       // ¿Encendido para la tienda de este pedido? Sin filas, siempre si.
       const ref = await prisma.order.findUnique({
         where: { id: order.id },
-        select: { provider: true, accountName: true },
+        select: { provider: true, accountName: true, rawPayload: true },
       });
-      if (ref && !(await this.flows.resolve(prisma, 'guide', ref))) return;
-      const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
+      const flow = ref ? await this.flows.resolve(prisma, 'guide', ref) : null;
+      if (ref && !flow) return;
+      // Por que NUMERO sale: el que diga el flujo de esta tienda. Sin filas
+      // configuradas devuelve la predeterminada, que es lo de siempre.
+      const d360 = await this.waConn.forLine(tenantId, prisma, flow?.lineId ?? null);
       if (!d360 || d360.mode !== 'production') return;
-      const list = await this.cachedTemplates(tenantId, d360.http).catch(() => []);
+      const list = await this.cachedTemplates(tenantId, d360.lineId, d360.http).catch(() => []);
       const tpl = this.guideTemplatesFor(carrier)
         .map((n) => list.find((x) => x.name === n && x.status === 'approved'))
         .find(Boolean);
@@ -1293,7 +1304,7 @@ export class WhatsappService {
           await this.publisher.publishWaMessage(tenantId, prisma, textRow);
           // Flujo de venta del RESPALDO: toque 2 en 2 minutos (solo celulares;
           // el sender re-verifica interes/duplicado antes de salir).
-          await this.upsell.scheduleStep(tenantId, order.id, 2).catch(() => null);
+          await this.upsell.scheduleStep(tenantId, order.id, 2, prisma).catch(() => null);
           return wamid;
         },
       );
@@ -1338,7 +1349,7 @@ export class WhatsappService {
       this.typingToMetaAt.set(key, Date.now());
       void (async () => {
         try {
-          const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
+          const d360 = await this.waConn.forPhone(tenantId, prisma, phone);
           if (!d360 || d360.mode !== 'production') return;
           const lastIn = await prisma.waMessage.findFirst({
             where: { phone, direction: 'in', externalId: { not: null } },
@@ -1387,7 +1398,8 @@ export class WhatsappService {
         .join(', '),
     };
 
-    return { templates: await this.waTemplates(), suggestions };
+    const phone = order.customerPhone ? tenDigits(order.customerPhone) : '';
+    return { templates: await this.waTemplates(phone), suggestions };
   }
 
   /** Plantillas para un chat de la BANDEJA (sugerencia: solo el nombre). */
@@ -1412,19 +1424,25 @@ export class WhatsappService {
         ? (order.customerName?.trim() ?? '')
         : '';
     return {
-      templates: await this.waTemplates(),
+      templates: await this.waTemplates(phone),
       suggestions: { nombre: vtexName || (contact?.name ?? ''), productos: '', direccion: '' },
     };
   }
 
-  /** Plantillas de la WABA mapeadas (vacio si no hay conexion de produccion). */
-  private async waTemplates(): Promise<WaTemplateList['templates']> {
+  /**
+   * Plantillas de la WABA mapeadas (vacio si no hay conexion de produccion).
+   *
+   * Se piden las del NUMERO por el que se habla con ese cliente: cada linea
+   * tiene su propia WABA, y ofrecer las del otro numero seria ofrecer
+   * plantillas que al enviarlas no existen.
+   */
+  private async waTemplates(phone: string): Promise<WaTemplateList['templates']> {
     const { tenantId, prisma } = getTenantContext();
-    const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
+    const d360 = await this.waConn.forPhone(tenantId, prisma, phone);
     // El sandbox no tiene WABA propia con plantillas: lista vacia (la UI lo dice).
     if (!d360 || d360.mode !== 'production') return [];
     try {
-      const list = await this.cachedTemplates(tenantId, d360.http);
+      const list = await this.cachedTemplates(tenantId, d360.lineId, d360.http);
       return list.map((t) => ({ ...t, variables: templateVarCount(t.body) }));
     } catch (err) {
       throw translateWaError(err, 'No se pudieron cargar las plantillas de la WABA', this.logger);
@@ -1459,7 +1477,7 @@ export class WhatsappService {
   ): Promise<WaMessageDto> {
     this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
-    const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
+    const d360 = await this.waConn.forPhone(tenantId, prisma, phone);
     if (!d360 || d360.mode !== 'production') {
       throw new BadRequestException(
         'Las plantillas requieren la conexión de 360dialog en producción',
@@ -1471,7 +1489,7 @@ export class WhatsappService {
     // cada envio pagaba una vuelta extra a 360dialog (~0.5-1s).
     let all;
     try {
-      all = await this.cachedTemplates(tenantId, d360.http);
+      all = await this.cachedTemplates(tenantId, d360.lineId, d360.http);
     } catch (err) {
       throw translateWaError(err, 'No se pudieron cargar las plantillas de la WABA', this.logger);
     }
@@ -1613,11 +1631,6 @@ export class WhatsappService {
       if (manual) throw new BadRequestException(msg);
     };
 
-    const d360 = await this.waConn.dialog360OrNull(tenantId, prisma);
-    if (!d360) {
-      return fail('WhatsApp no está conectado. Configura 360dialog en Conexiones.');
-    }
-
     const order = await prisma.order.findUnique({
       where: { id: orderId },
       include: { items: { orderBy: { name: 'asc' } } },
@@ -1628,6 +1641,11 @@ export class WhatsappService {
     if (order.provider !== 'vtex' && order.provider !== 'manual') {
       return fail('La confirmación no aplica a este pedido');
     }
+    // Que dice la configuracion para la tienda de este pedido: si el mensaje
+    // esta encendido y por que NUMERO sale. Sin filas configuradas responde
+    // siempre "si" con la linea predeterminada, que es el comportamiento de
+    // siempre. A mano solo se le pregunta el numero, nunca el permiso.
+    const flow = await this.flows.resolve(prisma, 'confirmation', order);
     if (manual) {
       // A mano: mientras el pedido siga vivo (no facturado/cancelado) se puede.
       if (order.status === 'invoiced' || order.status === 'canceled') {
@@ -1637,11 +1655,15 @@ export class WhatsappService {
       // Automatico: mismo guard del n8n (SOLO ready-for-handling) + frescura
       // (un backfill de pedidos viejos JAMAS escribe a nadie).
       if (order.status !== 'ready-for-handling') return;
-      if (Date.now() - order.marketplaceCreatedAt.getTime() > CONFIRMATION_MAX_AGE_MS) return;
-      // ¿Este flujo esta encendido para la tienda de este pedido? Sin filas
-      // configuradas devuelve siempre "si", que es el comportamiento de antes.
-      const flow = await this.flows.resolve(prisma, 'confirmation', order);
       if (!flow) return;
+      // Frescura configurable; sin configurar, las 48h de siempre.
+      const maxAgeMs = (flow.config.maxAgeHours ?? DEFAULT_CONFIRMATION_MAX_AGE_HOURS) * 3_600_000;
+      if (Date.now() - order.marketplaceCreatedAt.getTime() > maxAgeMs) return;
+    }
+
+    const d360 = await this.waConn.forLine(tenantId, prisma, flow?.lineId ?? null);
+    if (!d360) {
+      return fail('WhatsApp no está conectado. Configura 360dialog en Conexiones.');
     }
     const phone = order.customerPhone ? tenDigits(order.customerPhone) : '';
     if (!phone) return fail('Este pedido no tiene teléfono del cliente');
@@ -1687,10 +1709,14 @@ export class WhatsappService {
       // texto REAL de la que salio. Si la consulta falla: defaults del env.
       if (d360.mode === 'production') {
         try {
-          const list = await this.cachedTemplates(tenantId, d360.http);
-          const pick = CONFIRMATION_TEMPLATE_PRIORITY.map((name) =>
-            list.find((t) => t.name === name && t.status === 'approved'),
-          ).find(Boolean);
+          const list = await this.cachedTemplates(tenantId, d360.lineId, d360.http);
+          // Si la configuracion nombra plantillas, mandan esas.
+          const priority = flow?.config.templateNames?.length
+            ? flow.config.templateNames
+            : CONFIRMATION_TEMPLATE_PRIORITY;
+          const pick = priority
+            .map((name) => list.find((t) => t.name === name && t.status === 'approved'))
+            .find(Boolean);
           if (pick) {
             tplName = pick.name;
             tplLang = pick.language;

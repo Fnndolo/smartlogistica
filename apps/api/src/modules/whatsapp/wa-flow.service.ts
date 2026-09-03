@@ -26,14 +26,23 @@ import { ControlPlaneService } from '../../infrastructure/prisma/control-plane.s
 import { getTenantContext } from '../../infrastructure/tenant-context';
 import { Dialog360Client } from './dialog360-client.service';
 import { WaConnectionService } from './wa-connection.service';
+import {
+  DEFAULT_CONFIRMATION_MAX_AGE_HOURS,
+  DEFAULT_UPSELL_STEP_DELAY_MINUTES,
+  MSG_ASK_ADDRESS,
+  MSG_CONFIRMED,
+  MSG_RETRY_ADDRESS,
+  MSG_STEP1,
+  MSG_STEP2,
+} from './wa-shared';
 import { loadPlatforms } from '../orders/platforms.store';
 
 /** Un pedido, en lo minimo que hace falta para saber a que flujo pertenece. */
 export interface FlowOrderRef {
   provider: string;
   accountName: string | null;
-  /** Plataforma de los pedidos montados a mano (Krediya, Mercado Libre...). */
-  platformId?: string | null;
+  /** Los montados a mano guardan su plataforma aqui: `platform: {id, name}`. */
+  rawPayload?: unknown;
 }
 
 /**
@@ -66,9 +75,12 @@ export class WaFlowService {
    * alcances: un solo formato, un solo bug posible.
    */
   static sourceKeyOf(order: FlowOrderRef): string {
-    return order.provider === 'manual'
-      ? `manual:${order.platformId ?? 'manual'}`
-      : `${order.provider}:${order.accountName ?? ''}`;
+    if (order.provider !== 'manual') return `${order.provider}:${order.accountName ?? ''}`;
+    // Los pedidos montados a mano no tienen columna de plataforma: viaja
+    // dentro del rawPayload, que es donde la escribe quien monta el pedido.
+    const raw = order.rawPayload as { platform?: { id?: unknown } } | null | undefined;
+    const id = typeof raw?.platform?.id === 'string' ? raw.platform.id : null;
+    return `manual:${id ?? 'manual'}`;
   }
 
   /**
@@ -317,7 +329,15 @@ export class WaFlowService {
     const missing = waFlowKindSchema.options.filter((k) => !existing.has(k));
     if (missing.length > 0) {
       await prisma.waFlow.createMany({
-        data: missing.map((kind) => ({ kind, lineId: line.id, enabled: true })),
+        data: missing.map((kind) => ({
+          kind,
+          lineId: line.id,
+          enabled: true,
+          // Se guardan los textos y tiempos QUE HOY SE ESTAN USANDO, no
+          // campos en blanco: el sentido de "tomar el control" es poder leer
+          // lo que sale y retocarlo, no adivinarlo.
+          config: CURRENT_BEHAVIOUR[kind] as Prisma.InputJsonValue,
+        })),
       });
     }
     return this.overview(auth);
@@ -370,6 +390,27 @@ export class WaFlowService {
     }
   }
 }
+
+/**
+ * Lo que el codigo hace HOY, por tipo de mensaje. Es lo que se guarda al
+ * "tomar el control": las filas nacen describiendo el comportamiento actual,
+ * de forma que materializar no cambie absolutamente nada — solo lo vuelva
+ * visible y editable.
+ */
+const CURRENT_BEHAVIOUR: Record<WaFlowKind, WaFlowConfig> = {
+  confirmation: { maxAgeHours: DEFAULT_CONFIRMATION_MAX_AGE_HOURS },
+  guide: {},
+  upsell: {
+    step1Text: MSG_STEP1,
+    step2Text: MSG_STEP2,
+    stepDelayMinutes: DEFAULT_UPSELL_STEP_DELAY_MINUTES,
+  },
+  autoreply: {
+    confirmedReply: MSG_CONFIRMED,
+    askAddress: MSG_ASK_ADDRESS,
+    retryAddress: MSG_RETRY_ADDRESS,
+  },
+};
 
 /** El alcance guardado como JSON, de vuelta a lista de claves. */
 function toScope(value: unknown): string[] {

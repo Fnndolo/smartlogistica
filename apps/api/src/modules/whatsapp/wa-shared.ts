@@ -97,3 +97,47 @@ export function translateWaError(
   logger.warn(`WhatsApp error: ${err instanceof Error ? err.message : err}`);
   return new BadRequestException(fallback);
 }
+
+/* ------------------ TEXTOS POR DEFECTO DE LOS AUTOMATICOS ------------------ */
+/**
+ * Viven aqui, y no en el servicio que los envia, porque los necesitan DOS
+ * lados: quien manda el mensaje y la pantalla de configuracion, que al "tomar
+ * el control" los guarda tal cual para que se puedan leer y retocar. Si se
+ * quedaran en cada servicio, la pantalla mostraria campos vacios y el usuario
+ * no tendria forma de saber que se esta enviando hoy.
+ */
+export const MSG_CONFIRMED =
+  '¡Muchas gracias por confirmar 🙌 Su pedido ya quedó en alistamiento. Puede seguir el ' +
+  'estado de su pedido desde la app de ADDI. Si hay alguna novedad con su pedido, le ' +
+  'avisamos enseguida. 😊';
+export const MSG_ASK_ADDRESS =
+  '¡Claro! 😊 Para modificar tu dirección de entrega, escríbela completa en un solo mensaje ' +
+  'y sin agregar palabras adicionales.\n\nEjemplo:\nCalle 123 # 1-2, barrio San José, Medellín, ' +
+  'Antioquia\n\nPor favor, envía únicamente la dirección con ese formato para poder actualizarla ' +
+  'correctamente';
+export const MSG_RETRY_ADDRESS = 'Por favor vuelve a enviar tu dirección, en un ÚNICO mensaje.';
+export const MSG_STEP1 =
+  'Mientras preparamos su envío 📦, piense en esto un segundo:\n\n' +
+  'Usted acaba de invertir en un equipo nuevo. Ahora imagine que a los pocos días se lo roban en la calle 🚨 o se le va al piso y la pantalla no sobrevive 📱💥… tocaría empezar de cero, pagando todo otra vez.\n\n' +
+  'Para que esa NUNCA sea su historia, existe el RESPALDO de Smart Gadgets 🛡️:\n\n' +
+  '✅ Cubre ROBO, caídas y accidentes\n' +
+  '✅ Protección por UN AÑO completo\n' +
+  '✅ Cuesta solo el 10% del valor de su equipo\n' +
+  '✅ Y lo paga en cuotas cómodas con Addi 💙\n\n' +
+  'Estrenar tranquilo cuesta poquito — perder el equipo cuesta TODO.\n\n' +
+  'Toque el botón y su asesor le confirma de una vez las cuotas y el medio de pago 👇';
+export const MSG_STEP2 =
+  '🚚 ¡Su equipo ya va en camino!\n\n' +
+  'Y justo ahora toca decidir algo importante: ¿qué pasa si se lo roban 🚨 o se le cae al tercer día de estreno? 📱💥 Nadie lo planea — por eso es lo que más duele en el bolsillo.\n\n' +
+  'Con el RESPALDO de Smart Gadgets eso deja de ser un riesgo:\n\n' +
+  '✅ ROBO, caídas y accidentes cubiertos\n' +
+  '✅ UN AÑO completo de protección\n' +
+  '✅ Solo el 10% del valor de su equipo\n' +
+  '✅ En cuotas cómodas con Addi 💙\n\n' +
+  'Su equipo llega en cualquier momento — que llegue ya protegido.\n\n' +
+  'Toque el botón y su asesor le confirma de una vez las cuotas y el medio de pago 👇';
+
+/** Horas de frescura del pedido para la confirmacion automatica. */
+export const DEFAULT_CONFIRMATION_MAX_AGE_HOURS = 48;
+/** Minutos entre los toques 1 y 2 del respaldo. */
+export const DEFAULT_UPSELL_STEP_DELAY_MINUTES = 2;

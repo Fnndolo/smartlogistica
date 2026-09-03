@@ -78,8 +78,38 @@ export class WaConnectionService {
     return value;
   }
 
+  /** Cuantas lineas hay. Cacheado: con una sola, enrutar por chat sobra. */
+  private readonly countCache = new Map<string, { at: number; n: number }>();
+
+  /**
+   * Credenciales de la linea por la que se habla con ESTE telefono: la del
+   * ULTIMO mensaje de ese chat.
+   *
+   * Con un solo numero conectado no cambia absolutamente nada — se usa el de
+   * siempre y ni siquiera se paga una consulta extra. Con dos, es lo que evita
+   * contestarle al cliente desde un numero distinto del que el uso: para el
+   * seria otra conversacion, en otro hilo de su celular.
+   */
+  async forPhone(tenantId: string, prisma: PrismaClient, phone: string): Promise<D360Ready> {
+    const hit = this.countCache.get(tenantId);
+    let lines = hit && Date.now() - hit.at < CREDS_TTL_MS ? hit.n : null;
+    if (lines === null) {
+      lines = await prisma.waLine.count();
+      this.countCache.set(tenantId, { at: Date.now(), n: lines });
+    }
+    if (lines <= 1 || phone.length < 7) return this.forLine(tenantId, prisma, null);
+
+    const last = await prisma.waMessage.findFirst({
+      where: { phone, lineId: { not: null } },
+      orderBy: { createdAt: 'desc' },
+      select: { lineId: true },
+    });
+    return this.forLine(tenantId, prisma, last?.lineId ?? null);
+  }
+
   /** Invalidar al conectar/desconectar. Barre TODAS las lineas del tenant. */
   invalidate(tenantId: string): void {
+    this.countCache.delete(tenantId);
     for (const key of this.cache.keys()) {
       if (key === tenantId || key.startsWith(`${tenantId}:`)) this.cache.delete(key);
     }
