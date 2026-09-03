@@ -8,6 +8,7 @@ import {
   Param,
   Post,
   Put,
+  Query,
   Req,
   Res,
   UploadedFile,
@@ -111,8 +112,11 @@ export class WhatsappInboxController {
 
   /** Todos los chats (ultimo mensaje + no leidos + etiquetas). */
   @Get('inbox')
-  async inbox(@CurrentUser() user: AuthContext): Promise<WaInbox> {
-    return this.whatsapp.inbox(user);
+  async inbox(
+    @Query('line') line: string | undefined,
+    @CurrentUser() user: AuthContext,
+  ): Promise<WaInbox> {
+    return this.whatsapp.inbox(user, line);
   }
 
   /** Hilo completo de un chat. */

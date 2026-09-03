@@ -1,9 +1,15 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Req } from '@nestjs/common';
+import type { Request } from 'express';
 import {
+  createWaLineSchema,
   saveWaFlowSchema,
+  updateWaLineSchema,
+  type CreateWaLineInput,
   type SaveWaFlowInput,
+  type UpdateWaLineInput,
   type WaConfigOverview,
   type WaFlow,
+  type WaLineSummary,
 } from '@smartlogistica/shared';
 
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -37,6 +43,41 @@ export class WaConfigController {
   async materialize(@CurrentUser() user: AuthContext): Promise<WaConfigOverview> {
     return this.flows.materialize(user);
   }
+
+  // === LINEAS ===
+
+  /** Da de alta OTRO numero. No toca los que ya estan conectados. */
+  @Post('lines')
+  @HttpCode(201)
+  async createLine(
+    @Body(new ZodValidationPipe(createWaLineSchema)) body: CreateWaLineInput,
+    @CurrentUser() user: AuthContext,
+    @Req() req: Request,
+  ): Promise<WaLineSummary> {
+    // URL publica de la plataforma (la peticion llega proxied por el web): con
+    // ella se arma el webhook de ESTA linea, con su ?line=<id>.
+    const host = (req.headers['x-forwarded-host'] as string | undefined) ?? req.headers.host ?? '';
+    const base = `https://${String(host).split(',')[0].trim()}`;
+    return this.flows.createLine(body, user, base);
+  }
+
+  /** Renombrar o marcar como predeterminada. No toca credenciales. */
+  @Put('lines/:id')
+  async updateLine(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(updateWaLineSchema)) body: UpdateWaLineInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<WaLineSummary> {
+    return this.flows.updateLine(id, body, user);
+  }
+
+  @Delete('lines/:id')
+  @HttpCode(204)
+  async removeLine(@Param('id') id: string, @CurrentUser() user: AuthContext): Promise<void> {
+    await this.flows.removeLine(id, user);
+  }
+
+  // === FLUJOS ===
 
   @Post('flows')
   @HttpCode(201)

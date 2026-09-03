@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { Plus } from 'lucide-react';
+import { ArrowRight, MessageCircle, Plus } from 'lucide-react';
 import type {
   AiConnectionSummary,
   Dialog360ConnectionSummary,
@@ -15,9 +15,8 @@ import { getSessionUser, serverFetchResult } from '@/lib/server-api';
 import { cn } from '@/lib/utils';
 
 import { AiConnectionCard } from './ai-connection-card';
-import { BTN_PRIMARY, BTN_SM, SectionHeading } from './connection-ui';
+import { BTN_PRIMARY, BTN_SM, CONN_CARD, SectionHeading, Tile } from './connection-ui';
 import { ConnectionsList } from './connections-list';
-import { Dialog360ConnectionCard } from './dialog360-connection-card';
 import { SkydropxConnectionCard } from './skydropx-connection-card';
 
 export const metadata: Metadata = { title: 'Conexiones' };
@@ -39,7 +38,9 @@ async function initialAiConnection(): Promise<AiConnectionSummary | null | undef
 }
 
 async function initialDialog360(): Promise<Dialog360ConnectionSummary | null | undefined> {
-  const res = await serverFetchResult<Dialog360ConnectionSummary | null>('/v1/connections/dialog360');
+  const res = await serverFetchResult<Dialog360ConnectionSummary | null>(
+    '/v1/connections/dialog360',
+  );
   return res.ok ? res.data : undefined;
 }
 
@@ -90,14 +91,37 @@ export default async function ConnectionsPage() {
       <section className="mt-[22px] space-y-[10px]">
         <SectionHeading>Servicios</SectionHeading>
         <AiConnectionCard initial={aiConnection} />
-        <Dialog360ConnectionCard initial={dialog360} />
         <SkydropxConnectionCard initial={skydropx} />
+      </section>
+
+      <section className="mt-[22px] space-y-[10px]">
+        <SectionHeading>WhatsApp</SectionHeading>
+        {/* Ya no hay una tarjeta de conectar/desconectar: con varios numeros no
+            representaria nada. Los numeros se gestionan en su propia pantalla. */}
+        <Link
+          href="/whatsapp/ajustes"
+          prefetch
+          className={`${CONN_CARD} flex flex-wrap items-center gap-[13px] transition-colors hover:border-accent`}
+        >
+          <Tile tone="cobalt">
+            <MessageCircle className="h-[18px] w-[18px]" />
+          </Tile>
+          <div className="min-w-0 flex-1">
+            <b className="text-[13.5px] font-extrabold">Números de WhatsApp</b>
+            <p className="mt-[3px] max-w-[64ch] text-[12px] text-muted-foreground">
+              {dialog360
+                ? 'Conectado. Aquí se agregan más números y se decide qué mensajes salen solos.'
+                : 'Sin conectar. Conecta el primer número y configura los mensajes automáticos.'}
+            </p>
+          </div>
+          <ArrowRight className="h-4 w-4 shrink-0 text-hint" aria-hidden />
+        </Link>
       </section>
 
       <p className="mt-3.5 text-[12px] text-hint">
         Alegra, Coordinadora y el Certificado de Garantía se configuran{' '}
-        <b className="font-bold text-muted-foreground">dentro de cada sede</b>, porque cada una tiene
-        sus propias credenciales.
+        <b className="font-bold text-muted-foreground">dentro de cada sede</b>, porque cada una
+        tiene sus propias credenciales.
       </p>
     </div>
   );

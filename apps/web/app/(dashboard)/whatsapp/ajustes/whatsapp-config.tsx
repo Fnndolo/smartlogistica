@@ -10,10 +10,13 @@ import {
   type WaConfigOverview,
   type WaFlow,
   type WaFlowKind,
+  type WaLineSummary,
 } from '@smartlogistica/shared';
 
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { FlowDrawer, type FlowSession } from './flow-drawer';
+import { LineDrawer } from './line-drawer';
 import { ApiError, api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 
@@ -44,6 +47,7 @@ export function WhatsappConfig({ initial }: { initial?: WaConfigOverview }) {
   // Una SOLA instancia del panel para toda la pantalla: montar uno por fila
   // multiplicaria los portales y los bloqueos de scroll.
   const [session, setSession] = useState<FlowSession | null>(null);
+  const [addLine, setAddLine] = useState(false);
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['wa-config'],
@@ -109,11 +113,21 @@ export function WhatsappConfig({ initial }: { initial?: WaConfigOverview }) {
 
       {/* ── Líneas ── */}
       <section className="space-y-2.5">
-        <SectionHead>Líneas</SectionHead>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <SectionHead>Líneas</SectionHead>
+          </div>
+          <Button
+            onClick={() => setAddLine(true)}
+            className={cn(BTN_PRIMARY_CLS, BTN_SM_CLS, 'shrink-0')}
+          >
+            <Plus />
+            Conectar WhatsApp
+          </Button>
+        </div>
         {data.lines.length === 0 ? (
           <div className={EMPTY_CLS}>
-            Todavía no hay ningún número conectado. Conéctalo desde{' '}
-            <b className="text-muted-foreground">Conexiones</b>.
+            Todavía no hay ningún número conectado. Conecta el primero con el botón de arriba.
           </div>
         ) : (
           <div className="grid gap-2.5">
@@ -151,6 +165,7 @@ export function WhatsappConfig({ initial }: { initial?: WaConfigOverview }) {
                     <p className="mt-1 text-[12px] text-destructive">{l.lastError}</p>
                   ) : null}
                 </div>
+                <LineActions line={l} canRemove={data.lines.length > 1} />
               </div>
             ))}
           </div>
@@ -202,12 +217,125 @@ export function WhatsappConfig({ initial }: { initial?: WaConfigOverview }) {
       </section>
 
       {/* key = apertura: cada vez que se abre, el formulario nace limpio. */}
+      <LineDrawer
+        key={addLine ? 'linea-abierta' : 'linea-cerrada'}
+        open={addLine}
+        isFirst={data.lines.length === 0}
+        onClose={() => setAddLine(false)}
+      />
+
       <FlowDrawer
         key={session?.id ?? 'cerrado'}
         session={session}
         data={data}
         onClose={() => setSession(null)}
       />
+    </div>
+  );
+}
+
+/** Renombrar, hacer predeterminada o desconectar una línea. */
+function LineActions({ line, canRemove }: { line: WaLineSummary; canRemove: boolean }) {
+  const qc = useQueryClient();
+  const [renaming, setRenaming] = useState(false);
+  const [name, setName] = useState(line.label);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  const done = (msg: string) => {
+    toast.success(msg);
+    qc.invalidateQueries({ queryKey: ['wa-config'] });
+    setRenaming(false);
+  };
+
+  const patch = useMutation({
+    mutationFn: (body: { label?: string; isDefault?: boolean }) =>
+      api.put<WaLineSummary>(`/v1/whatsapp/config/lines/${line.id}`, body),
+    onSuccess: () => done('Línea actualizada'),
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo guardar'),
+  });
+
+  const remove = useMutation({
+    mutationFn: () => api.delete(`/v1/whatsapp/config/lines/${line.id}`),
+    onSuccess: () => done('Línea desconectada'),
+    onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo desconectar'),
+  });
+
+  if (renaming) {
+    return (
+      <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+        <Input
+          autoFocus
+          value={name}
+          maxLength={40}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && name.trim().length >= 2) patch.mutate({ label: name.trim() });
+            if (e.key === 'Escape') {
+              setName(line.label);
+              setRenaming(false);
+            }
+          }}
+          aria-label="Nombre de la línea"
+          className="h-auto min-h-[34px] min-w-[150px] flex-1 rounded-[9px] border-input bg-card text-[13px] shadow-none"
+        />
+        <Button
+          onClick={() => patch.mutate({ label: name.trim() })}
+          loading={patch.isPending}
+          disabled={name.trim().length < 2}
+          className={cn(BTN_PRIMARY_CLS, BTN_SM_CLS)}
+        >
+          Guardar
+        </Button>
+        <Button
+          variant="ghost"
+          onClick={() => {
+            setName(line.label);
+            setRenaming(false);
+          }}
+          className={cn(BTN_GHOST_CLS, BTN_SM_CLS)}
+        >
+          Cancelar
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex shrink-0 flex-wrap gap-2">
+      <Button
+        variant="ghost"
+        onClick={() => setRenaming(true)}
+        className={cn(BTN_GHOST_CLS, BTN_SM_CLS)}
+      >
+        Renombrar
+      </Button>
+      {line.isDefault ? null : (
+        <Button
+          variant="ghost"
+          onClick={() => patch.mutate({ isDefault: true })}
+          loading={patch.isPending}
+          className={cn(BTN_GHOST_CLS, BTN_SM_CLS)}
+        >
+          Hacer predeterminada
+        </Button>
+      )}
+      {/* Con una sola linea no se ofrece desconectar: dejaria la plataforma
+          sin WhatsApp desde una pantalla que trata de configurarlo. */}
+      {canRemove ? (
+        <Button
+          variant="ghost"
+          onClick={() => (confirmDelete ? remove.mutate() : setConfirmDelete(true))}
+          onBlur={() => setConfirmDelete(false)}
+          loading={remove.isPending}
+          className={cn(
+            BTN_GHOST_CLS,
+            BTN_SM_CLS,
+            confirmDelete && 'border-destructive text-destructive hover:text-destructive',
+          )}
+        >
+          {confirmDelete ? '¿Seguro? Sí, desconectar' : 'Desconectar'}
+        </Button>
+      ) : null}
     </div>
   );
 }

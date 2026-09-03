@@ -24,7 +24,13 @@ import {
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import type { WaInbox, WaInboxItem, WaMessage, WaThread } from '@smartlogistica/shared';
+import type {
+  WaConfigOverview,
+  WaInbox,
+  WaInboxItem,
+  WaMessage,
+  WaThread,
+} from '@smartlogistica/shared';
 
 import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { ApiError, api } from '@/lib/api-client';
@@ -179,6 +185,9 @@ export function WhatsappInbox() {
   const [selected, setSelected] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState<'all' | 'unread' | 'archived' | string>('all');
+  // Linea activa. Los chats de dos numeros NO se mezclan: cada uno es su
+  // propia bandeja, como en el celular.
+  const [line, setLine] = useState<string | null>(null);
   const [menu, setMenu] = useState<ChatMenuAnchor | null>(null);
   const [labelFor, setLabelFor] = useState<string | null>(null);
   const selectedRef = useRef<string | null>(null);
@@ -188,9 +197,19 @@ export function WhatsappInbox() {
   // Admins y gestores: la bandeja es atencion al cliente, no configuracion.
   const canWhatsapp = canUseWhatsapp(me?.role);
 
+  // Las lineas conectadas. Con una sola no se pinta ninguna pestaña.
+  const { data: config } = useQuery({
+    queryKey: ['wa-config'],
+    queryFn: () => api.get<WaConfigOverview>('/v1/whatsapp/config'),
+    staleTime: 60_000,
+    enabled: canWhatsapp,
+  });
+  const lines = config?.lines ?? [];
+
   const { data: inbox, isLoading } = useQuery({
-    queryKey: ['wa-inbox'],
-    queryFn: () => api.get<WaInbox>('/v1/whatsapp/inbox'),
+    queryKey: ['wa-inbox', line],
+    queryFn: () =>
+      api.get<WaInbox>(`/v1/whatsapp/inbox${line ? `?line=${encodeURIComponent(line)}` : ''}`),
     refetchInterval: 30_000,
     enabled: canWhatsapp,
   });
@@ -201,7 +220,7 @@ export function WhatsappInbox() {
   });
   const clearUnread = useCallback(
     (phone: string) => {
-      qc.setQueryData<WaInbox>(['wa-inbox'], (old) =>
+      qc.setQueryData<WaInbox>(['wa-inbox', line], (old) =>
         old
           ? { ...old, chats: old.chats.map((c) => (c.phone === phone ? { ...c, unread: 0 } : c)) }
           : old,
@@ -310,7 +329,7 @@ export function WhatsappInbox() {
         }
         clearTyping(phone);
         const isOpen = selectedRef.current === phone;
-        qc.setQueryData<WaInbox>(['wa-inbox'], (old) => {
+        qc.setQueryData<WaInbox>(['wa-inbox', line], (old) => {
           if (!old) return old;
           const existing = old.chats.find((c) => c.phone === phone);
           // Un UPDATE de un mensaje VIEJO (chulito en cascada, reaccion,
@@ -361,7 +380,7 @@ export function WhatsappInbox() {
   // ===== Operaciones del menu contextual =====
   const patchChat = useCallback(
     (phone: string, patch: Partial<WaInboxItem>) => {
-      qc.setQueryData<WaInbox>(['wa-inbox'], (old) =>
+      qc.setQueryData<WaInbox>(['wa-inbox', line], (old) =>
         old
           ? {
               ...old,
@@ -372,7 +391,9 @@ export function WhatsappInbox() {
           : old,
       );
     },
-    [qc],
+    // `line` entra en la clave del cache: sin el, al cambiar de numero esto
+    // escribiria en la bandeja de la linea anterior.
+    [qc, line],
   );
   const chatOp = useMutation({
     mutationFn: (vars: {
@@ -470,6 +491,23 @@ export function WhatsappInbox() {
         <div className="px-4 pb-2 pt-4">
           <h1 className="text-[19px] font-bold text-[#111b21] dark:text-[#e9edef]">Chats</h1>
         </div>
+        {/* Una pestaña por numero. Con uno solo no se pinta: no informa nada. */}
+        {lines.length > 1 ? (
+          <div className="flex gap-1.5 overflow-x-auto px-3 pb-2 scrollbar-none">
+            <LineTab label="Todos" on={line === null} onPick={() => setLine(null)} />
+            {lines.map((l) => (
+              <LineTab
+                key={l.id}
+                label={l.label}
+                on={line === l.id}
+                onPick={() => {
+                  setLine(l.id);
+                  setSelected(null);
+                }}
+              />
+            ))}
+          </div>
+        ) : null}
         <div className="px-3 pb-2">
           <div className="flex h-9 items-center gap-2 rounded-lg bg-[#f0f2f5] px-3 dark:bg-[#202c33]">
             <Search className="h-4 w-4 shrink-0 text-[#54656f] dark:text-[#8696a0]" />
@@ -1041,5 +1079,24 @@ function ChatHeader({
         <X className="h-[18px] w-[18px]" />
       </button>
     </div>
+  );
+}
+
+/** Pestaña de numero en la bandeja (lenguaje de WhatsApp Web, no Cobalto). */
+function LineTab({ label, on, onPick }: { label: string; on: boolean; onPick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onPick}
+      aria-pressed={on}
+      className={cn(
+        'shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-[12.5px] font-medium transition-colors',
+        on
+          ? 'bg-[#d9fdd3] text-[#111b21] dark:bg-[#005c4b] dark:text-[#e9edef]'
+          : 'bg-[#f0f2f5] text-[#54656f] dark:bg-[#202c33] dark:text-[#8696a0]',
+      )}
+    >
+      {label}
+    </button>
   );
 }

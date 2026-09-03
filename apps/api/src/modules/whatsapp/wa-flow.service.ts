@@ -4,8 +4,11 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomBytes } from 'node:crypto';
 import type {
+  CreateWaLineInput,
   SaveWaFlowInput,
+  UpdateWaLineInput,
   WaConfigOverview,
   WaFlow,
   WaFlowConfig,
@@ -18,7 +21,11 @@ import type { Prisma, PrismaClient } from '.prisma/tenant-client';
 
 import { canUseWhatsapp, isAdmin } from '../../common/rbac';
 import type { AuthContext } from '../../common/types/authenticated-request';
+import { EnvelopeService } from '../../infrastructure/crypto/envelope.service';
+import { ControlPlaneService } from '../../infrastructure/prisma/control-plane.service';
 import { getTenantContext } from '../../infrastructure/tenant-context';
+import { Dialog360Client } from './dialog360-client.service';
+import { WaConnectionService } from './wa-connection.service';
 import { loadPlatforms } from '../orders/platforms.store';
 
 /** Un pedido, en lo minimo que hace falta para saber a que flujo pertenece. */
@@ -47,6 +54,13 @@ export interface FlowOrderRef {
  */
 @Injectable()
 export class WaFlowService {
+  constructor(
+    private readonly control: ControlPlaneService,
+    private readonly envelope: EnvelopeService,
+    private readonly dialog360: Dialog360Client,
+    private readonly waConn: WaConnectionService,
+  ) {}
+
   /**
    * Clave canonica de FUENTE de un pedido. La misma en las reglas y en los
    * alcances: un solo formato, un solo bug posible.
@@ -143,6 +157,143 @@ export class WaFlowService {
     };
   }
 
+  // === LINEAS ===
+
+  /**
+   * Da de alta una linea nueva. NO toca las que ya existen: es lo que separa
+   * esto de la vieja tarjeta de Conexiones, que solo sabia pisar la unica.
+   *
+   * En 360dialog el webhook se configura solo (su API lo permite). En Meta hay
+   * que pegarlo a mano en el panel de la App, asi que el alta devuelve la URL y
+   * el token de verificacion para que el usuario los copie.
+   */
+  async createLine(
+    input: CreateWaLineInput,
+    auth: AuthContext,
+    publicBaseUrl: string,
+  ): Promise<WaLineSummary> {
+    this.assertAdmin(auth);
+    const { tenantId, prisma } = getTenantContext();
+
+    const secret = process.env.CONFIRMATION_WEBHOOK_SECRET;
+    if (!secret) throw new BadRequestException('Falta CONFIRMATION_WEBHOOK_SECRET en el servidor');
+    const tenant = await this.control.tenant.findUnique({ where: { id: tenantId } });
+    if (!tenant) throw new BadRequestException('Tenant no encontrado');
+
+    // La linea se crea PRIMERO para tener su id: el webhook lleva ?line=<id>,
+    // que es lo que hace que se le conteste al cliente por SU numero y no por
+    // otro. Si la validacion falla despues, se borra.
+    const encryptedApiKey = await this.envelope.encryptField(tenantId, input.apiKey);
+    const encryptedAppSecret = input.appSecret
+      ? await this.envelope.encryptField(tenantId, input.appSecret)
+      : null;
+    const verifyToken = input.provider === 'meta' ? randomBytes(16).toString('hex') : null;
+
+    const line = await prisma.waLine.create({
+      data: {
+        label: input.label,
+        provider: input.provider,
+        encryptedApiKey,
+        encryptedAppSecret,
+        phoneNumberId: input.phoneNumberId ?? null,
+        wabaId: input.wabaId ?? null,
+        verifyToken,
+        countryCode: input.countryCode,
+        mode: input.mode,
+        status: 'connected',
+      },
+    });
+
+    const webhookUrl =
+      `${publicBaseUrl.replace(/\/$/, '')}/v1/webhooks/dialog360/${encodeURIComponent(tenant.slug)}` +
+      `?token=${encodeURIComponent(secret)}&line=${encodeURIComponent(line.id)}`;
+
+    if (input.provider === 'dialog360') {
+      try {
+        await this.dialog360.setWebhook(
+          this.dialog360.buildHttp(input.apiKey, input.mode),
+          webhookUrl,
+        );
+      } catch (err) {
+        // Credencial mala: no se deja una linea muerta en la lista.
+        await prisma.waLine.delete({ where: { id: line.id } }).catch(() => null);
+        throw new BadRequestException(
+          `No se pudo conectar con 360dialog: ${(err as Error).message}`.slice(0, 300),
+        );
+      }
+    }
+
+    const saved = await prisma.waLine.update({
+      where: { id: line.id },
+      data: { webhookUrl },
+    });
+
+    // Predeterminada: si es la primera, siempre; si lo pidieron, se la quita a
+    // la anterior (dos predeterminadas serian un empate sin desempate).
+    const count = await prisma.waLine.count();
+    if (input.isDefault || count === 1) await this.makeDefault(saved.id);
+
+    this.waConn.invalidate(tenantId);
+    const fresh = await prisma.waLine.findUnique({ where: { id: saved.id } });
+    return toLineSummary(fresh!);
+  }
+
+  /** Renombrar o convertir en predeterminada. No toca credenciales. */
+  async updateLine(
+    id: string,
+    input: UpdateWaLineInput,
+    auth: AuthContext,
+  ): Promise<WaLineSummary> {
+    this.assertAdmin(auth);
+    const { tenantId, prisma } = getTenantContext();
+    const exists = await prisma.waLine.findUnique({ where: { id } });
+    if (!exists) throw new NotFoundException('Esa línea no existe');
+
+    if (input.label) await prisma.waLine.update({ where: { id }, data: { label: input.label } });
+    if (input.isDefault) await this.makeDefault(id);
+
+    this.waConn.invalidate(tenantId);
+    const fresh = await prisma.waLine.findUnique({ where: { id } });
+    return toLineSummary(fresh!);
+  }
+
+  /**
+   * Desconecta una linea. Los mensajes NO se borran: quedan con su lineId para
+   * que el historial siga contando de donde salio cada uno.
+   */
+  async removeLine(id: string, auth: AuthContext): Promise<void> {
+    this.assertAdmin(auth);
+    const { tenantId, prisma } = getTenantContext();
+
+    const line = await prisma.waLine.findUnique({ where: { id } });
+    if (!line) return;
+
+    const flows = await prisma.waFlow.count({ where: { lineId: id } });
+    if (flows > 0) {
+      throw new BadRequestException(
+        `Esa línea todavía tiene ${flows} mensaje(s) automático(s) apuntando a ella. Muévelos a otra línea o elimínalos antes.`,
+      );
+    }
+
+    await prisma.waLine.delete({ where: { id } });
+    // Sin predeterminada, los envios que no traen linea se quedarian sin saber
+    // por donde salir: la mas antigua toma el relevo.
+    if (line.isDefault) {
+      const next = await prisma.waLine.findFirst({ orderBy: { createdAt: 'asc' } });
+      if (next) await this.makeDefault(next.id);
+    }
+    this.waConn.invalidate(tenantId);
+  }
+
+  /** Una sola predeterminada: se la quita a las demas en la misma transaccion. */
+  private async makeDefault(id: string): Promise<void> {
+    const { prisma } = getTenantContext();
+    await prisma.$transaction([
+      prisma.waLine.updateMany({ where: { id: { not: id } }, data: { isDefault: false } }),
+      prisma.waLine.update({ where: { id }, data: { isDefault: true } }),
+    ]);
+  }
+
   /**
    * Crea las filas de los flujos que aun no la tienen, con lo que hoy hace el
    * codigo: encendidos, por la linea predeterminada y para todos los pedidos.
@@ -236,6 +387,8 @@ function toLineSummary(r: {
   isDefault: boolean;
   status: string;
   lastError: string | null;
+  webhookUrl: string | null;
+  verifyToken: string | null;
   createdAt: Date;
 }): WaLineSummary {
   return {
@@ -247,6 +400,8 @@ function toLineSummary(r: {
     isDefault: r.isDefault,
     status: r.status === 'error' ? 'error' : 'connected',
     lastError: r.lastError,
+    webhookUrl: r.webhookUrl,
+    verifyToken: r.verifyToken,
     createdAt: r.createdAt.toISOString(),
   };
 }

@@ -25,6 +25,12 @@ export const waLineSummarySchema = z.object({
   isDefault: z.boolean(),
   status: z.enum(['connected', 'error']),
   lastError: z.string().nullable().default(null),
+  /** URL a la que el proveedor debe mandar los mensajes de ESTA linea. En Meta
+   *  hay que pegarla a mano en el panel de la App; en 360dialog se configura
+   *  sola al conectar. */
+  webhookUrl: z.string().nullable().default(null),
+  /** Solo Meta: token del challenge del webhook. No es secreto. */
+  verifyToken: z.string().nullable().default(null),
   createdAt: z.string(),
 });
 export type WaLineSummary = z.infer<typeof waLineSummarySchema>;
@@ -104,6 +110,44 @@ export const saveWaFlowSchema = z.object({
   priority: z.number().int().min(0).max(100).default(0),
 });
 export type SaveWaFlowInput = z.infer<typeof saveWaFlowSchema>;
+
+/**
+ * Dar de alta una LINEA nueva.
+ *
+ * 360dialog: basta la API key. Meta nativa: el token permanente de la App, el
+ * id del numero y el de la WABA — y ademas hay que pegar en el panel de Meta la
+ * URL del webhook y el token de verificacion que devuelve el alta.
+ */
+export const createWaLineSchema = z
+  .object({
+    label: z.string().trim().min(2, 'Ponle un nombre').max(40),
+    provider: waProviderSchema.default('dialog360'),
+    apiKey: z.string().trim().min(10, 'Credencial muy corta').max(500),
+    mode: z.enum(['sandbox', 'production']).default('production'),
+    countryCode: z
+      .string()
+      .trim()
+      .regex(/^\d{1,4}$/)
+      .default('57'),
+    /** Solo Meta. */
+    phoneNumberId: z.string().trim().max(40).optional(),
+    wabaId: z.string().trim().max(40).optional(),
+    appSecret: z.string().trim().max(200).optional(),
+    /** Marcarla como la que se usa cuando ninguna regla dice otra cosa. */
+    isDefault: z.boolean().default(false),
+  })
+  .refine((v) => v.provider !== 'meta' || (v.phoneNumberId && v.wabaId), {
+    message: 'Con la API de Meta hacen falta el ID del número y el de la WABA',
+    path: ['phoneNumberId'],
+  });
+export type CreateWaLineInput = z.infer<typeof createWaLineSchema>;
+
+/** Renombrar una linea o convertirla en la predeterminada. */
+export const updateWaLineSchema = z.object({
+  label: z.string().trim().min(2).max(40).optional(),
+  isDefault: z.boolean().optional(),
+});
+export type UpdateWaLineInput = z.infer<typeof updateWaLineSchema>;
 
 /**
  * Una FUENTE de pedidos a la que se puede apuntar un flujo: una tienda de

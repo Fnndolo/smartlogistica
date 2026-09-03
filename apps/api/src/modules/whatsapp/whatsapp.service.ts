@@ -617,21 +617,43 @@ export class WhatsappService {
     );
   }
 
-  async inbox(auth: AuthContext): Promise<WaInbox> {
+  /**
+   * Bandeja. `lineId` filtra por NUMERO: con dos lineas conectadas los chats no
+   * se mezclan (cada numero es su propia bandeja, como en el celular).
+   *
+   * El filtro mira el ULTIMO mensaje del chat, no todos: si un cliente escribio
+   * alguna vez al otro numero, su conversacion pertenece a donde esta viva.
+   */
+  async inbox(auth: AuthContext, lineId?: string | null): Promise<WaInbox> {
     this.assertWhatsappAccess(auth);
     const { prisma } = getTenantContext();
+    const line = lineId?.trim() || null;
 
     const [last, unreadRows, contacts] = await Promise.all([
-      prisma.$queryRaw<
-        Array<{
-          phone: string;
-          kind: string;
-          body: string | null;
-          direction: string;
-          status: string | null;
-          createdAt: Date;
-        }>
-      >`SELECT DISTINCT ON (phone) phone, kind, body, direction, status, "createdAt"
+      line
+        ? prisma.$queryRaw<
+            Array<{
+              phone: string;
+              kind: string;
+              body: string | null;
+              direction: string;
+              status: string | null;
+              createdAt: Date;
+            }>
+          >`SELECT * FROM (
+              SELECT DISTINCT ON (phone) phone, kind, body, direction, status, "createdAt", "lineId"
+              FROM "WaMessage" ORDER BY phone, "createdAt" DESC
+            ) t WHERE t."lineId" = ${line}`
+        : prisma.$queryRaw<
+            Array<{
+              phone: string;
+              kind: string;
+              body: string | null;
+              direction: string;
+              status: string | null;
+              createdAt: Date;
+            }>
+          >`SELECT DISTINCT ON (phone) phone, kind, body, direction, status, "createdAt"
         FROM "WaMessage" ORDER BY phone, "createdAt" DESC`,
       prisma.$queryRaw<Array<{ phone: string; unread: bigint }>>`
         SELECT m.phone, COUNT(*)::bigint AS unread
