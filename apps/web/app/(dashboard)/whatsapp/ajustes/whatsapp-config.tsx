@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FlowDrawer, type FlowSession } from './flow-drawer';
 import { LineDrawer } from './line-drawer';
+import { TemplatesSection } from './templates-section';
 import { ApiError, api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 
@@ -215,6 +216,8 @@ export function WhatsappConfig({ initial }: { initial?: WaConfigOverview }) {
           ))}
         </div>
       </section>
+
+      <TemplatesSection lines={data.lines} />
 
       {/* key = apertura: cada vez que se abre, el formulario nace limpio. */}
       <LineDrawer

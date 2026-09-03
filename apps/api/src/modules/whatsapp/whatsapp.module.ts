@@ -4,6 +4,7 @@ import { Dialog360Client } from './dialog360-client.service';
 import { WaConnectionService } from './wa-connection.service';
 import { WaConfigController } from './wa-config.controller';
 import { WaFlowService } from './wa-flow.service';
+import { WaTemplateService } from './wa-template.service';
 import { WaPublisherService } from './wa-publisher.service';
 import { WaUpsellProcessor, WaUpsellService } from './wa-upsell.service';
 import { WhatsappService } from './whatsapp.service';
@@ -29,6 +30,7 @@ import { Dialog360WebhookController } from './whatsapp-webhook.controller';
     WaPublisherService,
     WaConnectionService,
     WaFlowService,
+    WaTemplateService,
     WaUpsellService,
     WaUpsellProcessor,
     Dialog360Client,

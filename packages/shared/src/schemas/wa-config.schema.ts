@@ -173,3 +173,140 @@ export const waConfigOverviewSchema = z.object({
   unconfigured: z.array(waFlowKindSchema),
 });
 export type WaConfigOverview = z.infer<typeof waConfigOverviewSchema>;
+
+// === PLANTILLAS DE META ===
+// Fuera de la ventana de 24h Meta solo deja escribir con una plantilla que EL
+// aprobo. Aqui se ven, se crean y se borran; editarlas no se puede — ver
+// `createWaTemplateSchema`.
+
+export const waTemplateCategorySchema = z.enum(['UTILITY', 'MARKETING', 'AUTHENTICATION']);
+export type WaTemplateCategory = z.infer<typeof waTemplateCategorySchema>;
+
+export const WA_TEMPLATE_CATEGORY_LABEL: Record<WaTemplateCategory, string> = {
+  UTILITY: 'Servicio',
+  MARKETING: 'Publicidad',
+  AUTHENTICATION: 'Claves',
+};
+
+export const WA_TEMPLATE_CATEGORY_HELP: Record<WaTemplateCategory, string> = {
+  UTILITY:
+    'Sobre un pedido que el cliente ya hizo: confirmar, avisar del envio, posventa. Es la mas barata y la que Meta aprueba sin pelear.',
+  MARKETING: 'Ofertas y novedades. Cuesta mas y el cliente la puede silenciar.',
+  AUTHENTICATION: 'Codigos de un solo uso. No la necesitas aqui.',
+};
+
+/**
+ * Un boton de plantilla. Se admiten los dos tipos que sirven de verdad aqui:
+ * respuesta rapida (la que usa la confirmacion de direccion) y enlace.
+ */
+export const waTemplateButtonSchema = z.object({
+  type: z.enum(['QUICK_REPLY', 'URL']),
+  text: z.string().trim().min(1, 'El boton necesita texto').max(25, 'Maximo 25 caracteres'),
+  /** Solo URL. */
+  url: z.string().trim().max(2000).optional(),
+});
+export type WaTemplateButton = z.infer<typeof waTemplateButtonSchema>;
+
+/** Una plantilla tal como esta en la WABA. */
+export const waTemplateDetailSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  language: z.string(),
+  category: z.string(),
+  /** approved | pending | rejected | disabled | ... (minusculas). */
+  status: z.string(),
+  /** Por que la rechazo Meta, si la rechazo. */
+  rejectedReason: z.string().nullable().default(null),
+  /** Encabezado: `TEXT` con su texto, o `IMAGE`/`DOCUMENT`/`VIDEO` (el archivo
+   *  se manda al enviar, no vive en la plantilla). */
+  header: z.object({ format: z.string(), text: z.string() }).nullable().default(null),
+  body: z.string(),
+  footer: z.string().nullable().default(null),
+  buttons: z.array(waTemplateButtonSchema).default([]),
+  /** Cuantas variables {{n}} usa el cuerpo. */
+  variables: z.number().int().min(0),
+  /** Los valores de ejemplo con los que se aprobo. */
+  examples: z.array(z.string()).default([]),
+  createdAt: z.string().nullable().default(null),
+  /** Mensajes automaticos que la nombran: borrarla los dejaria sin plantilla. */
+  usedBy: z.array(waFlowKindSchema).default([]),
+});
+export type WaTemplateDetail = z.infer<typeof waTemplateDetailSchema>;
+
+export const waTemplateListForLineSchema = z.object({
+  lineId: z.string(),
+  lineLabel: z.string(),
+  templates: z.array(waTemplateDetailSchema),
+});
+export type WaTemplateListForLine = z.infer<typeof waTemplateListForLineSchema>;
+
+/** Nombre de plantilla admitido por Meta: minusculas, numeros y guion bajo. */
+export const WA_TEMPLATE_NAME_RE = /^[a-z0-9_]+$/;
+
+/** Las variables tienen que ser {{1}}, {{2}}... correlativas desde 1. */
+export function waTemplateVars(body: string): number[] {
+  return [...body.matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((m) => Number(m[1]));
+}
+
+/**
+ * Crear una plantilla. No hay "editar": ni Meta ni 360dialog dejan cambiarle
+ * el cuerpo a una plantilla aprobada (el proveedor responde 405), asi que
+ * modificar es borrar y volver a crear — y eso reabre la aprobacion de Meta.
+ */
+export const createWaTemplateSchema = z
+  .object({
+    lineId: z.string().min(6),
+    name: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .min(3, 'Minimo 3 caracteres')
+      .max(60, 'Maximo 60 caracteres')
+      .regex(WA_TEMPLATE_NAME_RE, 'Solo minusculas, numeros y guion bajo'),
+    language: z.string().trim().min(2).max(10).default('es'),
+    category: waTemplateCategorySchema.default('UTILITY'),
+    /** Encabezado de texto (opcional). Los de archivo no se crean desde aqui. */
+    header: z.string().trim().max(60).optional(),
+    body: z.string().trim().min(1, 'El mensaje no puede estar vacio').max(1024),
+    /** Un valor de ejemplo por variable. Meta los EXIGE para aprobar. */
+    examples: z.array(z.string().trim().min(1).max(200)).max(10).default([]),
+    footer: z.string().trim().max(60).optional(),
+    buttons: z.array(waTemplateButtonSchema).max(3).default([]),
+  })
+  .superRefine((v, ctx) => {
+    const nums = waTemplateVars(v.body);
+    const expected = nums.map((_, i) => i + 1);
+    if (nums.join(',') !== expected.join(',')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['body'],
+        message: 'Las variables tienen que ir en orden: {{1}}, {{2}}, {{3}}...',
+      });
+    }
+    if (v.examples.length !== nums.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['examples'],
+        message: `Faltan ejemplos: la plantilla usa ${nums.length} variable(s)`,
+      });
+    }
+    // Meta rechaza mezclar respuestas rapidas con botones de enlace.
+    const kinds = new Set(v.buttons.map((b) => b.type));
+    if (kinds.size > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['buttons'],
+        message: 'No se pueden mezclar respuestas rapidas con enlaces',
+      });
+    }
+    v.buttons.forEach((b, i) => {
+      if (b.type === 'URL' && !/^https?:\/\/.+/.test(b.url ?? '')) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['buttons', i, 'url'],
+          message: 'Pon el enlace completo (https://...)',
+        });
+      }
+    });
+  });
+export type CreateWaTemplateInput = z.infer<typeof createWaTemplateSchema>;

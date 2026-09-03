@@ -1,21 +1,37 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Req } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  Post,
+  Put,
+  Query,
+  Req,
+} from '@nestjs/common';
 import type { Request } from 'express';
 import {
   createWaLineSchema,
+  createWaTemplateSchema,
   saveWaFlowSchema,
   updateWaLineSchema,
   type CreateWaLineInput,
+  type CreateWaTemplateInput,
   type SaveWaFlowInput,
   type UpdateWaLineInput,
   type WaConfigOverview,
   type WaFlow,
   type WaLineSummary,
+  type WaTemplateDetail,
+  type WaTemplateListForLine,
 } from '@smartlogistica/shared';
 
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
 import type { AuthContext } from '../../common/types/authenticated-request';
 import { WaFlowService } from './wa-flow.service';
+import { WaTemplateService } from './wa-template.service';
 
 /**
  * CONFIGURACION de WhatsApp: las lineas conectadas y los mensajes automaticos.
@@ -26,7 +42,10 @@ import { WaFlowService } from './wa-flow.service';
  */
 @Controller('whatsapp/config')
 export class WaConfigController {
-  constructor(private readonly flows: WaFlowService) {}
+  constructor(
+    private readonly flows: WaFlowService,
+    private readonly templates: WaTemplateService,
+  ) {}
 
   /** Todo lo que necesita la pantalla, en un solo viaje. */
   @Get()
@@ -101,5 +120,37 @@ export class WaConfigController {
   @HttpCode(204)
   async remove(@Param('id') id: string, @CurrentUser() user: AuthContext): Promise<void> {
     await this.flows.remove(id, user);
+  }
+
+  // === PLANTILLAS DE META ===
+  // Viven en la WABA, no en nuestra base: aqui solo se leen, se crean y se
+  // borran contra el proveedor.
+
+  @Get('templates')
+  async listTemplates(
+    @CurrentUser() user: AuthContext,
+    @Query('line') line?: string,
+  ): Promise<WaTemplateListForLine> {
+    return this.templates.list(line?.trim() || null, user);
+  }
+
+  @Post('templates')
+  @HttpCode(201)
+  async createTemplate(
+    @Body(new ZodValidationPipe(createWaTemplateSchema)) body: CreateWaTemplateInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<WaTemplateDetail> {
+    return this.templates.create(body, user);
+  }
+
+  /** El nombre va en la ruta: es la clave de la plantilla en Meta. */
+  @Delete('templates/:name')
+  @HttpCode(204)
+  async removeTemplate(
+    @Param('name') name: string,
+    @CurrentUser() user: AuthContext,
+    @Query('line') line?: string,
+  ): Promise<void> {
+    await this.templates.remove(line?.trim() || null, name, user);
   }
 }
