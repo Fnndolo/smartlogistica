@@ -163,6 +163,18 @@ export type CreateWaLineInput = z.infer<typeof createWaLineSchema>;
 export const updateWaLineSchema = z.object({
   label: z.string().trim().min(2).max(40).optional(),
   isDefault: z.boolean().optional(),
+  /**
+   * Credencial NUEVA para la misma linea.
+   *
+   * Hace falta porque los proveedores la rotan solos: 360dialog entrega otra
+   * API key cada vez que se reconecta un canal, y un token de Meta se puede
+   * revocar. Sin esto, rotar la clave dejaba la plataforma apuntando a una
+   * credencial muerta y sin ninguna forma de arreglarlo desde la pantalla —
+   * desconectar tampoco vale cuando es la unica linea.
+   */
+  apiKey: z.string().trim().min(10, 'Credencial muy corta').max(500).optional(),
+  /** Solo Meta, y solo si tambien cambio. */
+  appSecret: z.string().trim().min(16).max(200).optional(),
 });
 export type UpdateWaLineInput = z.infer<typeof updateWaLineSchema>;
 

@@ -281,6 +281,43 @@ export class WaFlowService {
     if (input.label) await prisma.waLine.update({ where: { id }, data: { label: input.label } });
     if (input.isDefault) await this.makeDefault(id);
 
+    if (input.apiKey) {
+      // Se PRUEBA antes de guardar: si la credencial nueva no sirve, la linea
+      // se queda con la vieja. Guardar primero y validar despues dejaria el
+      // numero mudo por una clave mal pegada.
+      const client = this.clients.create(exists, input.apiKey);
+      let phone: string | null = null;
+      try {
+        phone = (await client.verifyCredentials()).phone;
+      } catch (err) {
+        throw new BadRequestException(
+          `Esa credencial no sirve: ${(err as Error).message}`.slice(0, 300),
+        );
+      }
+      // El webhook se registra CON la clave nueva: al rotar el canal, el
+      // proveedor suele perder la URL, y es justo lo que hay que restaurar.
+      if (exists.webhookUrl) {
+        await client.registerWebhook(exists.webhookUrl).catch(() => null);
+      }
+      await prisma.waLine.update({
+        where: { id },
+        data: {
+          encryptedApiKey: await this.envelope.encryptField(tenantId, input.apiKey),
+          ...(input.appSecret
+            ? { encryptedAppSecret: await this.envelope.encryptField(tenantId, input.appSecret) }
+            : {}),
+          ...(phone ? { phone } : {}),
+          status: 'connected',
+          lastError: null,
+        },
+      });
+    } else if (input.appSecret) {
+      await prisma.waLine.update({
+        where: { id },
+        data: { encryptedAppSecret: await this.envelope.encryptField(tenantId, input.appSecret) },
+      });
+    }
+
     this.waConn.invalidate(tenantId);
     const fresh = await prisma.waLine.findUnique({ where: { id } });
     return toLineSummary(fresh!);

@@ -177,9 +177,9 @@ export function WhatsappConfig({ initial }: { initial?: WaConfigOverview }) {
                   ) : null}
                   {l.status === 'pending' && l.provider === 'meta' ? (
                     <p className="mt-1 max-w-[70ch] text-[12px] leading-[1.5] text-amber-600 dark:text-amber-400">
-                      Esta línea no recibe mensajes todavía. Pega su URL y su token en el panel de tu
-                      App de Meta y suscríbete al campo <b>messages</b>; en cuanto Meta verifique la
-                      URL, pasa a conectada sola.
+                      Esta línea no recibe mensajes todavía. Pega su URL y su token en el panel de
+                      tu App de Meta y suscríbete al campo <b>messages</b>; en cuanto Meta verifique
+                      la URL, pasa a conectada sola.
                     </p>
                   ) : null}
                 </div>
@@ -259,16 +259,23 @@ function LineActions({ line, canRemove }: { line: WaLineSummary; canRemove: bool
   const qc = useQueryClient();
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(line.label);
+  const [rekeying, setRekeying] = useState(false);
+  const [key, setKey] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const done = (msg: string) => {
     toast.success(msg);
     qc.invalidateQueries({ queryKey: ['wa-config'] });
+    // Las plantillas se piden por linea con la credencial: al rotarla hay que
+    // volver a preguntarlas o se seguirian viendo las de la clave vieja.
+    qc.invalidateQueries({ queryKey: ['wa-templates'] });
     setRenaming(false);
+    setRekeying(false);
+    setKey('');
   };
 
   const patch = useMutation({
-    mutationFn: (body: { label?: string; isDefault?: boolean }) =>
+    mutationFn: (body: { label?: string; isDefault?: boolean; apiKey?: string }) =>
       api.put<WaLineSummary>(`/v1/whatsapp/config/lines/${line.id}`, body),
     onSuccess: () => done('Línea actualizada'),
     onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo guardar'),
@@ -279,6 +286,48 @@ function LineActions({ line, canRemove }: { line: WaLineSummary; canRemove: bool
     onSuccess: () => done('Línea desconectada'),
     onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo desconectar'),
   });
+
+  if (rekeying) {
+    return (
+      <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
+        <Input
+          autoFocus
+          type="password"
+          autoComplete="off"
+          value={key}
+          placeholder={line.provider === 'meta' ? 'Token nuevo (EAAG…)' : 'API key nueva'}
+          onChange={(e) => setKey(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && key.trim().length >= 10) patch.mutate({ apiKey: key.trim() });
+            if (e.key === 'Escape') {
+              setKey('');
+              setRekeying(false);
+            }
+          }}
+          aria-label="Credencial nueva"
+          className="h-auto min-h-[34px] min-w-[190px] flex-1 rounded-[9px] border-input bg-card text-[13px] shadow-none"
+        />
+        <Button
+          onClick={() => patch.mutate({ apiKey: key.trim() })}
+          loading={patch.isPending}
+          disabled={key.trim().length < 10}
+          className={cn(BTN_PRIMARY_CLS, BTN_SM_CLS)}
+        >
+          Probar y guardar
+        </Button>
+        <Button
+          variant="ghost"
+          onClick={() => {
+            setKey('');
+            setRekeying(false);
+          }}
+          className={cn(BTN_GHOST_CLS, BTN_SM_CLS)}
+        >
+          Cancelar
+        </Button>
+      </div>
+    );
+  }
 
   if (renaming) {
     return (
@@ -328,6 +377,16 @@ function LineActions({ line, canRemove }: { line: WaLineSummary; canRemove: bool
         className={cn(BTN_GHOST_CLS, BTN_SM_CLS)}
       >
         Renombrar
+      </Button>
+      {/* Los proveedores rotan la credencial solos (360dialog entrega otra API
+          key cada vez que se reconecta un canal). Sin esto habia que
+          desconectar la linea, y con una sola ni eso se puede. */}
+      <Button
+        variant="ghost"
+        onClick={() => setRekeying(true)}
+        className={cn(BTN_GHOST_CLS, BTN_SM_CLS)}
+      >
+        Cambiar credencial
       </Button>
       {line.isDefault ? null : (
         <Button
