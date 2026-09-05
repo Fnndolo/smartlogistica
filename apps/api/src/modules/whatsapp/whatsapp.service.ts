@@ -59,6 +59,15 @@ import {
 } from './wa-shared';
 import { WhatsappWebhookService } from './whatsapp-webhook.service';
 
+/**
+ * Texto de respaldo de la GUIA para el hilo, cuando la WABA no deja leer la
+ * plantilla. Lo que le llega al cliente lo pone Meta desde la plantilla
+ * aprobada; esto es solo lo que se pinta de nuestro lado para que la
+ * conversacion no quede con un hueco.
+ */
+const GUIDE_FALLBACK_BODY =
+  'Le compartimos la guía para el seguimiento de su pedido en el archivo adjunto.';
+
 /** Ultimos mensajes que carga el hilo (el historial completo queda guardado). */
 const THREAD_TAKE = 500;
 
@@ -1199,13 +1208,29 @@ export class WhatsappService {
       // configuradas devuelve la predeterminada, que es lo de siempre.
       const d360 = await this.waConn.forLine(tenantId, prisma, flow?.lineId ?? null);
       if (!waCanReachCustomers(d360)) return;
+      const names = flow?.config.templateNames?.length
+        ? flow.config.templateNames
+        : this.guideTemplatesFor(carrier);
       const list = await this.cachedTemplates(tenantId, d360.lineId, d360.client).catch(() => []);
-      const tpl = this.guideTemplatesFor(carrier)
-        .map((n) => list.find((x) => x.name === n && x.status === 'approved'))
-        .find(Boolean);
+      const tpl =
+        names.map((n) => list.find((x) => x.name === n && x.status === 'approved')).find(Boolean) ??
+        // LISTAR y ENVIAR son permisos distintos en Meta: para mandar una
+        // plantilla basta con su NOMBRE. Cuando el proveedor devuelve la lista
+        // vacia — le pasa al perder el permiso de gestion sobre la WABA — se
+        // manda igual con el primer nombre configurado. Si de verdad no
+        // existiera, Meta responde 132001 y el fallo se VE en el hilo; antes
+        // esto se rendia en silencio y el cliente se quedaba sin su guia.
+        (list.length === 0 && names[0]
+          ? { name: names[0], language: D360_TEMPLATE_LANG, body: GUIDE_FALLBACK_BODY }
+          : null);
       if (!tpl) {
         this.logger.warn('Guia por WhatsApp: sin plantilla de guia APROBADA en la WABA aun');
         return;
+      }
+      if (list.length === 0) {
+        this.logger.warn(
+          `Guia por WhatsApp: la WABA no devolvio plantillas; se envia "${tpl.name}" a ciegas`,
+        );
       }
       const clientName = (order.customerName ?? '').trim().toUpperCase();
       const fileName = `GUIA-${clientName || order.id}.pdf`;

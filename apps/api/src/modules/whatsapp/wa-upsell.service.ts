@@ -217,9 +217,16 @@ export class WaUpsellService {
       const priority = flow.config.templateNames?.length
         ? flow.config.templateNames
         : UPSELL_TEMPLATE_PRIORITY;
-      const tpl = priority
-        .map((n) => list.find((x) => x.name === n && x.status === 'approved'))
-        .find(Boolean);
+      const tpl =
+        priority
+          .map((n) => list.find((x) => x.name === n && x.status === 'approved'))
+          .find(Boolean) ??
+        // Igual que en la guia: para ENVIAR una plantilla basta su nombre, y
+        // que el proveedor no deje LISTARLAS es otro permiso. Con la lista
+        // vacia se manda con el primer nombre en vez de callarse.
+        (list.length === 0 && priority[0]
+          ? { name: priority[0], language: 'es', body: '{{1}}', buttons: [] as string[] }
+          : null);
       if (!tpl) {
         this.logger.warn('Upsell paso 3: sin plantilla de respaldo APROBADA en la WABA aun');
         return;

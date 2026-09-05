@@ -130,10 +130,29 @@ export function TemplatesSection({ lines }: { lines: WaLineSummary[] }) {
         </div>
       ) : (data?.templates.length ?? 0) === 0 ? (
         <div className={EMPTY_CLS}>
-          Esta línea todavía no tiene ninguna plantilla.
-          {active?.status === 'pending'
-            ? ' Puede que aún no hayas terminado de conectarla en el panel de Meta.'
-            : ''}
+          <b className="text-foreground">
+            {active?.provider === 'meta'
+              ? 'Esta línea todavía no tiene ninguna plantilla.'
+              : 'Tu proveedor no está devolviendo las plantillas de esta línea.'}
+          </b>
+          {active?.provider === 'meta' ? (
+            active.status === 'pending' ? (
+              <p className="mt-1.5">
+                Puede que aún no hayas terminado de conectarla en el panel de Meta.
+              </p>
+            ) : null
+          ) : (
+            // Vacio NO es lo mismo que "no hay". Leer las plantillas y enviarlas
+            // son permisos distintos en Meta, y el proveedor puede perder el
+            // primero conservando el segundo: los mensajes automaticos siguen
+            // saliendo mientras esta lista se ve vacia. Decir "no tienes
+            // plantillas" ahi seria mentir.
+            <p className="mx-auto mt-1.5 max-w-[62ch] leading-[1.55]">
+              Puede que sigan existiendo en Meta y que tu proveedor haya perdido el permiso para
+              leerlas. Los mensajes automáticos siguen saliendo igual, porque enviarlas solo
+              necesita el nombre. Si acabas de reconectar el número, escríbeles.
+            </p>
+          )}
         </div>
       ) : (
         <div className="grid gap-2.5">
