@@ -27,7 +27,11 @@ export async function rememberTemplates(
   if (list.length === 0) return;
   const value = { at: new Date().toISOString(), list } as unknown as Prisma.InputJsonValue;
   await prisma.appSetting
-    .upsert({ where: { key: keyFor(lineId) }, create: { key: keyFor(lineId), value }, update: { value } })
+    .upsert({
+      where: { key: keyFor(lineId) },
+      create: { key: keyFor(lineId), value },
+      update: { value },
+    })
     .catch(() => null);
 }
 

@@ -1233,9 +1233,9 @@ export class WhatsappService {
       const names = flow?.config.templateNames?.length
         ? flow.config.templateNames
         : this.guideTemplatesFor(carrier);
-      const { list } = await this.cachedTemplates(tenantId, d360.lineId, d360.client).catch(
-        () => ({ list: [] as WaTemplateLite[] }),
-      );
+      const { list } = await this.cachedTemplates(tenantId, d360.lineId, d360.client).catch(() => ({
+        list: [] as WaTemplateLite[],
+      }));
       const tpl =
         names.map((n) => list.find((x) => x.name === n && x.status === 'approved')).find(Boolean) ??
         // LISTAR y ENVIAR son permisos distintos en Meta: para mandar una

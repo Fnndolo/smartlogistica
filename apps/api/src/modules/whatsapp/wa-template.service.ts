@@ -52,7 +52,13 @@ export class WaTemplateService {
     // El sandbox de 360dialog no tiene WABA propia: no hay plantillas que
     // administrar. Una linea de Meta SIEMPRE las tiene.
     if (isD360Sandbox(conn)) {
-      return { lineId: conn.lineId, lineLabel: conn.label, templates: [], stale: false, readAt: null };
+      return {
+        lineId: conn.lineId,
+        lineLabel: conn.label,
+        templates: [],
+        stale: false,
+        readAt: null,
+      };
     }
 
     const { list: raw, stale, readAt } = await this.cached(tenantId, conn.lineId, conn.client);
@@ -216,7 +222,8 @@ export class WaTemplateService {
 
     // Sin respaldo: si ademas fallo la lectura, el error del proveedor es mas
     // util que un "no hay plantillas" que seria mentira.
-    if (failure) throw translateWaError(failure, 'No se pudieron cargar las plantillas', this.logger);
+    if (failure)
+      throw translateWaError(failure, 'No se pudieron cargar las plantillas', this.logger);
     return { list: [], stale: false, readAt: new Date().toISOString() };
   }
 

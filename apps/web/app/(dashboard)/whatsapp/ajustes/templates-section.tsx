@@ -140,9 +140,10 @@ export function TemplatesSection({ lines }: { lines: WaLineSummary[] }) {
                 Tu proveedor no está devolviendo la lista de plantillas
               </p>
               <p className="mt-1 max-w-[76ch] text-[12.5px] leading-[1.55] text-muted-foreground">
-                Estas son las últimas que pudimos leer. <b>Se pueden enviar igual</b> — para
-                mandarlas solo hace falta el nombre — pero su estado puede haber cambiado, y por eso
-                aquí no se puede crear ni borrar hasta que vuelva la lista.
+                Estas son las últimas que le pudimos leer, con el estado que tenían entonces.{' '}
+                <b>Se pueden enviar con normalidad</b>: para mandarlas solo hace falta el nombre.
+                Crear y borrar sí quedan en pausa hasta que vuelva la lista, porque se harían a
+                ciegas sobre plantillas que ahora mismo no vemos.
               </p>
             </div>
           </div>
@@ -259,9 +260,11 @@ function TemplateCard({
     },
   });
 
-  const state = stale
-    ? { label: 'Sin confirmar', tone: 'muted' as const }
-    : (STATUS[tpl.status] ?? { label: tpl.status || 'Sin estado', tone: 'muted' as const });
+  // El estado que se guardo es el que Meta reporto la ultima vez, asi que es
+  // el dato mas exacto que hay: pintar "sin confirmar" seria menos preciso, no
+  // mas prudente. La advertencia de que la lista es vieja va arriba, una sola
+  // vez, y no repetida en cada tarjeta.
+  const state = STATUS[tpl.status] ?? { label: tpl.status || 'Sin estado', tone: 'muted' as const };
   const category = WA_TEMPLATE_CATEGORY_LABEL[tpl.category as WaTemplateCategory] ?? tpl.category;
 
   return (

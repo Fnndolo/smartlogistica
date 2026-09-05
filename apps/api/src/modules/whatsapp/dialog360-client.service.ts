@@ -3,10 +3,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import axios, { type AxiosInstance } from 'axios';
 import type { CreateWaTemplateInput, Dialog360Mode } from '@smartlogistica/shared';
 
-import type { WaTemplateRaw } from './wa-client.port';
-import { buildTemplateComponents, mapTemplateRow } from './wa-template-mapper';
+import type { WaTemplateLite, WaTemplateRaw } from './wa-client.port';
+import { buildTemplateComponents, mapTemplateRow, toTemplateLite } from './wa-template-mapper';
 
 const TIMEOUT_MS = 30_000;
+
+/** Tope de paginas al listar plantillas: el endpoint nuevo pagina por cursor. */
+const MAX_TEMPLATE_PAGES = 10;
 
 // Headers de axios (acceso laxo).
 type Any = Record<string, any>;
@@ -259,36 +262,11 @@ export class Dialog360Client {
   }
 
   /**
-   * Lista las PLANTILLAS de la WABA (GET /v1/configs/templates). Solo tiene
+   * Lista las PLANTILLAS de la WABA (GET /message_templates). Solo tiene
    * sentido en produccion (el sandbox no tiene WABA propia con plantillas).
    */
-  async listTemplates(http: AxiosInstance): Promise<
-    Array<{
-      name: string;
-      language: string;
-      category: string;
-      status: string;
-      body: string;
-      buttons: string[];
-    }>
-  > {
-    const res = await http.get('/v1/configs/templates', { params: { limit: 100 } });
-    const list: Any[] = res.data?.waba_templates ?? res.data?.templates ?? [];
-    return list.map((tpl) => {
-      const comps: Any[] = Array.isArray(tpl.components) ? tpl.components : [];
-      const bodyComp = comps.find((c) => c?.type === 'BODY');
-      const btnComp = comps.find((c) => c?.type === 'BUTTONS');
-      return {
-        name: String(tpl.name ?? ''),
-        language: String(tpl.language ?? 'es'),
-        category: String(tpl.category ?? ''),
-        status: String(tpl.status ?? '').toLowerCase(),
-        body: String(bodyComp?.text ?? ''),
-        buttons: ((btnComp?.buttons ?? []) as Any[])
-          .map((b) => String(b?.text ?? ''))
-          .filter(Boolean),
-      };
-    });
+  async listTemplates(http: AxiosInstance): Promise<WaTemplateLite[]> {
+    return (await this.listTemplatesDetailed(http)).map(toTemplateLite);
   }
 
   /**
@@ -298,14 +276,23 @@ export class Dialog360Client {
    * solo pinta el cuerpo).
    */
   async listTemplatesDetailed(http: AxiosInstance): Promise<WaTemplateRaw[]> {
-    const res = await http.get('/v1/configs/templates', { params: { limit: 200 } });
-    const list = res.data?.waba_templates ?? res.data?.templates;
-    // Si el sobre no es el esperado se LANZA: devolver [] haria que un fallo de
-    // permisos se leyera como "esta WABA no tiene plantillas".
-    if (!Array.isArray(list)) {
-      throw new Error('360dialog devolvió las plantillas en un formato inesperado');
+    const out: WaTemplateRaw[] = [];
+    let after: string | undefined;
+    for (let page = 0; page < MAX_TEMPLATE_PAGES; page++) {
+      const res = await http.get('/message_templates', {
+        params: { limit: 200, ...(after ? { after } : {}) },
+      });
+      const rows = res.data?.data;
+      // Si el sobre no es el esperado se LANZA: devolver [] haria que un fallo
+      // de permisos se leyera como "esta WABA no tiene plantillas".
+      if (!Array.isArray(rows)) {
+        throw new Error('360dialog devolvió las plantillas en un formato inesperado');
+      }
+      out.push(...(rows as Any[]).map(mapTemplateRow));
+      after = res.data?.paging?.cursors?.after as string | undefined;
+      if (!after || rows.length === 0) break;
     }
-    return (list as Any[]).map(mapTemplateRow);
+    return out;
   }
 
   /**
@@ -316,7 +303,7 @@ export class Dialog360Client {
     http: AxiosInstance,
     input: CreateWaTemplateInput,
   ): Promise<{ status: string }> {
-    const res = await http.post('/v1/configs/templates', {
+    const res = await http.post('/message_templates', {
       name: input.name,
       language: input.language,
       category: input.category,
@@ -326,11 +313,11 @@ export class Dialog360Client {
   }
 
   /**
-   * Borra la plantilla POR NOMBRE (DELETE /v1/configs/templates/{nombre},
-   * verificado). Ojo: Meta borra TODOS los idiomas que compartan ese nombre.
+   * Borra la plantilla POR NOMBRE. Ojo: Meta borra TODOS los idiomas que
+   * compartan ese nombre.
    */
   async deleteTemplate(http: AxiosInstance, name: string): Promise<void> {
-    await http.delete(`/v1/configs/templates/${encodeURIComponent(name)}`);
+    await http.delete('/message_templates', { params: { name } });
   }
 
   /** Envia una PLANTILLA aprobada (la confirmacion del pedido, en produccion). */

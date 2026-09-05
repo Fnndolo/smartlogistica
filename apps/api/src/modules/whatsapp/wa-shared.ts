@@ -79,19 +79,42 @@ export function translateWaError(
       | { message?: string; error?: unknown; meta?: { developer_message?: string } }
       | string
       | undefined;
-    // Formas de error de 360dialog/Meta: {error: "..."}, {meta: {developer_message}}, {message}.
+    // Cuatro formas posibles, y hay que probarlas en orden:
+    //  {error: "texto"}                      -> 360dialog antiguo
+    //  {meta: {developer_message}}           -> 360dialog
+    //  {error: {…}}                          -> META CRUDO, que es lo que
+    //    devuelven ya los endpoints nuevos (/message_templates) y la API
+    //    nativa. Dentro, el mensaje UTIL es error_user_msg o
+    //    error_data.details; el `message` de arriba suele ser generico.
+    //  {message: "texto"}
+    const metaErr =
+      data && typeof data === 'object' && data.error && typeof data.error === 'object'
+        ? (data.error as {
+            message?: string;
+            error_user_msg?: string;
+            error_data?: { details?: string };
+            code?: number;
+            fbtrace_id?: string;
+          })
+        : null;
+    if (metaErr?.fbtrace_id) {
+      // Lo unico que sirve para abrir soporte con Meta: al log, siempre.
+      logger.warn(
+        `WhatsApp error de Meta (code ${metaErr.code ?? '?'}) fbtrace ${metaErr.fbtrace_id}`,
+      );
+    }
     const detail =
       typeof data === 'string'
         ? data.slice(0, 300)
-        : data && typeof data === 'object'
-          ? typeof data.error === 'string'
-            ? data.error
-            : (data.meta?.developer_message ?? data.message ?? null)
-          : null;
+        : metaErr
+          ? (metaErr.error_data?.details ?? metaErr.error_user_msg ?? metaErr.message ?? null)
+          : data && typeof data === 'object'
+            ? typeof data.error === 'string'
+              ? data.error
+              : (data.meta?.developer_message ?? data.message ?? null)
+            : null;
     return new BadRequestException(
-      detail
-        ? `WhatsApp (360dialog): ${String(detail).slice(0, 300)}`
-        : `${fallback} (HTTP ${status ?? '?'})`,
+      detail ? `WhatsApp: ${String(detail).slice(0, 300)}` : `${fallback} (HTTP ${status ?? '?'})`,
     );
   }
   logger.warn(`WhatsApp error: ${err instanceof Error ? err.message : err}`);
