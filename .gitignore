@@ -60,3 +60,6 @@ temp/
 # Artefactos de herramientas de agentes (no son del proyecto)
 .agents/
 skills-lock.json
+
+# Reportes generados a mano (no versionar)
+apps/api/*.csv
