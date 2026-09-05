@@ -12,6 +12,7 @@ import type { AuthContext } from '../../common/types/authenticated-request';
 import type { WaClient } from './wa-client.port';
 import { WaConnectionService } from './wa-connection.service';
 import { isD360Sandbox, translateWaError } from './wa-shared';
+import { recallTemplates, rememberTemplates } from './wa-template-store';
 
 /** Una plantilla sin el cruce con los mensajes automaticos. */
 type RawTemplate = Omit<WaTemplateDetail, 'usedBy'>;
@@ -36,7 +37,10 @@ export class WaTemplateService {
   constructor(private readonly waConn: WaConnectionService) {}
 
   /** Cache corta por LINEA: listar cuesta ~0.5-1s contra 360dialog. */
-  private readonly cache = new Map<string, { at: number; list: RawTemplate[] }>();
+  private readonly cache = new Map<
+    string,
+    { at: number; list: RawTemplate[]; stale: boolean; readAt: string | null }
+  >();
   private static readonly TTL_MS = 30_000;
 
   /** Las plantillas de una linea (la predeterminada si no se dice cual). */
@@ -48,14 +52,16 @@ export class WaTemplateService {
     // El sandbox de 360dialog no tiene WABA propia: no hay plantillas que
     // administrar. Una linea de Meta SIEMPRE las tiene.
     if (isD360Sandbox(conn)) {
-      return { lineId: conn.lineId, lineLabel: conn.label, templates: [] };
+      return { lineId: conn.lineId, lineLabel: conn.label, templates: [], stale: false, readAt: null };
     }
 
-    const raw = await this.cached(tenantId, conn.lineId, conn.client);
+    const { list: raw, stale, readAt } = await this.cached(tenantId, conn.lineId, conn.client);
     const usage = await this.usage(conn.lineId);
     return {
       lineId: conn.lineId,
       lineLabel: conn.label,
+      stale,
+      readAt,
       templates: raw
         .map((t) => ({ ...t, usedBy: usage.get(t.name) ?? [] }))
         // Primero las que fallan (rechazadas y pendientes): son las que piden
@@ -76,7 +82,7 @@ export class WaTemplateService {
 
     // Se comprueba ANTES de llamar a Meta: su error por nombre repetido es
     // ilegible, y el nombre es lo unico que ya no se puede cambiar despues.
-    const existing = await this.cached(tenantId, conn.lineId, conn.client);
+    const { list: existing } = await this.cached(tenantId, conn.lineId, conn.client);
     if (existing.some((t) => t.name === input.name && t.language === input.language)) {
       throw new BadRequestException(
         `Ya existe una plantilla llamada "${input.name}" en ese idioma`,
@@ -92,10 +98,8 @@ export class WaTemplateService {
 
     // Se relee para devolver lo que quedo DE VERDAD en la WABA: Meta
     // recategoriza por su cuenta (una de servicio le puede volver publicidad).
-    const after = await this.cached(tenantId, conn.lineId, conn.client).catch(
-      () => [] as RawTemplate[],
-    );
-    const saved = after.find((t) => t.name === input.name);
+    const after = await this.cached(tenantId, conn.lineId, conn.client).catch(() => null);
+    const saved = after?.list.find((t) => t.name === input.name);
     if (saved) return { ...saved, usedBy: [] };
     return {
       id: input.name,
@@ -164,18 +168,56 @@ export class WaTemplateService {
     return out;
   }
 
-  private async cached(tenantId: string, lineId: string, client: WaClient): Promise<RawTemplate[]> {
+  /**
+   * Las plantillas de una linea, y si vienen del proveedor o de respaldo.
+   *
+   * Cuando el proveedor responde bien se GUARDA la lista; cuando devuelve
+   * vacio o falla se devuelve la ultima guardada, marcada como vieja. Perder
+   * el permiso de LEER las plantillas no puede dejar al equipo sin poder
+   * mandarlas: para enviarlas basta el nombre, y el nombre esta en la lista
+   * guardada.
+   */
+  private async cached(
+    tenantId: string,
+    lineId: string,
+    client: WaClient,
+  ): Promise<{ list: RawTemplate[]; stale: boolean; readAt: string | null }> {
+    const { prisma } = getTenantContext();
     const key = `${tenantId}:${lineId}`;
     const hit = this.cache.get(key);
-    if (hit && Date.now() - hit.at < WaTemplateService.TTL_MS) return hit.list;
-    let list: RawTemplate[];
-    try {
-      list = await client.listTemplatesDetailed();
-    } catch (err) {
-      throw translateWaError(err, 'No se pudieron cargar las plantillas', this.logger);
+    if (hit && Date.now() - hit.at < WaTemplateService.TTL_MS) {
+      return { list: hit.list, stale: hit.stale, readAt: hit.readAt };
     }
-    this.cache.set(key, { at: Date.now(), list });
-    return list;
+
+    let fresh: RawTemplate[] | null = null;
+    let failure: unknown = null;
+    try {
+      fresh = await client.listTemplatesDetailed();
+    } catch (err) {
+      failure = err;
+    }
+
+    if (fresh && fresh.length > 0) {
+      await rememberTemplates(prisma, lineId, fresh);
+      const value = { list: fresh, stale: false, readAt: new Date().toISOString() };
+      this.cache.set(key, { at: Date.now(), ...value });
+      return value;
+    }
+
+    const saved = await recallTemplates(prisma, lineId);
+    if (saved) {
+      this.logger.warn(
+        `Plantillas de ${lineId}: el proveedor ${fresh ? 'devolvio vacio' : 'fallo'}; se usan las guardadas (${saved.list.length})`,
+      );
+      const value = { list: saved.list, stale: true, readAt: saved.at || null };
+      this.cache.set(key, { at: Date.now(), ...value });
+      return value;
+    }
+
+    // Sin respaldo: si ademas fallo la lectura, el error del proveedor es mas
+    // util que un "no hay plantillas" que seria mentira.
+    if (failure) throw translateWaError(failure, 'No se pudieron cargar las plantillas', this.logger);
+    return { list: [], stale: false, readAt: new Date().toISOString() };
   }
 
   private invalidate(tenantId: string, lineId: string): void {

@@ -157,6 +157,9 @@ export type WaTemplate = z.infer<typeof waTemplateSchema>;
 
 export const waTemplateListSchema = z.object({
   templates: z.array(waTemplateSchema),
+  /** true = el proveedor no devolvio la lista y estas son las ultimas
+   *  conocidas. Se pueden enviar igual: para eso basta el nombre. */
+  stale: z.boolean().default(false),
   /** Sugerencias sacadas del PEDIDO para prellenar variables. */
   suggestions: z.object({
     nombre: z.string(),

@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Copy, FileText, Loader2, Plus, Trash2 } from 'lucide-react';
+import { AlertTriangle, Copy, FileText, Loader2, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   WA_FLOW_LABEL,
@@ -72,7 +72,7 @@ export function TemplatesSection({ lines }: { lines: WaLineSummary[] }) {
           onClick={() =>
             setSeed({ key: `nueva-${Date.now()}`, lineId: active?.id ?? '', template: null })
           }
-          disabled={!active || isD360Sandbox(active)}
+          disabled={!active || isD360Sandbox(active) || Boolean(data?.stale)}
           className={cn(BTN_PRIMARY_CLS, BTN_SM_CLS, 'shrink-0')}
         >
           <Plus />
@@ -128,6 +128,42 @@ export function TemplatesSection({ lines }: { lines: WaLineSummary[] }) {
             </Button>
           </div>
         </div>
+      ) : data?.stale ? (
+        <>
+          <div className="flex flex-wrap items-start gap-3 rounded-[14px] border border-border bg-amber-500/5 px-4 py-3.5">
+            <AlertTriangle
+              className="mt-0.5 h-[18px] w-[18px] shrink-0 text-amber-600 dark:text-amber-400"
+              aria-hidden
+            />
+            <div className="min-w-0 flex-1">
+              <p className="text-[13px] font-extrabold text-amber-600 dark:text-amber-400">
+                Tu proveedor no está devolviendo la lista de plantillas
+              </p>
+              <p className="mt-1 max-w-[76ch] text-[12.5px] leading-[1.55] text-muted-foreground">
+                Estas son las últimas que pudimos leer. <b>Se pueden enviar igual</b> — para
+                mandarlas solo hace falta el nombre — pero su estado puede haber cambiado, y por eso
+                aquí no se puede crear ni borrar hasta que vuelva la lista.
+              </p>
+            </div>
+          </div>
+          <div className="grid gap-2.5">
+            {data.templates.map((t) => (
+              <TemplateCard
+                key={`${t.name}:${t.language}`}
+                tpl={t}
+                lineId={active?.id ?? ''}
+                stale
+                onDuplicate={() =>
+                  setSeed({
+                    key: `copia-${t.name}-${Date.now()}`,
+                    lineId: active?.id ?? '',
+                    template: t,
+                  })
+                }
+              />
+            ))}
+          </div>
+        </>
       ) : (data?.templates.length ?? 0) === 0 ? (
         <div className={EMPTY_CLS}>
           <b className="text-foreground">
@@ -196,10 +232,13 @@ const STATUS: Record<string, { label: string; tone: PillTone }> = {
 function TemplateCard({
   tpl,
   lineId,
+  stale = false,
   onDuplicate,
 }: {
   tpl: WaTemplateDetail;
   lineId: string;
+  /** Viene del respaldo: su estado real no lo sabemos ahora mismo. */
+  stale?: boolean;
   onDuplicate: () => void;
 }) {
   const qc = useQueryClient();
@@ -220,7 +259,9 @@ function TemplateCard({
     },
   });
 
-  const state = STATUS[tpl.status] ?? { label: tpl.status || 'Sin estado', tone: 'muted' as const };
+  const state = stale
+    ? { label: 'Sin confirmar', tone: 'muted' as const }
+    : (STATUS[tpl.status] ?? { label: tpl.status || 'Sin estado', tone: 'muted' as const });
   const category = WA_TEMPLATE_CATEGORY_LABEL[tpl.category as WaTemplateCategory] ?? tpl.category;
 
   return (
@@ -256,7 +297,7 @@ function TemplateCard({
             <Copy />
             Duplicar
           </Button>
-          {confirm ? (
+          {stale ? null : confirm ? (
             <>
               <Button
                 onClick={() => remove.mutate()}
@@ -277,7 +318,7 @@ function TemplateCard({
                 No
               </Button>
             </>
-          ) : (
+          ) : stale ? null : (
             <Button
               variant="ghost"
               onClick={() => setConfirm(true)}

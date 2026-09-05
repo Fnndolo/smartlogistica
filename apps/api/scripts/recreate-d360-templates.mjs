@@ -20,6 +20,7 @@
 import pg from 'pg';
 import crypto from 'node:crypto';
 import axios from 'axios';
+import { pathToFileURL } from 'node:url';
 
 const { Client } = pg;
 
@@ -72,7 +73,7 @@ const GUIA_LINKS = {
   guia_envio_servientrega: 'https://www.servientrega.com/wps/portal/rastreo-envio',
 };
 
-const TEMPLATES = [
+export const TEMPLATES = [
   // --- La confirmacion del pedido. Es la mas importante: sin ella no sale el
   //     primer mensaje a ningun cliente nuevo.
   {
@@ -207,4 +208,8 @@ async function main() {
     console.log('Meta las revisa antes de dejarlas enviar: quedan en "pending" un rato.');
   }
 }
-main().catch((e) => { console.error(e.message); process.exit(1); });
+// Solo corre si se invoca directamente: el seeder de abajo lo importa por sus
+// definiciones y no debe disparar creaciones contra Meta al hacerlo.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => { console.error(e.message); process.exit(1); });
+}

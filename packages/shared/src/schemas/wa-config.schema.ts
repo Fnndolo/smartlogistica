@@ -269,6 +269,12 @@ export const waTemplateListForLineSchema = z.object({
   lineId: z.string(),
   lineLabel: z.string(),
   templates: z.array(waTemplateDetailSchema),
+  /** true = el proveedor no las devolvio y estas son las ULTIMAS que se le
+   *  pudieron leer. Siguen sirviendo para enviar (eso solo necesita el
+   *  nombre), pero su estado puede haber cambiado. */
+  stale: z.boolean().default(false),
+  /** Cuando se leyeron por ultima vez de verdad. */
+  readAt: z.string().nullable().default(null),
 });
 export type WaTemplateListForLine = z.infer<typeof waTemplateListForLineSchema>;
 

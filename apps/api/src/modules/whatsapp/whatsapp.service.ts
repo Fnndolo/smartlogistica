@@ -40,6 +40,8 @@ import { getTenantContext } from '../../infrastructure/tenant-context';
 import { Dialog360Client } from './dialog360-client.service';
 import type { WaClient, WaTemplateLite } from './wa-client.port';
 import { WaConnectionService } from './wa-connection.service';
+import { toTemplateLite } from './wa-template-mapper';
+import { recallTemplates, rememberTemplates } from './wa-template-store';
 import { WaFlowService } from './wa-flow.service';
 import { normalizeSticker, toOggOpus } from './wa-media.util';
 import { WaPublisherService } from './wa-publisher.service';
@@ -305,7 +307,10 @@ export class WhatsappService {
   }
 
   /** Plantillas de la WABA con CACHE de 60s (cada relectura cuesta ~0.5-1s). */
-  private readonly tplCache = new Map<string, { at: number; list: WaTemplateLite[] }>();
+  private readonly tplCache = new Map<
+    string,
+    { at: number; list: WaTemplateLite[]; stale: boolean }
+  >();
 
   /**
    * Se cachea POR LINEA, no por tenant: cada numero tiene su propia WABA y sus
@@ -316,13 +321,30 @@ export class WhatsappService {
     tenantId: string,
     lineId: string,
     client: WaClient,
-  ): Promise<WaTemplateLite[]> {
+  ): Promise<{ list: WaTemplateLite[]; stale: boolean }> {
+    const { prisma } = getTenantContext();
     const key = `${tenantId}:${lineId}`;
     const hit = this.tplCache.get(key);
-    if (hit && Date.now() - hit.at < 60_000) return hit.list;
-    const list = await client.listTemplates();
-    this.tplCache.set(key, { at: Date.now(), list });
-    return list;
+    if (hit && Date.now() - hit.at < 60_000) return { list: hit.list, stale: hit.stale };
+
+    // Se pide la version COMPLETA aunque aqui sobre: es la que se guarda, y
+    // asi el respaldo del selector y el de la pantalla de ajustes son el mismo
+    // dato. Dos caches con formas distintas se acabarian contradiciendo.
+    const fresh = await client.listTemplatesDetailed().catch(() => null);
+    if (fresh && fresh.length > 0) {
+      await rememberTemplates(prisma, lineId, fresh);
+      const list = fresh.map(toTemplateLite);
+      this.tplCache.set(key, { at: Date.now(), list, stale: false });
+      return { list, stale: false };
+    }
+
+    // El proveedor puede perder el permiso de LEER las plantillas sin perder
+    // el de enviarlas. Sin este respaldo, el selector de "/" se queda vacio y
+    // no se puede mandar ni una a mano, aunque todas funcionen.
+    const saved = await recallTemplates(prisma, lineId);
+    const list = (saved?.list ?? []).map(toTemplateLite);
+    this.tplCache.set(key, { at: Date.now(), list, stale: list.length > 0 });
+    return { list, stale: list.length > 0 };
   }
 
   // === Hilo por pedido ===
@@ -1211,7 +1233,9 @@ export class WhatsappService {
       const names = flow?.config.templateNames?.length
         ? flow.config.templateNames
         : this.guideTemplatesFor(carrier);
-      const list = await this.cachedTemplates(tenantId, d360.lineId, d360.client).catch(() => []);
+      const { list } = await this.cachedTemplates(tenantId, d360.lineId, d360.client).catch(
+        () => ({ list: [] as WaTemplateLite[] }),
+      );
       const tpl =
         names.map((n) => list.find((x) => x.name === n && x.status === 'approved')).find(Boolean) ??
         // LISTAR y ENVIAR son permisos distintos en Meta: para mandar una
@@ -1384,7 +1408,8 @@ export class WhatsappService {
     };
 
     const phone = order.customerPhone ? tenDigits(order.customerPhone) : '';
-    return { templates: await this.waTemplates(phone), suggestions };
+    const { templates, stale } = await this.waTemplates(phone);
+    return { templates, stale, suggestions };
   }
 
   /** Plantillas para un chat de la BANDEJA (sugerencia: solo el nombre). */
@@ -1408,8 +1433,10 @@ export class WhatsappService {
       order && tenDigits(order.customerPhone ?? '') === phone
         ? (order.customerName?.trim() ?? '')
         : '';
+    const { templates, stale } = await this.waTemplates(phone);
     return {
-      templates: await this.waTemplates(phone),
+      templates,
+      stale,
       suggestions: { nombre: vtexName || (contact?.name ?? ''), productos: '', direccion: '' },
     };
   }
@@ -1421,14 +1448,16 @@ export class WhatsappService {
    * tiene su propia WABA, y ofrecer las del otro numero seria ofrecer
    * plantillas que al enviarlas no existen.
    */
-  private async waTemplates(phone: string): Promise<WaTemplateList['templates']> {
+  private async waTemplates(
+    phone: string,
+  ): Promise<{ templates: WaTemplateList['templates']; stale: boolean }> {
     const { tenantId, prisma } = getTenantContext();
     const d360 = await this.waConn.forPhone(tenantId, prisma, phone);
     // El sandbox no tiene WABA propia con plantillas: lista vacia (la UI lo dice).
-    if (!waCanReachCustomers(d360)) return [];
+    if (!waCanReachCustomers(d360)) return { templates: [], stale: false };
     try {
-      const list = await this.cachedTemplates(tenantId, d360.lineId, d360.client);
-      return list.map((t) => ({ ...t, variables: templateVarCount(t.body) }));
+      const { list, stale } = await this.cachedTemplates(tenantId, d360.lineId, d360.client);
+      return { templates: list.map((t) => ({ ...t, variables: templateVarCount(t.body) })), stale };
     } catch (err) {
       throw translateWaError(err, 'No se pudieron cargar las plantillas de la WABA', this.logger);
     }
@@ -1474,7 +1503,7 @@ export class WhatsappService {
     // cada envio pagaba una vuelta extra a 360dialog (~0.5-1s).
     let all;
     try {
-      all = await this.cachedTemplates(tenantId, d360.lineId, d360.client);
+      all = (await this.cachedTemplates(tenantId, d360.lineId, d360.client)).list;
     } catch (err) {
       throw translateWaError(err, 'No se pudieron cargar las plantillas de la WABA', this.logger);
     }
@@ -1686,7 +1715,7 @@ export class WhatsappService {
       // texto REAL de la que salio. Si la consulta falla: defaults del env.
       if (!isD360Sandbox(d360)) {
         try {
-          const list = await this.cachedTemplates(tenantId, d360.lineId, d360.client);
+          const { list } = await this.cachedTemplates(tenantId, d360.lineId, d360.client);
           // Si la configuracion nombra plantillas, mandan esas.
           const priority = flow?.config.templateNames?.length
             ? flow.config.templateNames
