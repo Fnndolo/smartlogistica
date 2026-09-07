@@ -17,16 +17,22 @@ export const metadata: Metadata = { title: 'Paquetes de guía' };
  */
 export default async function PaquetesGuiaPage() {
   // Esconder el enlace no basta: sin esto se llega escribiendo la URL.
-  const me = await getSessionUser();
+  // Las dos lecturas ARRANCAN JUNTAS. La comprobacion de rol sigue siendo lo
+  // primero que decide, pero esperar a la sesion para empezar a pedir el
+  // catalogo era pagar dos viajes seguidos al API. Pedir de mas no filtra
+  // nada: el API valida la sesion en cada lectura.
+  const [me, presets] = await Promise.all([
+    getSessionUser(),
+    serverFetch<PackagePreset[]>('/v1/warehouses/package-presets'),
+  ]);
   if (!isAdmin(me?.role)) redirect('/settings');
-  const presets = (await serverFetch<PackagePreset[]>('/v1/warehouses/package-presets')) ?? [];
 
   return (
     <div>
       <BackToSettings />
       {/* La cabecera y el boton primario viven DENTRO de la tarjeta: agregar
           abre un formulario en linea, que es estado de cliente. */}
-      <PackagePresetsCard initial={presets} standalone />
+      <PackagePresetsCard initial={presets ?? []} standalone />
     </div>
   );
 }

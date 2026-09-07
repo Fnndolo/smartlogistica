@@ -15,11 +15,15 @@ export const metadata: Metadata = { title: 'Paquetes Skydropx' };
  * Coordinadora: "Coordinadora lo suyo, Skydropx lo suyo").
  */
 export default async function PaquetesSkydropxPage() {
-  const me = await getSessionUser();
-  if (!isAdmin(me?.role)) redirect('/settings');
+  // A la vez, igual que el catalogo hermano: el API valida la sesion en cada
+  // lectura, asi que adelantar la peticion no expone nada.
   // null = la lectura fallo: la tarjeta BLOQUEA el guardado, porque el PUT es
   // de reemplazo total y guardar a ciegas borraria el catalogo real.
-  const presets = await serverFetch<SkydropxPackagePreset[]>('/v1/skydropx/package-presets');
+  const [me, presets] = await Promise.all([
+    getSessionUser(),
+    serverFetch<SkydropxPackagePreset[]>('/v1/skydropx/package-presets'),
+  ]);
+  if (!isAdmin(me?.role)) redirect('/settings');
 
   return (
     <div>

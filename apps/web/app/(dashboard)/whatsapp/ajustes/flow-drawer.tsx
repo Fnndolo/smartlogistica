@@ -25,8 +25,8 @@ import {
   BTN_PRIMARY_CLS,
   BTN_SM_CLS,
   FOCUS_RING,
-  SideDrawer,
 } from '../../settings/settings-ui';
+import { SideDrawer } from '../../settings/side-drawer';
 
 /** Una apertura del panel. `flow` null = regla nueva de ese tipo. */
 export interface FlowSession {

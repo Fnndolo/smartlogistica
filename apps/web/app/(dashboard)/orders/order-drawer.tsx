@@ -23,6 +23,7 @@ import {
   MessageCircle,
   MessageSquare,
   Paperclip,
+  Package,
   PlusCircle,
   ReceiptText,
   Reply,
@@ -50,6 +51,7 @@ import type {
   OrderEvent,
   OrderMessage,
   OrderSummary,
+  WarehouseSummary,
 } from '@smartlogistica/shared';
 
 import { useCurrentUser } from '@/components/providers/current-user-provider';
@@ -359,6 +361,20 @@ function DrawerContent({
   const { data: platforms = [] } = usePlatforms();
   const platform = platformOf(order, platforms);
 
+  // La SEDE, que ahora es el titulo. Misma clave de cache que la tabla, asi
+  // que no cuesta una peticion extra: ya esta traida cuando el drawer abre.
+  const { data: warehouses = [] } = useQuery({
+    queryKey: ['warehouses'],
+    queryFn: () => api.get<WarehouseSummary[]>('/v1/warehouses'),
+    staleTime: 5 * 60_000,
+  });
+  const sedeName = warehouses.find((w) => w.id === order.warehouseId)?.name ?? null;
+
+  // Los productos del pedido para la cabecera. El detalle completo puede tardar
+  // en llegar; el resumen de la fila ya los trae, asi que se pinta lo que haya
+  // antes y se afina cuando llegue el detalle.
+  const productos = (detail?.items?.length ? detail.items : order.items) ?? [];
+
   // Facturado POR FUERA de SmartLogistica (cerrado directo en VTEX, sin sede):
   // solo trazabilidad — sin Facturar ni Guia.
   const external = !order.warehouseId && order.status !== 'ready-for-handling';
@@ -430,7 +446,7 @@ function DrawerContent({
                 en dos lineas por culpa del boton). En pc, a la izquierda. */}
             <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 md:justify-start">
               <span className="min-w-0 max-w-full truncate whitespace-nowrap text-[19px] font-extrabold tracking-[-0.02em]">
-                <span className="font-semibold text-hint">Pedido</span> {order.externalId}
+                {sedeName ?? 'Pedidos generales'}
               </span>
               {/* Pastilla de plataforma (.pill-vtex del mockup): va pegada al
                   numero del pedido; el tinte sale del catalogo (VTEX = rosa). */}
@@ -481,11 +497,35 @@ function DrawerContent({
                     })}
                   </b>
                 </span>
+                {/* El N° de pedido deja de ser el titulo pero NO desaparece: es
+                    lo que se busca en VTEX y en Alegra. Aqui, en mono y tenue. */}
+                <span className="whitespace-nowrap font-mono text-[12px] tracking-[0.02em] text-hint">
+                  {order.externalId}
+                </span>
               </div>
               <span className="shrink-0 md:hidden">
                 <DrawerClaim order={detail ?? order} />
               </span>
             </div>
+            {/* QUE compró, en su propia linea. No cabia en la tira de datos sin
+                romperla en el celular: ahi el nombre de un equipo se come el
+                ancho entero. Se corta a dos lineas — es un resumen, el desglose
+                con fotos y precios esta en Detalle. */}
+            {productos.length > 0 ? (
+              <p className="mt-1 line-clamp-2 text-[12.5px] leading-[1.45] text-muted-foreground max-md:text-center">
+                <Package
+                  aria-hidden
+                  className="mr-1.5 inline-block h-[13px] w-[13px] shrink-0 -translate-y-px text-hint"
+                />
+                {productos.map((it, i) => (
+                  <span key={`${it.sku}-${i}`}>
+                    {i > 0 ? <span className="px-1 text-border">·</span> : null}
+                    <span className="tabular-nums text-hint">{it.quantity}×</span>{' '}
+                    <b className="font-semibold text-foreground">{it.name}</b>
+                  </span>
+                ))}
+              </p>
+            ) : null}
           </div>
           {/* Escritorio: tomar/soltar + X grande, separadas para no equivocarse. */}
           <div className="hidden shrink-0 items-center gap-2 md:flex">

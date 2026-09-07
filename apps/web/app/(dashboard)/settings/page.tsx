@@ -38,8 +38,14 @@ export default async function SettingsPage() {
   // null = la lectura fallo (API caida/reiniciando). NUNCA se cae a defaults:
   // las cards guardan con PUT de reemplazo total y unos defaults sembrados a
   // ciegas pisarian la configuracion personalizada al primer "Guardar".
-  const platforms = isOwner ? await serverFetch<Platform[]>('/v1/platforms') : null;
-  const vtexFees = isOwner ? await serverFetch<VtexFees>('/v1/vtex-fees') : null;
+  // A LA VEZ: son independientes, y el API vive en otra maquina — encadenarlos
+  // era pagar dos viajes de ida y vuelta para pintar la misma pantalla.
+  const [platforms, vtexFees] = isOwner
+    ? await Promise.all([
+        serverFetch<Platform[]>('/v1/platforms'),
+        serverFetch<VtexFees>('/v1/vtex-fees'),
+      ])
+    : [null, null];
 
   return (
     <div>

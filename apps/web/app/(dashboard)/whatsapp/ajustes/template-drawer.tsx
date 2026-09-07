@@ -25,8 +25,8 @@ import {
   BTN_PRIMARY_CLS,
   BTN_SM_CLS,
   FOCUS_RING,
-  SideDrawer,
 } from '../../settings/settings-ui';
+import { SideDrawer } from '../../settings/side-drawer';
 
 const FIELD_CLS =
   'h-auto min-h-[38px] rounded-[10px] border-input bg-card text-[13px] shadow-none transition-colors [transition-duration:140ms] placeholder:text-hint hover:border-accent';
