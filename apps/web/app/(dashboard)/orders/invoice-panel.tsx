@@ -209,7 +209,11 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
     current.every((l) => l.itemId && Number(l.price) > 0 && l.quantity >= 1) &&
     paymentsValid;
 
-  /** Lineas listas para el API. Descripcion = solo el/los codigo(s), uno por linea. */
+  /**
+   * Lineas listas para el API. La descripcion es EL CODIGO Y NADA MAS: sin
+   * etiqueta, sin prefijo, sin comentario — tal cual va a la factura de Alegra.
+   * El preview ya llega recortado al IMEI 1, asi que aqui normalmente hay uno.
+   */
   const buildLines = () =>
     current.map((l) => {
       const codes = l.codesText

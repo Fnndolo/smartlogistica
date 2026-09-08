@@ -24,8 +24,11 @@ export const saveSellerPrefSchema = z.object({ seller: alegraSellerSchema.nullab
 export type SaveSellerPrefInput = z.infer<typeof saveSellerPrefSchema>;
 
 /**
- * Una linea del preview = UNA foto (un celular). Si la foto tiene varios codigos
- * (dual-SIM) van juntos en `codes` (misma linea/producto, en la descripcion).
+ * Una linea del preview = UNA foto (un celular).
+ *
+ * `codes` trae SOLO EL IMEI 1, aunque la foto de un dual-SIM tenga dos: el
+ * negocio factura con el primero. Es lo que se ve en el panel y lo que acaba,
+ * tal cual y sin ningun texto alrededor, en la descripcion de la factura.
  */
 export const invoiceLinePreviewSchema = z.object({
   codes: z.array(z.string()),

@@ -431,25 +431,32 @@ function DrawerContent({
           (7% -> transparente al 85%) y UNA sola hairline al final. */}
       <div className="border-b border-border bg-[linear-gradient(to_bottom,hsl(var(--accent)/0.07),transparent_85%)]">
         {/* Header */}
-        <header className="flex items-start justify-between gap-3 px-4 pb-0 pt-3 md:px-[22px] md:pt-[18px]">
-          {/* Cel: flecha de volver (equivale al boton atras del sistema). */}
+        <header className="px-4 pb-0 pt-[max(env(safe-area-inset-top),12px)] md:flex md:items-start md:justify-between md:gap-3 md:px-[22px] md:pt-[18px]">
+          {/* El padding de arriba respeta la ZONA SEGURA: instalada como app, el
+              drawer ocupa la pantalla entera desde y=0 y la barra de estado se
+              comia el titulo. Abajo ya estaba contemplado; arriba no.
+
+              Cel: la flecha va en su PROPIA fila. Dentro de la misma que los
+              datos ocupaba ancho y los empujaba ~48px a la derecha; en pc no se
+              notaba porque ahi la flecha no existe. */}
           <button
             type="button"
             onClick={onClose}
-            className="-ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors active:bg-wash active:text-accent-ink max-md:h-10 max-md:w-10 md:hidden"
+            className="-ml-2 mb-0.5 flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground transition-colors active:bg-wash active:text-accent-ink md:hidden"
             aria-label="Volver a los pedidos"
           >
             <ArrowLeft className="h-5 w-5" />
           </button>
           <div className="min-w-0 flex-1">
-            {/* Cel: el N° y el estado usan TODO el ancho, centrados (sin partirse
-                en dos lineas por culpa del boton). En pc, a la izquierda. */}
-            <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 md:justify-start">
+            {/* Todo alineado al MISMO borde izquierdo — titulo, pastillas,
+                datos y productos. Centrar solo la primera fila la desalineaba
+                del resto en el celular. */}
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
               <span className="min-w-0 max-w-full truncate whitespace-nowrap text-[19px] font-extrabold tracking-[-0.02em]">
                 {sedeName ?? 'Pedidos generales'}
               </span>
-              {/* Pastilla de plataforma (.pill-vtex del mockup): va pegada al
-                  numero del pedido; el tinte sale del catalogo (VTEX = rosa). */}
+              {/* Pastilla de plataforma (.pill-vtex del mockup): el tinte sale
+                  del catalogo (VTEX = rosa). */}
               <span
                 className={cn(
                   'inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-[3px] text-[11.5px] font-bold tracking-[0.01em]',
@@ -512,18 +519,20 @@ function DrawerContent({
                 ancho entero. Se corta a dos lineas — es un resumen, el desglose
                 con fotos y precios esta en Detalle. */}
             {productos.length > 0 ? (
-              <p className="mt-1 line-clamp-2 text-[12.5px] leading-[1.45] text-muted-foreground max-md:text-center">
-                <Package
-                  aria-hidden
-                  className="mr-1.5 inline-block h-[13px] w-[13px] shrink-0 -translate-y-px text-hint"
-                />
-                {productos.map((it, i) => (
-                  <span key={`${it.sku}-${i}`}>
-                    {i > 0 ? <span className="px-1 text-border">·</span> : null}
-                    <span className="tabular-nums text-hint">{it.quantity}×</span>{' '}
-                    <b className="font-semibold text-foreground">{it.name}</b>
-                  </span>
-                ))}
+              <p className="mt-1 flex items-start gap-1.5 text-[12.5px] leading-[1.45] text-muted-foreground">
+                <Package aria-hidden className="mt-[3px] h-[13px] w-[13px] shrink-0 text-hint" />
+                {/* El icono FUERA del texto (flex, no inline): dentro empujaba
+                    la primera linea y el bloque no cuadraba con los datos de
+                    arriba. Asi el texto arranca en el mismo borde. */}
+                <span className="line-clamp-2 min-w-0">
+                  {productos.map((it, i) => (
+                    <span key={`${it.sku}-${i}`}>
+                      {i > 0 ? <span className="px-1 text-border">·</span> : null}
+                      <span className="tabular-nums text-hint">{it.quantity}×</span>{' '}
+                      <b className="font-semibold text-foreground">{it.name}</b>
+                    </span>
+                  ))}
+                </span>
               </p>
             ) : null}
           </div>

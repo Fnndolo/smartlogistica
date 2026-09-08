@@ -486,7 +486,13 @@ export class AlegraService {
           suggestedPrice = item ? this.itemSalePrice(item) : null;
         }
         return {
-          codes,
+          // SOLO EL IMEI 1. La foto de un equipo dual-SIM trae dos, y hasta
+          // ahora los dos acababan en la descripcion de la factura. El negocio
+          // factura con el primero y nada mas, asi que se recorta AQUI y no al
+          // enviar: el panel muestra lo mismo que se va a facturar, sin
+          // sorpresas al guardar. La BUSQUEDA de producto de arriba si mira
+          // todos los codigos — encontrar el equipo no tiene por que empeorar.
+          codes: codes.slice(0, 1),
           itemId: match?.itemId ?? null,
           productName: match?.productName ?? null,
           suggestedPrice,
