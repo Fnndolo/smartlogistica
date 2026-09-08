@@ -440,11 +440,16 @@ function DrawerContent({
                 estados. Vive AQUI DENTRO, y no envolviendo toda la columna,
                 que es lo que antes empujaba tambien los datos y los productos
                 casi 50px a la derecha en el celular. */}
-            <div className="flex items-center gap-2">
+            {/* items-START, no center: cuando los estados no caben y bajan a una
+                segunda linea, centrar dejaba la flecha flotando entre las dos.
+                Va pegada a la PRIMERA, con la sede. El -mt-1 compensa que el
+                boton mide 36px de alto (area de toque) y la linea del titulo
+                unos 28: sin eso el icono queda 4px por debajo del texto. */}
+            <div className="flex items-start gap-2">
               <button
                 type="button"
                 onClick={onClose}
-                className="-ml-2 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors active:bg-wash active:text-accent-ink md:hidden"
+                className="-ml-2 -mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors active:bg-wash active:text-accent-ink md:hidden"
                 aria-label="Volver a los pedidos"
               >
                 <ArrowLeft className="h-5 w-5" />
