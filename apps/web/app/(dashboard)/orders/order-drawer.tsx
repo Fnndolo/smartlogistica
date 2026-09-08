@@ -434,44 +434,43 @@ function DrawerContent({
         <header className="px-4 pb-0 pt-[max(env(safe-area-inset-top),12px)] md:flex md:items-start md:justify-between md:gap-3 md:px-[22px] md:pt-[18px]">
           {/* El padding de arriba respeta la ZONA SEGURA: instalada como app, el
               drawer ocupa la pantalla entera desde y=0 y la barra de estado se
-              comia el titulo. Abajo ya estaba contemplado; arriba no.
-
-              Cel: la flecha va en su PROPIA fila. Dentro de la misma que los
-              datos ocupaba ancho y los empujaba ~48px a la derecha; en pc no se
-              notaba porque ahi la flecha no existe. */}
-          <button
-            type="button"
-            onClick={onClose}
-            className="-ml-2 mb-0.5 flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground transition-colors active:bg-wash active:text-accent-ink md:hidden"
-            aria-label="Volver a los pedidos"
-          >
-            <ArrowLeft className="h-5 w-5" />
-          </button>
+              comia el titulo. Abajo ya estaba contemplado; arriba no. */}
           <div className="min-w-0 flex-1">
-            {/* Todo alineado al MISMO borde izquierdo — titulo, pastillas,
-                datos y productos. Centrar solo la primera fila la desalineaba
-                del resto en el celular. */}
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-              <span className="min-w-0 max-w-full truncate whitespace-nowrap text-[19px] font-extrabold tracking-[-0.02em]">
-                {sedeName ?? 'Pedidos generales'}
-              </span>
-              {/* Pastilla de plataforma (.pill-vtex del mockup): el tinte sale
-                  del catalogo (VTEX = rosa). */}
-              <span
-                className={cn(
-                  'inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-[3px] text-[11.5px] font-bold tracking-[0.01em]',
-                  BADGE_COLOR_CLASSES[platform.color],
-                )}
+            {/* Fila de cabecera: la flecha comparte linea con la sede y los
+                estados. Vive AQUI DENTRO, y no envolviendo toda la columna,
+                que es lo que antes empujaba tambien los datos y los productos
+                casi 50px a la derecha en el celular. */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="-ml-2 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors active:bg-wash active:text-accent-ink md:hidden"
+                aria-label="Volver a los pedidos"
               >
-                {platform.name}
-              </span>
-              <StatusPill status={order.status} />
-              {order.addressStatus === 'confirmed' ? (
-                <span className="inline-flex shrink-0 items-center gap-[5px] whitespace-nowrap rounded-full bg-emerald-500/10 px-2.5 py-[3px] text-[11.5px] font-bold tracking-[0.01em] text-emerald-600 dark:text-emerald-400">
-                  <Check className="h-3 w-3" />
-                  Dirección confirmada
+                <ArrowLeft className="h-5 w-5" />
+              </button>
+              <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2.5 gap-y-1.5">
+                <span className="min-w-0 max-w-full truncate whitespace-nowrap text-[19px] font-extrabold tracking-[-0.02em]">
+                  {sedeName ?? 'Pedidos generales'}
                 </span>
-              ) : null}
+                {/* Pastilla de plataforma (.pill-vtex del mockup): el tinte sale
+                  del catalogo (VTEX = rosa). */}
+                <span
+                  className={cn(
+                    'inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-[3px] text-[11.5px] font-bold tracking-[0.01em]',
+                    BADGE_COLOR_CLASSES[platform.color],
+                  )}
+                >
+                  {platform.name}
+                </span>
+                <StatusPill status={order.status} />
+                {order.addressStatus === 'confirmed' ? (
+                  <span className="inline-flex shrink-0 items-center gap-[5px] whitespace-nowrap rounded-full bg-emerald-500/10 px-2.5 py-[3px] text-[11.5px] font-bold tracking-[0.01em] text-emerald-600 dark:text-emerald-400">
+                    <Check className="h-3 w-3" />
+                    Dirección confirmada
+                  </span>
+                ) : null}
+              </div>
             </div>
             {/* Cel: el boton de tomar/soltar CENTRADO verticalmente contra la
                 tira de datos (.dhead-sub). */}
@@ -503,11 +502,6 @@ function DrawerContent({
                       locale: es,
                     })}
                   </b>
-                </span>
-                {/* El N° de pedido deja de ser el titulo pero NO desaparece: es
-                    lo que se busca en VTEX y en Alegra. Aqui, en mono y tenue. */}
-                <span className="whitespace-nowrap font-mono text-[12px] tracking-[0.02em] text-hint">
-                  {order.externalId}
                 </span>
               </div>
               <span className="shrink-0 md:hidden">
