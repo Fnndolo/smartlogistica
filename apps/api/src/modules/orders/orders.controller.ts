@@ -60,6 +60,7 @@ import {
   type OrdersDashboard,
   type OrdersPulse,
   type Inbox,
+  type ChatInboxItem,
   type MentionItem,
   type OrderSearchResult,
   type OrderEvent,
@@ -170,6 +171,12 @@ export class OrdersController {
   @Get('mentions')
   async mentions(@CurrentUser() user: AuthContext): Promise<MentionItem[]> {
     return this.orders.mentionsFeed(user);
+  }
+
+  /** Bandeja del chat interno: los pedidos en los que participo. */
+  @Get('chats')
+  async chats(@CurrentUser() user: AuthContext): Promise<ChatInboxItem[]> {
+    return this.orders.chatsFeed(user);
   }
 
   /**

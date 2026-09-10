@@ -134,6 +134,33 @@ export const mentionItemSchema = z.object({
 });
 export type MentionItem = z.infer<typeof mentionItemSchema>;
 
+/**
+ * Una fila de la BANDEJA del chat interno: un pedido en el que participo —
+ * porque escribi en el o porque me mencionaron — con su ULTIMO mensaje.
+ *
+ * No es lo mismo que una mencion: alli cada fila es un mensaje suelto; aqui
+ * cada fila es una CONVERSACION, con lo ultimo que se dijo, venga de quien
+ * venga. Por eso se ordena por `lastAt` y no por cuando me nombraron.
+ */
+export const chatInboxItemSchema = z.object({
+  orderId: z.string(),
+  externalId: z.string(),
+  customerName: z.string(),
+  warehouseId: z.string().nullable(),
+  warehouseName: z.string().nullable(),
+  /** 'general' (sin asignar) | 'pending' (por preparar) | 'invoiced'. */
+  stage: z.enum(['general', 'pending', 'invoiced']),
+  lastAuthor: z.string(),
+  lastBody: z.string(),
+  lastAt: z.string().datetime(),
+  /** true = ese ultimo mensaje lo escribi yo (la fila lo marca con "Tú:"). */
+  lastMine: z.boolean(),
+  unreadCount: z.number().int().min(0),
+  /** true = entre lo que no he leido hay una mencion a mi. */
+  mentioned: z.boolean(),
+});
+export type ChatInboxItem = z.infer<typeof chatInboxItemSchema>;
+
 // === Busqueda global (pedidos en generales y todas las sedes) ===
 
 export const orderSearchResultSchema = z.object({

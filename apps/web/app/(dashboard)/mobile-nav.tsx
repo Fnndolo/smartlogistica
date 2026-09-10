@@ -2,13 +2,14 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { AtSign, Boxes, Building2, LayoutDashboard, Settings } from 'lucide-react';
+import { Boxes, Building2, LayoutDashboard, MessagesSquare, Settings } from 'lucide-react';
 
 import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { canManageOrders, canSeeAllWarehouses, type MaybeRole } from '@/lib/rbac';
 import { cn } from '@/lib/utils';
 
 import { GlobalSearch } from './global-search';
+import { useChats } from './use-chats';
 import { useMentions } from './use-mentions';
 
 /** Igual que el sidebar: cada pestaña dice QUE permiso la destapa. */
@@ -37,10 +38,15 @@ const TABS = [
     show: everyone,
   },
   {
-    href: '/mentions',
-    label: 'Menciones',
-    icon: AtSign,
-    match: (p: string) => p.startsWith('/mentions'),
+    // En el celular la pestaña es CHATS y no Menciones: caben cinco, y las
+    // menciones son un filtro dentro de la bandeja (mas la campana de arriba),
+    // asi que no se pierde nada y se gana el sitio al que se entra a diario.
+    // `match` cubre las dos rutas para que la pestaña siga encendida si se
+    // llega a Menciones desde la campana.
+    href: '/chats',
+    label: 'Chats',
+    icon: MessagesSquare,
+    match: (p: string) => p.startsWith('/chats') || p.startsWith('/mentions'),
     show: everyone,
   },
   {
@@ -95,7 +101,11 @@ export function MobileBottomNav() {
   // El operador solo ve Sedes, Menciones y Ajustes (no pedidos generales ni
   // resumen); el gestor los ve todos (WhatsApp no vive en esta barra).
   const tabs = TABS.filter((t) => t.show(user?.role));
-  const { unread } = useMentions();
+  // Chats sin leer + menciones sin leer: el badge de la pestaña suma las dos
+  // cosas que llevan ahi dentro.
+  const { unread: chatsUnread } = useChats();
+  const { unread: mentionsUnread } = useMentions();
+  const unread = Math.max(chatsUnread, mentionsUnread);
   return (
     <nav
       className={cn(
@@ -120,11 +130,14 @@ export function MobileBottomNav() {
           >
             {/* Eco del riel del sidebar: barra de acento en la pestaña activa. */}
             {active ? (
-              <span className="absolute inset-x-5 top-0 h-[2.5px] rounded-b-[3px] bg-accent" aria-hidden />
+              <span
+                className="absolute inset-x-5 top-0 h-[2.5px] rounded-b-[3px] bg-accent"
+                aria-hidden
+              />
             ) : null}
             <span className="relative">
               <Icon className={cn('h-5 w-5', active ? 'text-accent' : 'text-muted-foreground')} />
-              {tab.href === '/mentions' && unread > 0 ? (
+              {tab.href === '/chats' && unread > 0 ? (
                 <span className="absolute -right-2 -top-1.5 inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-accent px-1 text-[9px] font-extrabold tabular-nums leading-none text-white">
                   {unread > 99 ? '99+' : unread}
                 </span>

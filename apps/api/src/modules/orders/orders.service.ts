@@ -44,11 +44,13 @@ import type {
   ProcessAllResult,
   Inbox,
   InboxItem,
+  ChatInboxItem,
   MentionItem,
   OrderSearchResult,
 } from '@smartlogistica/shared';
 import { DELIVERY_COURIER, DELIVERY_SUPPORT_PREFIX } from '@smartlogistica/shared';
-import type { Prisma, PrismaClient } from '.prisma/tenant-client';
+import { Prisma } from '.prisma/tenant-client';
+import type { PrismaClient } from '.prisma/tenant-client';
 
 import { canManageOrders, canTransferOrders, isAdmin } from '../../common/rbac';
 import type { AuthContext } from '../../common/types/authenticated-request';
@@ -1808,6 +1810,104 @@ export class OrdersService {
   }
 
   // === Facturacion ===
+
+  /**
+   * BANDEJA del chat interno: los pedidos donde PARTICIPO — porque escribi o
+   * porque me mencionaron — ordenados por su ultimo mensaje.
+   *
+   * Ojo a la diferencia con `mentionsFeed`: alli cada fila es un mensaje que me
+   * nombra; aqui cada fila es una CONVERSACION y lo que se muestra es lo ultimo
+   * que se dijo en ella, lo haya escrito quien lo haya escrito. Por eso el orden
+   * sale del hilo entero y no de cuando me nombraron: una bandeja que ordenara
+   * por "cuando me hablaron" enterraria la respuesta que llego despues.
+   */
+  async chatsFeed(auth: AuthContext): Promise<ChatInboxItem[]> {
+    const { prisma } = getTenantContext();
+    const scope = await this.warehouses.accessibleWarehouseIds(auth);
+    // Sin sedes asignadas no hay nada que pueda ver: cortar aqui evita ademas
+    // un `IN ()` vacio, que en SQL no es valido.
+    if (scope?.length === 0) return [];
+
+    // DISTINCT ON = el ultimo mensaje de cada hilo. Va en crudo porque el
+    // `distinct` de Prisma exige ordenar primero por la columna distinguida, y
+    // aqui hace falta ordenar por fecha DENTRO de cada pedido.
+    const scopeSql = scope
+      ? Prisma.sql`AND o."warehouseId" IN (${Prisma.join(scope)})`
+      : Prisma.empty;
+    const rows = await prisma.$queryRaw<
+      Array<{
+        orderId: string;
+        authorId: string;
+        authorName: string;
+        kind: string;
+        body: string | null;
+        createdAt: Date;
+      }>
+    >`
+      SELECT * FROM (
+        SELECT DISTINCT ON (m."orderId")
+               m."orderId", m."authorId", m."authorName", m.kind, m.body, m."createdAt"
+        FROM "OrderMessage" m
+        JOIN "Order" o ON o.id = m."orderId"
+        WHERE m."orderId" IN (
+          SELECT mm."orderId" FROM "OrderMessage" mm
+          WHERE mm."authorId" = ${auth.userId} OR ${auth.userId} = ANY(mm.mentions)
+        ) ${scopeSql}
+        ORDER BY m."orderId", m."createdAt" DESC
+      ) t ORDER BY t."createdAt" DESC
+      LIMIT 200`;
+    if (rows.length === 0) return [];
+
+    const orderIds = rows.map((r) => r.orderId);
+    const [orders, invoicedEvents, unread] = await Promise.all([
+      prisma.order.findMany({
+        where: { id: { in: orderIds } },
+        select: {
+          id: true,
+          externalId: true,
+          customerName: true,
+          warehouseId: true,
+          warehouse: { select: { name: true } },
+        },
+      }),
+      prisma.orderEvent.findMany({
+        where: { orderId: { in: orderIds }, type: { in: FINALIZED_EVENTS } },
+        select: { orderId: true },
+        distinct: ['orderId'],
+      }),
+      this.unreadMap(auth.userId, { orderIds }),
+    ]);
+    const byId = new Map(orders.map((o) => [o.id, o]));
+    const invoiced = new Set(invoicedEvents.map((e) => e.orderId));
+
+    return rows.flatMap((r) => {
+      const order = byId.get(r.orderId);
+      // El pedido pudo borrarse entre las dos consultas: se salta en vez de
+      // pintar una fila sin destino a la que no se puede entrar.
+      if (!order) return [];
+      const u = unread.get(r.orderId);
+      return [
+        {
+          orderId: r.orderId,
+          externalId: order.externalId,
+          customerName: order.customerName,
+          warehouseId: order.warehouseId,
+          warehouseName: order.warehouse?.name ?? null,
+          stage: !order.warehouseId
+            ? ('general' as const)
+            : invoiced.has(r.orderId)
+              ? ('invoiced' as const)
+              : ('pending' as const),
+          lastAuthor: r.authorName,
+          lastBody: messagePreview(r.kind, r.body),
+          lastAt: r.createdAt.toISOString(),
+          lastMine: r.authorId === auth.userId,
+          unreadCount: u?.count ?? 0,
+          mentioned: u?.mentioned ?? false,
+        },
+      ];
+    });
+  }
 
   /** Grupos de codigos por FOTO: cada foto (message) es un grupo (una linea/producto). */
   private async orderCodeGroups(orderId: string): Promise<string[][]> {

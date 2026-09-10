@@ -1,0 +1,60 @@
+============================================================
+ TALLER SOLID - IS-III FI303290
+============================================================
+
+ Los ejemplos estan sacados de un sistema de logistica que
+ centraliza los pedidos de varios marketplaces (VTEX, Addi),
+ les genera la guia con la transportadora, los factura y le
+ avisa al cliente por WhatsApp. Por eso todo el taller habla
+ de pedidos, guias, sedes y conexiones.
+
+ Por cada principio hay dos archivos: uno donde NO se cumple
+ y otro donde si se cumple.
+
+------------------------------------------------------------
+ ARCHIVOS
+------------------------------------------------------------
+
+ SRP - Responsabilidad unica        (ejemplo guia, en Python)
+   srp_viola_srp.py
+   srp_cumple_srp.py
+
+ OCP - Abierto / Cerrado            (transportadoras)
+   ocp_viola_ocp.js
+   ocp_cumple_ocp.js
+
+ LSP - Sustitucion de Liskov        (origenes de pedidos)
+   lsp_viola_lsp.js
+   lsp_cumple_lsp.js
+
+ ISP - Segregacion de interfaces    (conexiones con terceros)
+   isp_viola_isp.js
+   isp_cumple_isp.js
+
+ DIP - Inversion de dependencias    (facturacion del pedido)
+   dip_viola_dip.js
+   dip_cumple_dip.js
+
+------------------------------------------------------------
+ COMO CORRERLOS
+------------------------------------------------------------
+
+ Los de JavaScript, con Node instalado:
+
+   node ocp_viola_ocp.js
+   node ocp_cumple_ocp.js
+   node lsp_viola_lsp.js
+   node lsp_cumple_lsp.js
+   node isp_viola_isp.js
+   node isp_cumple_isp.js
+   node dip_viola_dip.js
+   node dip_cumple_dip.js
+
+ Los de Python:
+
+   python srp_viola_srp.py
+   python srp_cumple_srp.py
+
+ Cada archivo imprime en consola lo que va pasando y termina
+ con una conclusion de por que cumple o por que no cumple el
+ principio.
