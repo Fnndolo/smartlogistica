@@ -17,10 +17,10 @@ let seen: Set<string> | null = null;
  * Menciones a mi + refresco en tiempo real (SSE) + toast cuando llega una nueva.
  * Lo usan la pagina Menciones, el item del sidebar y el icono del top bar movil.
  */
-export function useMentions(): { items: MentionItem[]; unread: number } {
+export function useMentions(): { items: MentionItem[]; unread: number; loading: boolean } {
   const qc = useQueryClient();
 
-  const { data } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['mentions'],
     queryFn: () => api.get<MentionItem[]>('/v1/orders/mentions'),
     staleTime: 10_000,
@@ -52,7 +52,7 @@ export function useMentions(): { items: MentionItem[]; unread: number } {
   }, [data]);
 
   const items = data ?? [];
-  return { items, unread: items.filter((m) => m.unread).length };
+  return { items, unread: items.filter((m) => m.unread).length, loading: isLoading };
 }
 
 /**

@@ -10,7 +10,6 @@ import { cn } from '@/lib/utils';
 
 import { GlobalSearch } from './global-search';
 import { useChats } from './use-chats';
-import { useMentions } from './use-mentions';
 
 /** Igual que el sidebar: cada pestaña dice QUE permiso la destapa. */
 const everyone: (role: MaybeRole) => boolean = () => true;
@@ -101,11 +100,11 @@ export function MobileBottomNav() {
   // El operador solo ve Sedes, Menciones y Ajustes (no pedidos generales ni
   // resumen); el gestor los ve todos (WhatsApp no vive en esta barra).
   const tabs = TABS.filter((t) => t.show(user?.role));
-  // Chats sin leer + menciones sin leer: el badge de la pestaña suma las dos
-  // cosas que llevan ahi dentro.
-  const { unread: chatsUnread } = useChats();
-  const { unread: mentionsUnread } = useMentions();
-  const unread = Math.max(chatsUnread, mentionsUnread);
+  // CONVERSACIONES pendientes. No se suman las menciones: toda mencion cae en
+  // un chat en el que participo, asi que ya van contadas aqui — sumarlas seria
+  // contar lo mismo dos veces, y ademas en unidades distintas (mensajes contra
+  // conversaciones).
+  const { unread } = useChats();
   return (
     <nav
       className={cn(

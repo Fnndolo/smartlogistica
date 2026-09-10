@@ -5,7 +5,6 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import {
-  AtSign,
   Boxes,
   Building2,
   LayoutDashboard,
@@ -35,7 +34,6 @@ import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { LogoutButton } from './_components/logout-button';
 import { GlobalSearch } from './global-search';
 import { useChats } from './use-chats';
-import { useMentions } from './use-mentions';
 
 /**
  * Cada item declara QUE permiso lo destapa (no "adminOnly", que solo sabia
@@ -48,10 +46,10 @@ const NAV_ITEMS = [
   { href: '/orders', label: 'Pedidos', icon: Boxes, show: canManageOrders },
   // WhatsApp es de administradores en el API (WhatsappService.assertAdmin).
   { href: '/whatsapp', label: 'WhatsApp', icon: MessageCircle, show: canUseWhatsapp },
-  // Chats ANTES que Menciones: la bandeja es el sitio al que se entra a diario
-  // y las menciones son un subconjunto suyo, no al reves.
+  // Menciones NO tiene item propio: vive como pestaña dentro de Chats. Son lo
+  // mismo mirado de otra forma, y separadas obligaban a elegir en cual entrar
+  // antes de saber que habia en cada una.
   { href: '/chats', label: 'Chats', icon: MessagesSquare, show: everyone },
-  { href: '/mentions', label: 'Menciones', icon: AtSign, show: everyone },
   { href: '/connections', label: 'Conexiones', icon: Link2, show: canManageConnections },
   { href: '/settings/team', label: 'Equipo', icon: Users, show: canManageMembers },
   { href: '/settings', label: 'Ajustes', icon: Settings, show: everyone },
@@ -87,16 +85,6 @@ function ActiveRail() {
 /** Cuantas CONVERSACIONES tienen algo sin leer (no cuantos mensajes). */
 function ChatsBadge() {
   const { unread } = useChats();
-  if (unread === 0) return null;
-  return (
-    <span className="ml-auto inline-flex shrink-0 items-center justify-center rounded-full bg-accent px-1.5 py-px text-[10px] font-extrabold tabular-nums leading-[1.4] text-white">
-      {unread > 99 ? '99+' : unread}
-    </span>
-  );
-}
-
-function MentionsBadge() {
-  const { unread } = useMentions();
   if (unread === 0) return null;
   return (
     <span className="ml-auto inline-flex shrink-0 items-center justify-center rounded-full bg-accent px-1.5 py-px text-[10px] font-extrabold tabular-nums leading-[1.4] text-white">
@@ -226,7 +214,6 @@ export function Sidebar() {
                 <Icon className="h-4 w-4 shrink-0" />
                 <span className="truncate">{item.label}</span>
                 {item.href === '/chats' ? <ChatsBadge /> : null}
-                {item.href === '/mentions' ? <MentionsBadge /> : null}
                 {/* Mismo tratamiento que el conteo de las sedes (se oculta en 0). */}
                 {item.href === '/orders' && generalCount > 0 ? (
                   <span className="ml-auto shrink-0 pl-1 text-[10.5px] tabular-nums text-rail-ink-2">

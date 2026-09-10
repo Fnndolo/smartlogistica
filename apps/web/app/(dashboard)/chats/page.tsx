@@ -1,12 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { Suspense, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { format } from 'date-fns/format';
-import { formatDistanceToNow } from 'date-fns/formatDistanceToNow';
-import { isToday } from 'date-fns/isToday';
-import { isYesterday } from 'date-fns/isYesterday';
-import { es } from 'date-fns/locale/es';
 import { AtSign, Loader2, MessagesSquare } from 'lucide-react';
 import { toast } from 'sonner';
 import type { ChatInboxItem, MemberSummary, OrderSummary } from '@smartlogistica/shared';
@@ -17,63 +13,89 @@ import { cn } from '@/lib/utils';
 import { initialsOf, splitMentions } from '../orders/mention-utils';
 import { OrderDrawer } from '../orders/order-drawer';
 import { useChats } from '../use-chats';
+import { useMentions } from '../use-mentions';
+import {
+  DayHeading,
+  EmptyState,
+  FilterChip,
+  ListCard,
+  ListSkeleton,
+  groupByDay,
+  whenLabel,
+} from './chats-ui';
+import { MentionsList } from './mentions-list';
 
-type Filter = 'all' | 'unread' | 'mentions';
+type Tab = 'chats' | 'menciones';
+type Filter = 'all' | 'unread';
 
-/** Separador de dia: "Hoy" / "Ayer" / la fecha en español. */
-function dayLabel(date: Date): string {
-  if (isToday(date)) return 'Hoy';
-  if (isYesterday(date)) return 'Ayer';
-  const sameYear = date.getFullYear() === new Date().getFullYear();
-  return format(date, sameYear ? "EEEE d 'de' MMMM" : "d 'de' MMMM 'de' yyyy", { locale: es });
-}
-
-/**
- * Marca de tiempo de la fila. Lo de HOY se lee mejor en relativo ("hace 5
- * minutos"); de "Ayer" hacia atras el relativo pierde precision y se cambia por
- * la hora de reloj — que es lo que le da sentido al separador de dia.
- */
-function whenLabel(date: Date): string {
-  if (isToday(date)) return formatDistanceToNow(date, { locale: es, addSuffix: true });
-  if (isYesterday(date)) return format(date, "'ayer a las' h:mm aaaa", { locale: es });
-  const sameYear = date.getFullYear() === new Date().getFullYear();
-  return format(date, sameYear ? "d MMM 'a las' h:mm aaaa" : "d MMM yyyy 'a las' h:mm aaaa", {
-    locale: es,
-  });
-}
-
-/**
- * Pagina "Chats": la bandeja del chat interno de los pedidos.
- *
- * Aparece cada pedido en el que participaste — porque escribiste o porque te
- * mencionaron — con lo ULTIMO que se dijo, venga de quien venga, y los mas
- * recientes primero. Esa es la diferencia con Menciones: alli cada fila es un
- * mensaje que te nombra; aqui cada fila es una conversacion.
- *
- * Los filtros trabajan sobre la lista YA cargada: no hay consulta nueva, solo
- * se esconden filas.
- */
 export default function ChatsPage() {
+  // useSearchParams exige un limite de Suspense para poder prerenderizar.
+  return (
+    <Suspense fallback={<ListSkeleton />}>
+      <ChatsScreen />
+    </Suspense>
+  );
+}
+
+/**
+ * Pantalla "Chats": el chat interno de los pedidos, en dos pestañas.
+ *
+ *  - BANDEJA: una fila por CONVERSACION en la que participas — porque
+ *    escribiste o porque te mencionaron — con lo ultimo que se dijo.
+ *  - MENCIONES: una fila por MENSAJE que te nombra, con su texto, y al abrirla
+ *    salta a ese mensaje exacto dentro del hilo.
+ *
+ * Menciones tenia su propia seccion en el menu. Se mudo aqui porque es lo mismo
+ * mirado de otra forma, y separadas obligaban a decidir en cual entrar antes de
+ * saber que habia en cada una.
+ *
+ * La pestaña viaja en la URL (?tab=menciones): asi se puede enlazar, sobrevive
+ * a recargar y el boton atras del navegador hace lo esperable.
+ */
+function ChatsScreen() {
   const qc = useQueryClient();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const tab: Tab = searchParams.get('tab') === 'menciones' ? 'menciones' : 'chats';
+
   const { items, loading } = useChats();
+  const { unread: mentionsUnread } = useMentions();
   const [filter, setFilter] = useState<Filter>('all');
-  // El pedido abierto y, mientras se trae, cual se pidio (para marcar la fila).
+
+  // El pedido abierto, el mensaje al que saltar y que fila se esta trayendo.
   const [openOrder, setOpenOrder] = useState<OrderSummary | null>(null);
+  const [openMsg, setOpenMsg] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
+
+  const { data: members = [] } = useQuery({
+    queryKey: ['members'],
+    queryFn: () => api.get<MemberSummary[]>('/v1/members'),
+    staleTime: 5 * 60_000,
+  });
+  const nameOf = (raw: string): string => members.find((m) => m.email === raw)?.name ?? raw;
+
+  const goTab = (next: Tab): void => {
+    router.replace(next === 'chats' ? pathname : `${pathname}?tab=menciones`, { scroll: false });
+  };
 
   /**
    * Abre la conversacion SIN moverse de aqui.
    *
    * Antes esto navegaba al sitio donde vive el pedido (Generales o su sede), y
    * era un viaje de ida sin vuelta: cerrar el chat te dejaba en otra pantalla.
-   * La bandeja es el sitio donde uno se queda, asi que el pedido se trae por id
-   * y el drawer se monta aqui mismo. En el celular el propio drawer maneja el
-   * boton atras, de modo que volver te devuelve a Chats.
+   * En el celular el propio drawer maneja el boton atras, asi que volver te
+   * devuelve aqui.
+   *
+   * `rowKey` solo sirve para saber QUE fila marcar mientras se trae: la bandeja
+   * se identifica por pedido y las menciones por mensaje.
    */
-  const openChat = async (orderId: string): Promise<void> => {
-    setOpening(orderId);
+  const openChat = async (orderId: string, rowKey: string, messageId?: string): Promise<void> => {
+    setOpening(rowKey);
     try {
-      setOpenOrder(await api.get<OrderSummary>(`/v1/orders/${orderId}`));
+      const detail = await api.get<OrderSummary>(`/v1/orders/${orderId}`);
+      setOpenMsg(messageId ?? null);
+      setOpenOrder(detail);
     } catch (err) {
       toast.error(
         err instanceof ApiError ? err.message : 'No se pudo abrir la conversación de ese pedido',
@@ -85,54 +107,52 @@ export default function ChatsPage() {
 
   const closeChat = (): void => {
     setOpenOrder(null);
-    // Abrir un chat lo marca como leido: sin esto la fila seguiria en negrita
-    // y el contador del menu seguiria contandolo hasta el siguiente evento.
+    setOpenMsg(null);
+    // Abrir un chat lo marca como leido: sin esto la fila seguiria resaltada y
+    // los contadores seguirian contandola hasta el siguiente evento.
     qc.invalidateQueries({ queryKey: ['chats-inbox'] });
+    qc.invalidateQueries({ queryKey: ['mentions'] });
   };
 
-  const { data: members = [] } = useQuery({
-    queryKey: ['members'],
-    queryFn: () => api.get<MemberSummary[]>('/v1/members'),
-    staleTime: 5 * 60_000,
-  });
-  const nameOf = (raw: string): string => members.find((m) => m.email === raw)?.name ?? raw;
-
   const unreadCount = items.filter((c) => c.unreadCount > 0).length;
-  const mentionCount = items.filter((c) => c.mentioned).length;
-  const visible =
-    filter === 'unread'
-      ? items.filter((c) => c.unreadCount > 0)
-      : filter === 'mentions'
-        ? items.filter((c) => c.mentioned)
-        : items;
-
-  // Agrupacion por dia conservando el orden que llega del API (mas nuevos
-  // primero): se corta un grupo cada vez que cambia la fecha.
-  const groups = useMemo(() => {
-    const out: Array<{ key: string; label: string; rows: ChatInboxItem[] }> = [];
-    for (const it of visible) {
-      const date = new Date(it.lastAt);
-      const key = date.toDateString();
-      const last = out[out.length - 1];
-      if (last && last.key === key) last.rows.push(it);
-      else out.push({ key, label: dayLabel(date), rows: [it] });
-    }
-    return out;
-  }, [visible]);
+  const visible = filter === 'unread' ? items.filter((c) => c.unreadCount > 0) : items;
+  const groups = groupByDay(visible, (c) => c.lastAt);
 
   return (
     <div>
-      <header className="mb-[18px] flex flex-wrap items-start gap-3.5 border-b border-border pb-4">
-        <div className="min-w-0">
-          <h1 className="text-[21px] font-extrabold tracking-[-0.025em]">Chats</h1>
-          <p className="mt-0.5 max-w-[66ch] text-[13px] text-muted-foreground">
-            Las conversaciones de pedidos en las que participas, con lo último que se dijo en cada
-            una.
-          </p>
-        </div>
+      <header className="mb-4 border-b border-border pb-4">
+        <h1 className="text-[21px] font-extrabold tracking-[-0.025em]">Chats</h1>
+        <p className="mt-0.5 max-w-[66ch] text-[13px] text-muted-foreground">
+          {tab === 'chats'
+            ? 'Las conversaciones de pedidos en las que participas, con lo último que se dijo en cada una.'
+            : 'Cada vez que alguien te menciona con @ en la conversación de un pedido, aparece aquí.'}
+        </p>
       </header>
 
-      {loading && items.length === 0 ? (
+      <div role="tablist" aria-label="Vistas del chat" className="mb-3.5 flex gap-1 border-b border-border">
+        <TabButton
+          label="Bandeja"
+          icon={<MessagesSquare className="h-[15px] w-[15px]" />}
+          count={unreadCount}
+          selected={tab === 'chats'}
+          onSelect={() => goTab('chats')}
+        />
+        <TabButton
+          label="Menciones"
+          icon={<AtSign className="h-[15px] w-[15px]" />}
+          count={mentionsUnread}
+          selected={tab === 'menciones'}
+          onSelect={() => goTab('menciones')}
+        />
+      </div>
+
+      {tab === 'menciones' ? (
+        <MentionsList
+          members={members}
+          opening={opening}
+          onOpen={(orderId, messageId) => void openChat(orderId, messageId, messageId)}
+        />
+      ) : loading && items.length === 0 ? (
         <ListSkeleton />
       ) : items.length === 0 ? (
         <EmptyState
@@ -155,29 +175,19 @@ export default function ChatsPage() {
               selected={filter === 'unread'}
               onSelect={() => setFilter('unread')}
             />
-            <FilterChip
-              label="Te mencionan"
-              count={mentionCount}
-              selected={filter === 'mentions'}
-              onSelect={() => setFilter('mentions')}
-            />
           </div>
 
           {visible.length === 0 ? (
             <EmptyState
               icon={<MessagesSquare className="h-5 w-5" />}
-              title={
-                filter === 'unread' ? 'No tienes chats sin leer' : 'Nada sin leer que te nombre'
-              }
+              title="No tienes chats sin leer"
               hint="Todo lo que llegó a tus conversaciones ya lo abriste."
             />
           ) : (
-            <div className="rounded-[14px] border border-border bg-card p-[6px_8px]">
+            <ListCard>
               {groups.map((group) => (
                 <div key={group.key}>
-                  <p className="px-0.5 pb-[7px] pt-3.5 text-[10.5px] font-extrabold uppercase tracking-[0.08em] text-hint">
-                    {group.label}
-                  </p>
+                  <DayHeading>{group.label}</DayHeading>
                   {group.rows.map((it) => (
                     <ChatRow
                       key={it.orderId}
@@ -185,18 +195,61 @@ export default function ChatsPage() {
                       members={members}
                       authorName={nameOf(it.lastAuthor)}
                       opening={opening === it.orderId}
-                      onOpen={() => void openChat(it.orderId)}
+                      onOpen={() => void openChat(it.orderId, it.orderId)}
                     />
                   ))}
                 </div>
               ))}
-            </div>
+            </ListCard>
           )}
         </>
       )}
 
-      <OrderDrawer order={openOrder} onClose={closeChat} initialTab="conversacion" />
+      <OrderDrawer
+        order={openOrder}
+        onClose={closeChat}
+        initialTab="conversacion"
+        focusMessageId={openMsg}
+      />
     </div>
+  );
+}
+
+/** Pestaña de la pantalla. No confundir con los filtros, que son pastillas. */
+function TabButton({
+  label,
+  icon,
+  count,
+  selected,
+  onSelect,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  count: number;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={selected}
+      onClick={onSelect}
+      className={cn(
+        '-mb-px flex items-center gap-2 rounded-t-[10px] border-b-2 px-3.5 py-2.5 text-[13px] font-bold transition-colors [transition-duration:130ms]',
+        selected
+          ? 'border-accent text-accent-ink'
+          : 'border-transparent text-muted-foreground hover:text-foreground',
+      )}
+    >
+      {icon}
+      {label}
+      {count > 0 ? (
+        <span className="inline-flex min-w-[18px] items-center justify-center rounded-full bg-accent px-1.5 py-px text-[10px] font-extrabold tabular-nums leading-[1.4] text-accent-foreground">
+          {count > 99 ? '99+' : count}
+        </span>
+      ) : null}
+    </button>
   );
 }
 
@@ -236,9 +289,9 @@ function ChatRow({
           initialsOf(authorName)
         )}
         {/* La mencion manda sobre el "sin leer" a secas: si me nombraron, eso
-            es lo que hay que ver primero. */}
-        {chat.mentioned ? (
-          <span className="absolute -right-1 -top-1 grid h-[15px] w-[15px] place-items-center rounded-full bg-accent text-[9px] font-black text-accent-foreground ring-2 ring-card">
+            es lo primero que hay que ver. */}
+        {opening ? null : chat.mentioned ? (
+          <span className="absolute -right-1 -top-1 grid h-[15px] w-[15px] place-items-center rounded-full bg-accent text-accent-foreground ring-2 ring-card">
             <AtSign className="h-2.5 w-2.5" />
           </span>
         ) : unread ? (
@@ -270,9 +323,9 @@ function ChatRow({
         </span>
 
         <span className="mt-[3px] block truncate text-[12.8px] text-muted-foreground">
-          {/* "Tú:" en vez del propio nombre — en una bandeja uno se reconoce
-              antes asi, y ademas distingue de un vistazo si quedaste esperando
-              respuesta o si la pelota esta en tu tejado. */}
+          {/* "Tú:" en vez del propio nombre — uno se reconoce antes asi, y de un
+              vistazo se ve si quedaste esperando respuesta o si la pelota esta
+              en tu tejado. */}
           <span className={cn('font-bold', chat.lastMine ? 'text-hint' : 'text-foreground')}>
             {chat.lastMine ? 'Tú' : authorName}:{' '}
           </span>
@@ -288,64 +341,5 @@ function ChatRow({
         </span>
       </span>
     </button>
-  );
-}
-
-function FilterChip({
-  label,
-  count,
-  selected,
-  onSelect,
-}: {
-  label: string;
-  count: number;
-  selected: boolean;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={selected}
-      onClick={onSelect}
-      className={cn(
-        'inline-flex items-center gap-1.5 rounded-full border px-[13px] py-[5px] text-[12.5px] font-bold transition-colors [transition-duration:130ms]',
-        selected
-          ? 'border-accent bg-accent text-accent-foreground shadow-[0_4px_12px_-4px_hsl(var(--ring))]'
-          : 'border-input bg-card text-muted-foreground hover:border-accent hover:text-accent-ink',
-      )}
-    >
-      {label}
-      <span className="tabular-nums">{count}</span>
-    </button>
-  );
-}
-
-/** Mientras carga: la MISMA forma de la lista, para que nada salte al llegar. */
-function ListSkeleton() {
-  return (
-    <div className="rounded-[14px] border border-border bg-card p-[6px_8px]">
-      <div className="h-3 w-16 animate-pulse rounded bg-muted/60 px-0.5 my-3.5" />
-      {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className="flex gap-3 p-[12px_14px]">
-          <div className="h-9 w-9 shrink-0 animate-pulse rounded-full bg-muted" />
-          <div className="min-w-0 flex-1 space-y-2">
-            <div className="h-3 w-56 max-w-full animate-pulse rounded bg-muted/70" />
-            <div className="h-3 w-80 max-w-full animate-pulse rounded bg-muted/50" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function EmptyState({ icon, title, hint }: { icon: React.ReactNode; title: string; hint: string }) {
-  return (
-    <div className="flex flex-col items-center gap-2 rounded-[14px] border border-dashed border-input bg-card py-16 text-center">
-      <span className="grid h-10 w-10 place-items-center rounded-full bg-wash text-accent">
-        {icon}
-      </span>
-      <p className="text-[13.5px] font-bold">{title}</p>
-      <p className="max-w-[52ch] px-6 text-[12px] text-muted-foreground">{hint}</p>
-    </div>
   );
 }
