@@ -1,22 +1,22 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { format } from 'date-fns/format';
 import { formatDistanceToNow } from 'date-fns/formatDistanceToNow';
 import { isToday } from 'date-fns/isToday';
 import { isYesterday } from 'date-fns/isYesterday';
 import { es } from 'date-fns/locale/es';
-import { AtSign, MessagesSquare } from 'lucide-react';
-import type { ChatInboxItem, MemberSummary } from '@smartlogistica/shared';
+import { AtSign, Loader2, MessagesSquare } from 'lucide-react';
+import { toast } from 'sonner';
+import type { ChatInboxItem, MemberSummary, OrderSummary } from '@smartlogistica/shared';
 
-import { api } from '@/lib/api-client';
+import { ApiError, api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 
 import { initialsOf, splitMentions } from '../orders/mention-utils';
+import { OrderDrawer } from '../orders/order-drawer';
 import { useChats } from '../use-chats';
-import { orderTarget } from '../use-mentions';
 
 type Filter = 'all' | 'unread' | 'mentions';
 
@@ -54,9 +54,41 @@ function whenLabel(date: Date): string {
  * se esconden filas.
  */
 export default function ChatsPage() {
-  const router = useRouter();
+  const qc = useQueryClient();
   const { items, loading } = useChats();
   const [filter, setFilter] = useState<Filter>('all');
+  // El pedido abierto y, mientras se trae, cual se pidio (para marcar la fila).
+  const [openOrder, setOpenOrder] = useState<OrderSummary | null>(null);
+  const [opening, setOpening] = useState<string | null>(null);
+
+  /**
+   * Abre la conversacion SIN moverse de aqui.
+   *
+   * Antes esto navegaba al sitio donde vive el pedido (Generales o su sede), y
+   * era un viaje de ida sin vuelta: cerrar el chat te dejaba en otra pantalla.
+   * La bandeja es el sitio donde uno se queda, asi que el pedido se trae por id
+   * y el drawer se monta aqui mismo. En el celular el propio drawer maneja el
+   * boton atras, de modo que volver te devuelve a Chats.
+   */
+  const openChat = async (orderId: string): Promise<void> => {
+    setOpening(orderId);
+    try {
+      setOpenOrder(await api.get<OrderSummary>(`/v1/orders/${orderId}`));
+    } catch (err) {
+      toast.error(
+        err instanceof ApiError ? err.message : 'No se pudo abrir la conversación de ese pedido',
+      );
+    } finally {
+      setOpening(null);
+    }
+  };
+
+  const closeChat = (): void => {
+    setOpenOrder(null);
+    // Abrir un chat lo marca como leido: sin esto la fila seguiria en negrita
+    // y el contador del menu seguiria contandolo hasta el siguiente evento.
+    qc.invalidateQueries({ queryKey: ['chats-inbox'] });
+  };
 
   const { data: members = [] } = useQuery({
     queryKey: ['members'],
@@ -152,7 +184,8 @@ export default function ChatsPage() {
                       chat={it}
                       members={members}
                       authorName={nameOf(it.lastAuthor)}
-                      onOpen={() => router.push(orderTarget(it))}
+                      opening={opening === it.orderId}
+                      onOpen={() => void openChat(it.orderId)}
                     />
                   ))}
                 </div>
@@ -161,6 +194,8 @@ export default function ChatsPage() {
           )}
         </>
       )}
+
+      <OrderDrawer order={openOrder} onClose={closeChat} initialTab="conversacion" />
     </div>
   );
 }
@@ -169,11 +204,14 @@ function ChatRow({
   chat,
   members,
   authorName,
+  opening,
   onOpen,
 }: {
   chat: ChatInboxItem;
   members: MemberSummary[];
   authorName: string;
+  /** Se esta trayendo el pedido: la fila lo dice en vez de quedarse muda. */
+  opening: boolean;
   onOpen: () => void;
 }) {
   const unread = chat.unreadCount > 0;
@@ -183,13 +221,20 @@ function ChatRow({
     <button
       type="button"
       onClick={onOpen}
+      disabled={opening}
+      aria-busy={opening}
       className={cn(
         'flex w-full gap-3 rounded-[12px] p-[12px_14px] text-left transition-colors [transition-duration:130ms] hover:bg-surface',
         unread && 'bg-gradient-to-r from-wash to-transparent to-70% hover:from-wash-strong',
+        opening && 'bg-surface',
       )}
     >
       <span className="relative grid h-9 w-9 shrink-0 place-items-center rounded-full bg-wash-strong text-[12px] font-extrabold text-accent-ink">
-        {initialsOf(authorName)}
+        {opening ? (
+          <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" />
+        ) : (
+          initialsOf(authorName)
+        )}
         {/* La mencion manda sobre el "sin leer" a secas: si me nombraron, eso
             es lo que hay que ver primero. */}
         {chat.mentioned ? (
