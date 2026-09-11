@@ -19,6 +19,7 @@ import type {
   SkydropxQuoteInput,
   SkydropxQuoteResponse,
   CreateDeliverySupportInput,
+  CreateInvoiceLine,
   CreateManualOrderInput,
   CreateOrderMessageInput,
   DevicePhotoKind,
@@ -63,6 +64,7 @@ import { StorageService } from '../../infrastructure/storage/storage.service';
 import { AiConnectionService } from '../ai/ai-connection.service';
 import { type ImageMime } from '../ai/ai-vision-client.service';
 import { AlegraService, type InvoiceClient } from '../marketplaces/alegra/alegra.service';
+import { ExternalCertificateService } from '../marketplaces/alegra/external-certificate.service';
 import { WarrantyService } from '../marketplaces/alegra/warranty.service';
 import {
   CoordinadoraService,
@@ -172,6 +174,7 @@ export class OrdersService {
     private readonly catalog: CatalogService,
     private readonly alegra: AlegraService,
     private readonly warranty: WarrantyService,
+    private readonly externalCertificate: ExternalCertificateService,
     private readonly coordinadora: CoordinadoraService,
     private readonly vtex: VtexClient,
     private readonly mkt: MktDocumentService,
@@ -2168,8 +2171,28 @@ export class OrdersService {
     const warehouseId = order.warehouseId;
     void (async () => {
       try {
+        // Modo del certificado de la sede. 'off' = no se adjunta nada, asi que
+        // ni se baja el PDF de Alegra.
+        const mode = await this.warranty.modeFor(warehouseId).catch(() => 'template' as const);
+        if (mode === 'off' || !this.storage.isConfigured()) return;
+
+        // Emisor EXTERNO: el documento no se deriva de la factura, lo crea el
+        // servicio externo con su propio consecutivo. Solo se adjunta ese PDF.
+        if (mode === 'external') {
+          await this.attachExternalCertificate({
+            orderId,
+            warehouseId,
+            tenantId,
+            auth,
+            client,
+            lines: input.lines,
+            invoiceNumber: result.number,
+          });
+          return;
+        }
+
         const pdf = await this.alegra.invoicePdf(warehouseId, result.id);
-        if (!pdf || !this.storage.isConfigured()) return;
+        if (!pdf) return;
         // Certificado: si la sede tiene plantilla, la factura se transforma
         // (nunca se envia la factura cruda). Si no hay plantilla, va la original.
         const clientNameRaw = (client.name ?? '').trim().toUpperCase();
@@ -2261,6 +2284,91 @@ export class OrdersService {
     if (manual) await this.finalizeManual(order, auth).catch(() => null);
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
     return result;
+  }
+
+  /**
+   * Emite el certificado en el servicio EXTERNO y lo adjunta al chat.
+   *
+   * A diferencia de la plantilla, el documento no sale de la factura de Alegra:
+   * lo crea el emisor externo con su propio consecutivo. Por eso NO hay
+   * respaldo con la factura cruda — si falla, se avisa en el chat y no se
+   * adjunta nada (mandar la factura seria mandar un documento distinto del que
+   * la sede decidio entregar).
+   */
+  private async attachExternalCertificate(args: {
+    orderId: string;
+    warehouseId: string;
+    tenantId: string;
+    auth: AuthContext;
+    client: InvoiceClient;
+    lines: CreateInvoiceLine[];
+    invoiceNumber: string;
+  }): Promise<void> {
+    const { orderId, warehouseId, tenantId, auth, client, lines, invoiceNumber } = args;
+    const { prisma } = getTenantContext();
+    const clientName = (client.name ?? '').trim().toUpperCase();
+
+    const note = (body: string) =>
+      prisma.orderMessage.create({
+        data: {
+          orderId,
+          authorId: auth.userId,
+          authorName: displayName(auth),
+          kind: 'system',
+          body: body.slice(0, 500),
+          imeis: [],
+        },
+      });
+
+    try {
+      // Las lineas guardan itemId; el emisor externo necesita el NOMBRE.
+      const names = await this.alegra
+        .itemNames(
+          warehouseId,
+          lines.map((l) => l.itemId),
+        )
+        .catch(() => new Map<string, string>());
+
+      const items = lines.map((l) => ({
+        // Si el catalogo no resolvio el nombre, la descripcion de la linea es
+        // mejor que un item en blanco en un documento que firma el cliente.
+        product: names.get(l.itemId) ?? l.description?.trim() ?? `Item ${l.itemId}`,
+        ...(l.description?.trim() ? { description: l.description.trim() } : {}),
+        price: Math.round(l.price),
+        quantity: l.quantity,
+      }));
+
+      const { pdf, reference } = await this.externalCertificate.issue(warehouseId, {
+        clientName,
+        clientCedula: client.identification ?? '',
+        clientAddress: client.address?.street ?? '',
+        clientPhone: client.phone ?? '',
+        items,
+      });
+
+      const fileName = `CERTIFICADO-${clientName || reference}.pdf`;
+      const key = `tenants/${tenantId}/orders/${orderId}/${slugForKey(fileName)}-${randomUUID()}.pdf`;
+      await this.storage.put(key, pdf, 'application/pdf', contentDisposition(fileName));
+      await prisma.orderMessage.create({
+        data: {
+          orderId,
+          authorId: auth.userId,
+          authorName: displayName(auth),
+          kind: 'document',
+          body: fileName,
+          attachmentKey: key,
+          attachmentMime: 'application/pdf',
+          imeis: [],
+        },
+      });
+    } catch (err) {
+      await note(
+        `La factura ${invoiceNumber} quedó emitida en Alegra, pero NO se pudo emitir el ` +
+          `certificado de garantía en el servicio externo, así que no se adjuntó nada. ` +
+          `Revisa el emisor en los Ajustes de la sede. Detalle: ${(err as Error).message}`,
+      );
+    }
+    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
   }
 
   // === Guias (Coordinadora) ===

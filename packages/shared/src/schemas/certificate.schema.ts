@@ -41,3 +41,50 @@ export const certificateTemplateSchema = z.object({
   elements: z.array(certificateElementSchema).max(200).default([]),
 });
 export type CertificateTemplate = z.infer<typeof certificateTemplateSchema>;
+
+/**
+ * Que documento se le adjunta al comprador cuando se factura en esta sede.
+ *
+ *   template — la factura de Alegra se transforma con la plantilla de arriba.
+ *              Si la sede no tiene plantilla, va la factura cruda (lo de siempre).
+ *   off      — no se adjunta NADA al chat. La factura igual queda en Alegra.
+ *   external — el certificado lo emite un servicio externo por API y se adjunta
+ *              SOLO ese PDF; la factura de Alegra no se le manda al comprador.
+ *
+ * Por defecto 'template': las sedes que ya existen no cambian de comportamiento.
+ */
+export const certificateModeSchema = z.enum(['template', 'off', 'external']);
+export type CertificateMode = z.infer<typeof certificateModeSchema>;
+
+/**
+ * Conexion con el emisor externo de certificados (hoy, la API de Eleven Store).
+ *
+ * El medio de pago es FIJO por sede a proposito: el emisor externo lo recibe
+ * como texto libre y agrega a su catalogo cualquier valor nuevo, asi que mandar
+ * el de Alegra ("Efectivo", "Transferencia"...) le ensuciaria el desplegable.
+ */
+export const externalCertificateConfigSchema = z.object({
+  baseUrl: z
+    .string()
+    .trim()
+    .url('URL invalida')
+    .max(300)
+    // Sin barra final: las rutas se concatenan como `${baseUrl}/api/v1/...`.
+    .transform((u) => u.replace(/\/+$/, '')),
+  paymentMethod: z.string().trim().min(1, 'Elige el medio de pago').max(100),
+});
+export type ExternalCertificateConfig = z.infer<typeof externalCertificateConfigSchema>;
+
+/** Lo que se envia al guardar. La clave solo viaja cuando se cambia. */
+export const externalCertificateSaveSchema = externalCertificateConfigSchema.extend({
+  apiKey: z.string().trim().min(1).max(300).optional(),
+});
+export type ExternalCertificateSave = z.infer<typeof externalCertificateSaveSchema>;
+
+/** Lo que se devuelve al leer. La clave NUNCA sale: solo si esta puesta. */
+export const externalCertificateSummarySchema = externalCertificateConfigSchema.extend({
+  hasApiKey: z.boolean(),
+  status: z.enum(['connected', 'error']),
+  lastError: z.string().nullable(),
+});
+export type ExternalCertificateSummary = z.infer<typeof externalCertificateSummarySchema>;

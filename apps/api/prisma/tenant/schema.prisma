@@ -28,6 +28,10 @@ model Warehouse {
   // se aplica sobre la factura de Alegra con pdf-lib. JSON editable visualmente.
   // null/vacio = se envia la factura cruda (sin transformar).
   certificateTemplate Json?
+  // Que documento recibe el comprador al facturar: 'template' (la plantilla de
+  // arriba), 'off' (no se adjunta nada) o 'external' (lo emite la API externa
+  // configurada en externalCertificate). Default 'template' = lo de siempre.
+  certificateMode String @default("template")
   // Paquetes predefinidos para guias de Coordinadora: [{name, weight, height,
   // width, length}]. Como los "empaques" del portal de Coordinadora (su API no
   // los expone), pero configurados por sede aqui.
@@ -44,6 +48,7 @@ model Warehouse {
   members      WarehouseMember[]
   alegra       AlegraConnection?
   coordinadora CoordinadoraConnection?
+  externalCertificate ExternalCertificateConnection?
   sellerPrefs  AlegraSellerPref[]
 
   @@index([archived])
@@ -87,6 +92,26 @@ model CoordinadoraConnection {
 // Conexion al sistema contable (Alegra) de una sede. 1:1 con Warehouse: cada
 // bodega factura con su propia cuenta de Alegra. El API token va cifrado con la
 // DEK del tenant (envelope), nunca en claro. (Mirror del patron MarketplaceConnection.)
+/// Emisor EXTERNO de certificados de garantia (hoy, la API de Eleven Store).
+/// Solo se usa cuando la sede tiene certificateMode = 'external'.
+/// La clave va cifrada con la DEK del tenant, igual que el token de Alegra.
+model ExternalCertificateConnection {
+  id              String   @id @default(cuid())
+  warehouseId     String   @unique
+  baseUrl         String
+  encryptedApiKey Bytes
+  /// Medio de pago FIJO con el que salen los certificados de esta sede: el
+  /// emisor externo lo recibe como texto libre y agrega los valores nuevos a
+  /// su catalogo, asi que no se le pasa el de Alegra.
+  paymentMethod   String
+  status          String   @default("connected")
+  lastError       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+}
+
 model AlegraConnection {
   id             String   @id @default(cuid())
   warehouseId    String   @unique

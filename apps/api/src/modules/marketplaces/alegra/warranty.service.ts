@@ -1,6 +1,11 @@
 import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import { certificateTemplateSchema, type CertificateTemplate } from '@smartlogistica/shared';
+import {
+  certificateModeSchema,
+  certificateTemplateSchema,
+  type CertificateMode,
+  type CertificateTemplate,
+} from '@smartlogistica/shared';
 
 import { isAdmin } from '../../../common/rbac';
 import type { AuthContext } from '../../../common/types/authenticated-request';
@@ -32,6 +37,38 @@ export class WarrantyService {
       throw new ForbiddenException('Solo administradores pueden ver la plantilla');
     await this.assertAccess(warehouseId, auth);
     return this.loadTemplate(warehouseId);
+  }
+
+  /**
+   * Modo del certificado de la sede. Lo lee tambien el flujo de facturacion
+   * (sin auth), por eso va aparte del gate de admin.
+   */
+  async modeFor(warehouseId: string): Promise<CertificateMode> {
+    const { prisma } = getTenantContext();
+    const wh = await prisma.warehouse.findUnique({
+      where: { id: warehouseId },
+      select: { certificateMode: true },
+    });
+    const parsed = certificateModeSchema.safeParse(wh?.certificateMode);
+    // Valor desconocido (o sede sin migrar) -> 'template', que es lo de siempre.
+    return parsed.success ? parsed.data : 'template';
+  }
+
+  /** Cambia el modo del certificado. Solo admin. */
+  async setMode(
+    warehouseId: string,
+    mode: CertificateMode,
+    auth: AuthContext,
+  ): Promise<{ mode: CertificateMode }> {
+    if (!isAdmin(auth))
+      throw new ForbiddenException('Solo administradores pueden cambiar el certificado');
+    await this.assertAccess(warehouseId, auth);
+    const { prisma } = getTenantContext();
+    await prisma.warehouse.update({
+      where: { id: warehouseId },
+      data: { certificateMode: mode },
+    });
+    return { mode };
   }
 
   /** Guarda la plantilla de la sede. Solo admin. */

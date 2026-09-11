@@ -412,6 +412,29 @@ export class AlegraService {
     return items.map((i) => this.toItem(i));
   }
 
+  /**
+   * Nombres del catalogo para unos itemIds. USO INTERNO (certificado externo):
+   * lo llama el flujo de facturacion, que ya valido el acceso a la sede, asi
+   * que no lleva gate de auth.
+   *
+   * Las lineas de la factura solo guardan el itemId; el emisor externo necesita
+   * el NOMBRE del producto. Los ids que no resuelvan quedan fuera del Map y el
+   * caller decide el respaldo.
+   */
+  async itemNames(warehouseId: string, itemIds: string[]): Promise<Map<string, string>> {
+    const unique = [...new Set(itemIds.filter(Boolean))];
+    const out = new Map<string, string>();
+    if (unique.length === 0) return out;
+    const { tenantId } = getTenantContext();
+    const http = await this.client.forWarehouse(tenantId, warehouseId);
+    const found = await Promise.all(unique.map((id) => this.client.getItem(http, id)));
+    unique.forEach((id, i) => {
+      const name = found[i]?.name;
+      if (name) out.set(id, String(name));
+    });
+    return out;
+  }
+
   /** Vendedores guardados en la cuenta Alegra de la sede (solo activos). */
   async listSellers(warehouseId: string, auth: AuthContext): Promise<AlegraSeller[]> {
     await this.assertWarehouseAccess(warehouseId, auth);
