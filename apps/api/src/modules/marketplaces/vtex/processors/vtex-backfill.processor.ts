@@ -188,6 +188,12 @@ export class VtexBackfillProcessor extends WorkerHost {
               },
             });
           }
+          // Facturado POR FUERA: la fecha del evento es lo unico que sabemos.
+          // Sin ella, Facturados lo ordenaria al final.
+          await prisma.order.updateMany({
+            where: { id: row.id, invoicedAt: null },
+            data: { invoicedAt: new Date() },
+          });
         }
       }
       await this.realtime.publish(tenantId, { kind: 'order.upserted', externalId: orderId });
@@ -268,6 +274,12 @@ export class VtexBackfillProcessor extends WorkerHost {
               },
             });
           }
+          // Facturado POR FUERA: la fecha del evento es lo unico que sabemos.
+          // Sin ella, Facturados lo ordenaria al final.
+          await prisma.order.updateMany({
+            where: { id: s.id, invoicedAt: null },
+            data: { invoicedAt: new Date() },
+          });
         }
         if (vtexStatus !== s.status) {
           await this.realtime.publish(tenantId, {

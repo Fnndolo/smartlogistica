@@ -116,6 +116,9 @@ export const orderSummarySchema = z.object({
   reactions: z
     .array(z.object({ emoji: z.string(), count: z.number().int(), mine: z.boolean() }))
     .default([]),
+  /** Cuando se facturo. null = todavia no (o pedido anterior a la columna).
+   *  En Facturados es LA fecha que importa, y la que ordena esa vista. */
+  invoicedAt: z.string().datetime().nullable().default(null),
   marketplaceCreatedAt: z.string().datetime(),
   receivedAt: z.string().datetime(),
 });
@@ -227,7 +230,15 @@ export const assignOrdersSchema = z.object({
 export type AssignOrdersInput = z.infer<typeof assignOrdersSchema>;
 
 /** 'product' agrupa los pedidos del MISMO articulo (A-Z por su producto cabeza). */
-export const orderSortFieldSchema = z.enum(['date', 'quantity', 'price', 'product']);
+export const orderSortFieldSchema = z.enum([
+  'date',
+  'quantity',
+  'price',
+  'product',
+  /** Fecha de FACTURACION. Es el orden natural de Facturados: ahi lo que
+   *  importa es cuando se facturó, no cuando entró el pedido. */
+  'invoiced',
+]);
 export type OrderSortField = z.infer<typeof orderSortFieldSchema>;
 
 /**

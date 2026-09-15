@@ -114,9 +114,10 @@ export class WhatsappInboxController {
   @Get('inbox')
   async inbox(
     @Query('line') line: string | undefined,
+    @Query('q') q: string | undefined,
     @CurrentUser() user: AuthContext,
   ): Promise<WaInbox> {
-    return this.whatsapp.inbox(user, line);
+    return this.whatsapp.inbox(user, line, q);
   }
 
   /** Hilo completo de un chat. */

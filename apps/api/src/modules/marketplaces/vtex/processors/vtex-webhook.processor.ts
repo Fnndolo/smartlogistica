@@ -137,6 +137,12 @@ export class VtexWebhookProcessor extends WorkerHost {
             },
           });
         }
+        // Facturado POR FUERA: la fecha buena es la de este evento, que es lo
+        // unico que sabemos. Sin ella, Facturados los ordenaria al final.
+        await prisma.order.updateMany({
+          where: { id: order.id, invoicedAt: null },
+          data: { invoicedAt: new Date() },
+        });
       }
       await this.realtime.publish(tenantId, { kind: 'order.upserted', externalId });
       this.logger.log(`Webhook: ${externalId} avanzo POR FUERA a ${newStatus} (se conserva)`);

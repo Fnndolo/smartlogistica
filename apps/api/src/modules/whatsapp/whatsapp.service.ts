@@ -28,7 +28,8 @@ import type {
   WaTemplateList,
   WaThread,
 } from '@smartlogistica/shared';
-import type { Prisma, PrismaClient } from '.prisma/tenant-client';
+import { Prisma } from '.prisma/tenant-client';
+import type { PrismaClient } from '.prisma/tenant-client';
 
 import { canUseWhatsapp, isAdmin } from '../../common/rbac';
 import type { AuthContext } from '../../common/types/authenticated-request';
@@ -644,43 +645,72 @@ export class WhatsappService {
   }
 
   /**
+   * Telefonos que casan con lo que se escribio en el buscador.
+   *
+   * Existe porque la bandeja devuelve solo los chats mas recientes (son miles)
+   * y el buscador filtraba SOBRE ESA LISTA: un chat viejo no aparecia por mas
+   * que se escribiera su numero entero. Buscar tiene que mirar toda la base, no
+   * la pagina que se alcanzo a cargar.
+   *
+   * Mira por los tres sitios donde el usuario espera encontrarlo: el numero, el
+   * nombre guardado en el contacto y el nombre del CLIENTE DEL PEDIDO — que es
+   * el que la bandeja pinta cuando existe, asi que buscar sin el no encontraria
+   * lo que se esta viendo.
+   */
+  private async searchPhones(prisma: PrismaClient, q: string): Promise<string[]> {
+    const like = `%${q.toLowerCase()}%`;
+    const digits = q.replace(/\D/g, '');
+    const porNumero =
+      digits.length >= 3
+        ? Prisma.sql`UNION SELECT DISTINCT phone FROM "WaMessage" WHERE phone LIKE ${`%${digits}%`}`
+        : Prisma.empty;
+    const rows = await prisma.$queryRaw<Array<{ phone: string }>>`
+      SELECT DISTINCT phone FROM (
+        SELECT phone FROM "WaContact" WHERE LOWER(name) LIKE ${like}
+        UNION
+        SELECT RIGHT(regexp_replace("customerPhone", '\\D', '', 'g'), 10) AS phone
+          FROM "Order"
+          WHERE "customerPhone" IS NOT NULL AND LOWER("customerName") LIKE ${like}
+        ${porNumero}
+      ) s LIMIT 500`;
+    return rows.map((r) => r.phone);
+  }
+
+  /**
    * Bandeja. `lineId` filtra por NUMERO: con dos lineas conectadas los chats no
    * se mezclan (cada numero es su propia bandeja, como en el celular).
    *
    * El filtro mira el ULTIMO mensaje del chat, no todos: si un cliente escribio
    * alguna vez al otro numero, su conversacion pertenece a donde esta viva.
    */
-  async inbox(auth: AuthContext, lineId?: string | null): Promise<WaInbox> {
+  async inbox(auth: AuthContext, lineId?: string | null, search?: string | null): Promise<WaInbox> {
     this.assertWhatsappAccess(auth);
     const { prisma } = getTenantContext();
     const line = lineId?.trim() || null;
+    const q = search?.trim() || null;
+
+    // Con busqueda, primero se acota a los telefonos que casan EN TODA la base;
+    // sin ella, se devuelven los mas recientes y ya.
+    const phones = q ? await this.searchPhones(prisma, q) : null;
+    const conds: Prisma.Sql[] = [];
+    if (line) conds.push(Prisma.sql`t."lineId" = ${line}`);
+    if (phones) conds.push(Prisma.sql`t.phone = ANY(${phones})`);
+    const filtro = conds.length ? Prisma.sql`WHERE ${Prisma.join(conds, ' AND ')}` : Prisma.empty;
 
     const [last, unreadRows, contacts] = await Promise.all([
-      line
-        ? prisma.$queryRaw<
-            Array<{
-              phone: string;
-              kind: string;
-              body: string | null;
-              direction: string;
-              status: string | null;
-              createdAt: Date;
-            }>
-          >`SELECT * FROM (
-              SELECT DISTINCT ON (phone) phone, kind, body, direction, status, "createdAt", "lineId"
-              FROM "WaMessage" ORDER BY phone, "createdAt" DESC
-            ) t WHERE t."lineId" = ${line}`
-        : prisma.$queryRaw<
-            Array<{
-              phone: string;
-              kind: string;
-              body: string | null;
-              direction: string;
-              status: string | null;
-              createdAt: Date;
-            }>
-          >`SELECT DISTINCT ON (phone) phone, kind, body, direction, status, "createdAt"
-        FROM "WaMessage" ORDER BY phone, "createdAt" DESC`,
+      prisma.$queryRaw<
+        Array<{
+          phone: string;
+          kind: string;
+          body: string | null;
+          direction: string;
+          status: string | null;
+          createdAt: Date;
+        }>
+      >`SELECT * FROM (
+          SELECT DISTINCT ON (phone) phone, kind, body, direction, status, "createdAt", "lineId"
+          FROM "WaMessage" ORDER BY phone, "createdAt" DESC
+        ) t ${filtro}`,
       prisma.$queryRaw<Array<{ phone: string; unread: bigint }>>`
         SELECT m.phone, COUNT(*)::bigint AS unread
         FROM "WaMessage" m
@@ -707,9 +737,10 @@ export class WhatsappService {
     const unread = new Map(unreadRows.map((r) => [r.phone, Number(r.unread)] as const));
     const colorOf = new Map(labelRows.map((l) => [l.name, l.color] as const));
 
+    // Se mapea TODO y se ordena antes de recortar. Al reves — recortar y luego
+    // ordenar — un chat FIJADO antiguo se caia del corte y no llegaba nunca
+    // arriba, que es justo lo contrario de lo que significa fijarlo.
     const chats = last
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      .slice(0, 400)
       .map((m) => {
         const c = byPhone.get(m.phone);
         const ord = orderInfo.get(m.phone);
@@ -738,8 +769,16 @@ export class WhatsappService {
           pinned: Boolean(c?.pinned),
         };
       })
-      // FIJADOS siempre arriba (dentro de cada grupo, por ultimo mensaje).
-      .sort((a, b) => Number(b.pinned) - Number(a.pinned));
+      // FIJADOS siempre arriba; dentro de cada grupo, por ultimo mensaje.
+      .sort(
+        (a, b) =>
+          Number(b.pinned) - Number(a.pinned) ||
+          new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime(),
+      )
+      // El tope es de PINTADO, no de busqueda: buscar ya mira toda la base y
+      // llega aqui acotado. Sin busqueda son los mas recientes, que es lo que
+      // se espera de una bandeja.
+      .slice(0, 400);
 
     const usedNames = new Set(chats.flatMap((c) => c.labels));
     const labels = [...new Set([...labelRows.map((l) => l.name), ...usedNames])]

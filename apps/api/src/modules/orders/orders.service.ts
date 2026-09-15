@@ -2279,6 +2279,7 @@ export class OrdersService {
         } as Prisma.InputJsonValue,
       },
     });
+    await this.stampInvoicedAt(prisma, orderId);
     // Pedido montado a mano: si la guia ya existia, con la factura queda COMPLETO
     // (pasa a Facturados). Best-effort: la factura ya quedo emitida igual.
     if (manual) await this.finalizeManual(order, auth).catch(() => null);
@@ -3711,6 +3712,7 @@ export class OrdersService {
         data: { invoiceNumber, tracking: guide.number } as Prisma.InputJsonValue,
       },
     });
+    await this.stampInvoicedAt(prisma, order.id);
     await this.systemMessage(order.id, auth, `Facturado en VTEX · MKT ${invoiceNumber}.`);
 
     // Adjuntar el MKT (identico al Print order de VTEX) al chat como archivo.
@@ -3826,6 +3828,20 @@ export class OrdersService {
     return { readyForHandling, handling, connections };
   }
 
+  /**
+   * Marca CUANDO se facturo el pedido, si aun no estaba marcado.
+   *
+   * `updateMany` con `invoicedAt: null` en el filtro lo hace idempotente sin
+   * leer antes: gana el primer camino que pase (la factura de Alegra, el cierre
+   * en VTEX o el cierre externo) y los siguientes no lo pisan. Importa porque
+   * la fecha buena es la PRIMERA, no la ultima.
+   */
+  private async stampInvoicedAt(prisma: PrismaClient, orderId: string): Promise<void> {
+    await prisma.order
+      .updateMany({ where: { id: orderId, invoicedAt: null }, data: { invoicedAt: new Date() } })
+      .catch(() => null);
+  }
+
   private buildOrderBy(
     sort: ListOrdersQuery['sort'],
     dir: ListOrdersQuery['dir'],
@@ -3835,6 +3851,10 @@ export class OrdersService {
         return { totalUnits: dir };
       case 'price':
         return { totalValue: dir };
+      case 'invoiced':
+        // Los sin fecha al FINAL en los dos sentidos: un pedido sin facturar no
+        // es "el mas viejo" ni "el mas nuevo", es que no tiene ese dato.
+        return { invoicedAt: { sort: dir, nulls: 'last' } };
       case 'product':
         // Agrupa los pedidos del MISMO articulo. Los pedidos sin producto (o
         // anteriores a la columna) van SIEMPRE al final, en los dos sentidos:
@@ -3894,6 +3914,7 @@ export class OrdersService {
       addressStatus: (o.addressStatus as OrderSummary['addressStatus']) ?? null,
       confirmedAddress: o.confirmedAddress,
       addressConfirmedAt: o.addressConfirmedAt ? o.addressConfirmedAt.toISOString() : null,
+      invoicedAt: o.invoicedAt ? o.invoicedAt.toISOString() : null,
       marketplaceCreatedAt: o.marketplaceCreatedAt.toISOString(),
       receivedAt: o.receivedAt.toISOString(),
     };

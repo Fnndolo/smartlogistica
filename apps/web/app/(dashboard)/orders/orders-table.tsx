@@ -65,6 +65,20 @@ interface OrdersTableProps {
   showAddress?: boolean;
   /** Muestra la columna "Plataforma" (VTEX / Krediya / Mercado Libre...). Solo en sede. */
   showPlatform?: boolean;
+  /** Facturados: la columna de fecha pasa a ser la de FACTURACION. */
+  showInvoicedDate?: boolean;
+}
+
+/**
+ * Que fecha pinta la columna. En Facturados, la de facturacion; si un pedido
+ * no la tiene (nunca se cerro, o es anterior a la columna) se cae a la de
+ * entrada en vez de dejar el hueco vacio.
+ */
+function dateOf(
+  order: { invoicedAt?: string | null; marketplaceCreatedAt: string },
+  invoiced: boolean,
+): string {
+  return invoiced ? (order.invoicedAt ?? order.marketplaceCreatedAt) : order.marketplaceCreatedAt;
 }
 
 export function OrdersTable({
@@ -79,6 +93,7 @@ export function OrdersTable({
   showShipping = false,
   showAddress = false,
   showPlatform = false,
+  showInvoicedDate = false,
 }: OrdersTableProps) {
   const qc = useQueryClient();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -123,6 +138,7 @@ export function OrdersTable({
             showShipping={showShipping}
             showAddress={showAddress}
             showPlatform={showPlatform}
+            showInvoicedDate={showInvoicedDate}
             platforms={platforms}
             onPrefetch={() => onOpenOrder && prefetchOrder(qc, order.id)}
             onClaim={openMenu('claim')}
@@ -170,10 +186,13 @@ export function OrdersTable({
                 onSort={onSort}
                 align="right"
               />
-              {/* Fecha desc es el orden POR DEFECTO: no se pinta como filtro aplicado. */}
+              {/* Fecha desc es el orden POR DEFECTO: no se pinta como filtro
+                  aplicado. En Facturados la fecha que importa es la de
+                  FACTURACION, no la de entrada del pedido — que puede ser de
+                  hace semanas — asi que la columna cambia de significado. */}
               <SortHeader
-                label="Fecha"
-                field="date"
+                label={showInvoicedDate ? 'Facturado' : 'Fecha'}
+                field={showInvoicedDate ? 'invoiced' : 'date'}
                 sort={sort}
                 dir={dir}
                 onSort={onSort}
@@ -302,12 +321,12 @@ export function OrdersTable({
                     <TableCell className="whitespace-nowrap text-muted-foreground">
                       <div className="flex flex-col leading-tight">
                         <span className="text-xs">
-                          {format(new Date(order.marketplaceCreatedAt), 'd MMM yyyy', {
+                          {format(new Date(dateOf(order, showInvoicedDate)), 'd MMM yyyy', {
                             locale: es,
                           })}
                         </span>
                         <span className="font-mono text-[10.5px] text-muted-foreground/70">
-                          {format(new Date(order.marketplaceCreatedAt), 'HH:mm')}
+                          {format(new Date(dateOf(order, showInvoicedDate)), 'HH:mm')}
                         </span>
                       </div>
                     </TableCell>
@@ -638,6 +657,7 @@ function OrderCard({
   showShipping,
   showAddress,
   showPlatform,
+  showInvoicedDate,
   platforms,
   onPrefetch,
   onClaim,
@@ -652,6 +672,7 @@ function OrderCard({
   showShipping: boolean;
   showAddress: boolean;
   showPlatform: boolean;
+  showInvoicedDate: boolean;
   platforms: Platform[];
   onPrefetch: () => void;
   onClaim: (order: OrderSummary, e: React.MouseEvent) => void;
@@ -729,7 +750,7 @@ function OrderCard({
             </span>
           </span>
           <span className="shrink-0 tabular-nums">
-            {format(new Date(order.marketplaceCreatedAt), "d MMM '·' HH:mm", { locale: es })}
+            {format(new Date(dateOf(order, showInvoicedDate)), "d MMM '·' HH:mm", { locale: es })}
           </span>
         </div>
 

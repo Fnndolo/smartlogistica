@@ -42,9 +42,14 @@ import { useOrdersStream } from './use-orders-stream';
 
 export type OrdersScope = { kind: 'general' } | { kind: 'warehouse'; id: string; name: string };
 
-const SORT_FIELDS = new Set<OrderSortField>(['date', 'quantity', 'price', 'product']);
-const parseSort = (v: string | null): OrderSortField =>
-  v && SORT_FIELDS.has(v as OrderSortField) ? (v as OrderSortField) : 'date';
+const SORT_FIELDS = new Set<OrderSortField>(['date', 'quantity', 'price', 'product', 'invoiced']);
+/**
+ * `fallback` = el orden natural de la vista cuando la URL no dice otra cosa.
+ * En Facturados es la fecha de FACTURACION: ahi lo que se busca es "que
+ * facture hoy", no cuando entro el pedido — que puede ser de hace semanas.
+ */
+const parseSort = (v: string | null, fallback: OrderSortField = 'date'): OrderSortField =>
+  v && SORT_FIELDS.has(v as OrderSortField) ? (v as OrderSortField) : fallback;
 const parseDir = (v: string | null): SortDir => (v === 'asc' ? 'asc' : 'desc');
 
 interface OrdersLiveProps {
@@ -75,7 +80,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   // Pestaña de tienda: solo tiene sentido en generales (en la sede los pedidos
   // de las dos tiendas ya conviven a proposito).
   const account = scope.kind === 'general' ? (searchParams.get('account') ?? undefined) : undefined;
-  const sort = parseSort(searchParams.get('sort'));
+  const sort = parseSort(searchParams.get('sort'), state === 'invoiced' ? 'invoiced' : 'date');
   const dir = parseDir(searchParams.get('dir'));
   const warehouseId = scope.kind === 'warehouse' ? scope.id : undefined;
 
@@ -457,6 +462,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
           >
             <OrdersTable
               items={items}
+              showInvoicedDate={state === 'invoiced'}
               sort={sort}
               dir={dir}
               onSort={handleSort}

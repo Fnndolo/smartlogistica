@@ -493,6 +493,11 @@ model Order {
   claimedByName        String?
   claimedAt            DateTime?
 
+  // Cuando se FACTURO. Denormalizada para poder ORDENAR Facturados por ella:
+  // la fecha vive en los eventos, y Prisma no sabe ordenar por el maximo de una
+  // relacion filtrada. Misma solucion que `primaryProduct`.
+  // null = pedidos anteriores a la columna que no se pudieron rellenar.
+  invoicedAt           DateTime?
   marketplaceCreatedAt DateTime
   receivedAt           DateTime @default(now())
   updatedAt            DateTime @updatedAt
@@ -517,6 +522,7 @@ model Order {
   @@index([warehouseId, status])
   @@index([warehouseId, shippingState])
   @@index([receivedAt(sort: Desc)])
+  @@index([invoicedAt(sort: Desc)])
 }
 
 model OrderItem {

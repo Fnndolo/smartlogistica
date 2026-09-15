@@ -184,6 +184,14 @@ export function WhatsappInbox() {
   const qc = useQueryClient();
   const [selected, setSelected] = useState<string | null>(null);
   const [q, setQ] = useState('');
+  // Lo que se le manda AL SERVIDOR, con freno: la bandeja tiene miles de chats
+  // y solo los mas recientes viajan en la carga normal, asi que buscar tiene
+  // que preguntar de nuevo — pero no en cada tecla.
+  const [qServidor, setQServidor] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setQServidor(q.trim()), 300);
+    return () => clearTimeout(t);
+  }, [q]);
   const [filter, setFilter] = useState<'all' | 'unread' | 'archived' | string>('all');
   // Linea activa. Los chats de dos numeros NO se mezclan: cada uno es su
   // propia bandeja, como en el celular.
@@ -207,11 +215,21 @@ export function WhatsappInbox() {
   const lines = config?.lines ?? [];
 
   const { data: inbox, isLoading } = useQuery({
-    queryKey: ['wa-inbox', line],
-    queryFn: () =>
-      api.get<WaInbox>(`/v1/whatsapp/inbox${line ? `?line=${encodeURIComponent(line)}` : ''}`),
-    refetchInterval: 30_000,
+    queryKey: ['wa-inbox', line, qServidor],
+    queryFn: () => {
+      const p = new URLSearchParams();
+      if (line) p.set('line', line);
+      if (qServidor) p.set('q', qServidor);
+      const qs = p.toString();
+      return api.get<WaInbox>(`/v1/whatsapp/inbox${qs ? `?${qs}` : ''}`);
+    },
+    // Con busqueda activa NO se refresca solo: reconsultar cada 30s mientras
+    // alguien lee resultados le mueve la lista bajo el cursor.
+    refetchInterval: qServidor ? false : 30_000,
     enabled: canWhatsapp,
+    // Mientras llega lo nuevo se conserva lo anterior: sin esto, cada tecla
+    // vaciaba la lista y parpadeaba.
+    placeholderData: (prev: WaInbox | undefined) => prev,
   });
 
   // Marcar LEIDO (apaga el contador verde de este usuario).
