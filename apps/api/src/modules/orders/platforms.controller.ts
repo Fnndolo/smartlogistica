@@ -1,4 +1,11 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Get, Put } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  Put,
+} from '@nestjs/common';
 import { savePlatformsSchema, type Platform } from '@smartlogistica/shared';
 
 import { CurrentUser } from '../../common/decorators/current-user.decorator';

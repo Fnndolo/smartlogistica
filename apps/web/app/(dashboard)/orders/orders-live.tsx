@@ -75,6 +75,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const to = searchParams.get('to') ?? undefined;
   const q = searchParams.get('q') ?? undefined;
   const shipping = searchParams.get('shipping') ?? undefined;
+  const packed = searchParams.get('packed') ?? undefined;
   const address = searchParams.get('address') ?? undefined;
   const product = searchParams.get('product') ?? undefined;
   // Pestaña de tienda: solo tiene sentido en generales (en la sede los pedidos
@@ -90,6 +91,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       scope: warehouseId ?? 'general',
       state,
       shipping,
+      packed,
       address,
       product,
       account,
@@ -121,6 +123,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       if (warehouseId) params.set('warehouse', warehouseId);
       if (state) params.set('state', state);
       if (shipping) params.set('shipping', shipping);
+      if (packed) params.set('packed', packed);
       if (address) params.set('address', address);
       if (product) params.set('product', product);
       if (account) params.set('account', account);
@@ -152,7 +155,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   useEffect(() => {
     setSelected(new Set());
-  }, [page, q, from, to, sort, dir, warehouseId, shipping, address, product, account]);
+  }, [page, q, from, to, sort, dir, warehouseId, shipping, packed, address, product, account]);
 
   // Pedido abierto en el drawer (click en la fila). La conversacion es SIEMPRE
   // la primera pestaña.
@@ -432,6 +435,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
         <SearchFilter />
         <DateRangeFilter />
         <ProductFilter warehouseId={warehouseId} state={state} />
+        {state === 'invoiced' ? <PackedFilter /> : null}
         {state === 'invoiced' && warehouseId ? <ShippingFilter /> : null}
         {state !== 'invoiced' ? <AddressFilter /> : null}
         {/* Montar pedido: SOLO en la sede (Por preparar) — pedidos externos a
@@ -539,6 +543,52 @@ const SHIPPING_OPTIONS = [
  * Filtro por estado del envio (Facturados). Vive en la URL (?shipping=). Mismo
  * diseno que DateRangeFilter: boton outline + popover con filas de radio.
  */
+/**
+ * Empaque (Facturados). Segmentado y no desplegable a proposito: es la cola de
+ * trabajo del empacador, se mira cien veces al dia y tiene que leerse de un
+ * vistazo — un desplegable esconde justo el dato que se viene a consultar.
+ */
+function PackedFilter() {
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const current = searchParams.get('packed') ?? '';
+
+  const set = (value: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (value) params.set('packed', value);
+    else params.delete('packed');
+    params.delete('page');
+    replaceUrlParams(pathname, params);
+  };
+
+  const opciones = [
+    { value: '', label: 'Todos' },
+    { value: 'no', label: 'Sin empacar' },
+    { value: 'yes', label: 'Empacados' },
+  ];
+
+  return (
+    <div className="inline-flex h-[34px] items-center gap-0.5 rounded-lg border border-input bg-card p-0.5">
+      {opciones.map((o) => (
+        <button
+          key={o.value || 'all'}
+          type="button"
+          aria-pressed={current === o.value}
+          onClick={() => set(o.value)}
+          className={cn(
+            'rounded-[7px] px-2.5 py-1 text-[12.5px] font-semibold transition-colors [transition-duration:130ms]',
+            current === o.value
+              ? 'bg-accent text-accent-foreground'
+              : 'text-muted-foreground hover:text-accent-ink',
+          )}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ShippingFilter() {
   const pathname = usePathname();
   const searchParams = useSearchParams();

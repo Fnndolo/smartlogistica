@@ -7,6 +7,7 @@ import { format } from 'date-fns/format';
 import { es } from 'date-fns/locale/es';
 import {
   Camera,
+  Check,
   ChevronDown,
   ChevronRight,
   ChevronsUpDown,
@@ -346,7 +347,10 @@ export function OrdersTable({
                       </TableCell>
                     ) : null}
                     <TableCell className={cn(!showAddress && !showShipping && 'relative pr-16')}>
-                      <StatusBadge status={order.status} />
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        <StatusBadge status={order.status} />
+                        <PackedBadge order={order} />
+                      </span>
                       {!showAddress && !showShipping ? (
                         <RowActions
                           order={order}
@@ -654,6 +658,28 @@ function ClaimMenu({
  * Reusa los mismos badges/formatos. Tocar la tarjeta abre el drawer; el checkbox
  * (en modo seleccion) alterna la seleccion sin abrirlo.
  */
+/**
+ * "Empacado", con quien lo empaco. Es una marca PROPIA, no el estado del
+ * pedido: `status` lo sobrescribe la sincronizacion de VTEX y una marca de
+ * empaque ahi dentro se borraria sola.
+ */
+function PackedBadge({ order }: { order: OrderSummary }) {
+  if (!order.packedAt) return null;
+  return (
+    <span
+      title={`Empacado${order.packedByName ? ` por ${order.packedByName}` : ''} · ${format(
+        new Date(order.packedAt),
+        "d MMM '·' HH:mm",
+        { locale: es },
+      )}`}
+      className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full bg-emerald-500/10 px-2 py-[2px] text-[11px] font-bold text-emerald-700 dark:text-emerald-400"
+    >
+      <Check className="h-3 w-3" />
+      Empacado
+    </span>
+  );
+}
+
 function OrderCard({
   order,
   selectable,
@@ -759,6 +785,12 @@ function OrderCard({
             {format(new Date(dateOf(order, showInvoicedDate)), "d MMM '·' HH:mm", { locale: es })}
           </span>
         </div>
+
+        {order.packedAt ? (
+          <div className="mt-2">
+            <PackedBadge order={order} />
+          </div>
+        ) : null}
 
         {showAddress ? (
           <div className="mt-2">

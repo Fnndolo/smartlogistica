@@ -56,7 +56,9 @@ export class ShippingRefreshProcessor extends WorkerHost {
           select: { warehouseId: true },
           distinct: ['warehouseId'],
         });
-        const warehouseIds = rows.map((r) => r.warehouseId).filter((id): id is string => Boolean(id));
+        const warehouseIds = rows
+          .map((r) => r.warehouseId)
+          .filter((id): id is string => Boolean(id));
         if (warehouseIds.length === 0) continue;
 
         // El core usa getTenantContext() (y coordinadora tambien) -> envolvemos
@@ -81,7 +83,9 @@ export class ShippingRefreshProcessor extends WorkerHost {
     }
 
     if (updated > 0) {
-      this.logger.log(`Shipping refresh: ${updated} envio(s) actualizados en ${warehouses} sede(s)`);
+      this.logger.log(
+        `Shipping refresh: ${updated} envio(s) actualizados en ${warehouses} sede(s)`,
+      );
     } else {
       this.logger.debug(
         `Shipping refresh: ${warehouses} sede(s) revisadas, sin cambios (${activeTenants.length} tenant/s)`,

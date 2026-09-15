@@ -23,6 +23,7 @@ import {
   MessageCircle,
   MessageSquare,
   Paperclip,
+  Printer,
   Package,
   PlusCircle,
   ReceiptText,
@@ -607,6 +608,7 @@ function DrawerContent({
       <div className="relative min-h-0 flex-1">
         <TabPane tab="conversacion" active={tab === 'conversacion'}>
           <ConversacionTab
+            order={order}
             orderId={order.id}
             initialUnread={order.unreadCount ?? 0}
             active={tab === 'conversacion'}
@@ -1196,12 +1198,93 @@ function DeleteOrderZone({ order, onDeleted }: { order: OrderSummary; onDeleted?
 
 // === Tab: Conversacion ===
 
+/**
+ * "Imprimir todo" + la marca de EMPACADO, arriba del hilo.
+ *
+ * Vive aqui y no en una pestaña aparte porque los documentos LLEGAN al chat: el
+ * sitio donde se ven es el sitio donde se imprimen.
+ *
+ * El PDF lo une el servidor y se abre en una pestaña nueva. Se abre y no se
+ * descarga a proposito: el visor del navegador ya trae su boton de imprimir, y
+ * descargarlo obligaria a buscar el archivo y abrirlo a mano — justo el paso
+ * que este boton viene a quitar. Imprimir SIN dialogo no lo puede hacer una
+ * web; eso necesitaria un programa instalado en el equipo de empaque.
+ */
+function PrintPackBar({ order, messages }: { order: OrderSummary; messages: OrderMessage[] }) {
+  const qc = useQueryClient();
+  const [working, setWorking] = useState(false);
+  const docs = messages.filter((m) => m.attachmentMime === 'application/pdf').length;
+  const packed = Boolean(order.packedAt);
+
+  // Sin documentos no hay nada que imprimir y la barra solo estorbaria.
+  if (docs === 0 && !packed) return null;
+
+  const marcar = async (next: boolean): Promise<void> => {
+    try {
+      await api.post(`/v1/orders/${order.id}/packed`, { packed: next });
+      qc.invalidateQueries({ queryKey: ['orders'] });
+      qc.invalidateQueries({ queryKey: ['order', order.id] });
+      toast.success(next ? 'Pedido marcado como empacado' : 'Se quitó la marca de empacado');
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo marcar');
+    }
+  };
+
+  const imprimir = async (): Promise<void> => {
+    setWorking(true);
+    // La pestaña se abre ANTES de esperar nada: abrirla despues de un await la
+    // convierte en un popup y el navegador la bloquea.
+    const tab = window.open('', '_blank');
+    try {
+      tab?.location.replace(`/v1/orders/${order.id}/print-pack`);
+      if (!packed) await marcar(true);
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-b border-border bg-surface/60 px-3.5 py-2 md:px-[18px]">
+      <Button
+        onClick={() => void imprimir()}
+        loading={working}
+        disabled={docs === 0 || working}
+        className="gap-[6px] rounded-[9px] px-3 py-1.5 text-[12px]"
+      >
+        <Printer className="h-[15px] w-[15px]" />
+        Imprimir todo
+        {docs > 0 ? <span className="tabular-nums opacity-80">({docs})</span> : null}
+      </Button>
+
+      {packed ? (
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2.5 py-[3px] text-[11.5px] font-bold text-emerald-700 dark:text-emerald-400">
+          <Check className="h-3 w-3" />
+          Empacado
+          {order.packedByName ? ` · ${order.packedByName}` : ''}
+        </span>
+      ) : null}
+
+      {/* Deshacer siempre a mano: una impresora atascada no puede dejar un
+          pedido marcado para siempre. */}
+      <button
+        type="button"
+        onClick={() => void marcar(!packed)}
+        className="ml-auto text-[11.5px] font-semibold text-hint underline-offset-2 hover:text-accent-ink hover:underline"
+      >
+        {packed ? 'Quitar marca' : 'Marcar empacado'}
+      </button>
+    </div>
+  );
+}
+
 function ConversacionTab({
+  order,
   orderId,
   initialUnread = 0,
   active = true,
   focusMessageId = null,
 }: {
+  order: OrderSummary;
   orderId: string;
   initialUnread?: number;
   /** false cuando otra pestaña esta al frente (el chat sigue montado). */
@@ -2082,6 +2165,8 @@ function ConversacionTab({
         if (e.dataTransfer?.files?.length) stageFiles(e.dataTransfer.files);
       }}
     >
+      <PrintPackBar order={order} messages={messages} />
+
       {/* flex-col + spacer mt-auto: con pocos mensajes el chat NACE DESDE
           ABAJO (como WhatsApp) y va subiendo; con muchos, scrollea normal. */}
       <div

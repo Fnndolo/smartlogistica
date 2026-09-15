@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
@@ -50,6 +51,8 @@ import type {
   OrderSearchResult,
 } from '@smartlogistica/shared';
 import { DELIVERY_COURIER, DELIVERY_SUPPORT_PREFIX } from '@smartlogistica/shared';
+import { PDFDocument } from 'pdf-lib';
+
 import { Prisma } from '.prisma/tenant-client';
 import type { PrismaClient } from '.prisma/tenant-client';
 
@@ -147,6 +150,8 @@ interface UnreadInfo {
 
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   /**
    * Candado en memoria contra dobles operaciones: dos clicks seguidos a
    * "Facturar" (o dos pestañas) creaban DOS facturas porque ambas requests
@@ -237,6 +242,12 @@ export class OrdersService {
       } else {
         where.shippingState = query.shipping;
       }
+    }
+
+    // Empaque (Facturados): la cola de trabajo de los empacadores. Es una marca
+    // PROPIA, no el estado del pedido — ese lo pisa la sincronizacion de VTEX.
+    if (query.packed) {
+      where.packedAt = query.packed === 'yes' ? { not: null } : null;
     }
 
     // Filtro por confirmacion de direccion (WhatsApp). Aplica en General y Por
@@ -493,6 +504,93 @@ export class OrdersService {
       }
     }
     return out;
+  }
+
+  /**
+   * Marca (o desmarca) el pedido como EMPACADO.
+   *
+   * Se puede DESHACER a proposito: la marca la pone el boton de imprimir, y una
+   * impresora atascada o un clic de mas no pueden dejar un pedido marcado para
+   * siempre — el empacador tiene que poder corregirlo sin llamar a nadie.
+   */
+  async setPacked(orderId: string, packed: boolean, auth: AuthContext): Promise<{ ok: true }> {
+    await this.loadAccessibleOrder(orderId, auth);
+    const { tenantId, prisma } = getTenantContext();
+    const name = displayName(auth);
+    await prisma.order.update({
+      where: { id: orderId },
+      data: packed
+        ? { packedAt: new Date(), packedById: auth.userId, packedByName: name }
+        : { packedAt: null, packedById: null, packedByName: null },
+    });
+    await prisma.orderEvent.create({
+      data: {
+        orderId,
+        type: packed ? 'packed' : 'unpacked',
+        actorId: auth.userId,
+        actorName: name,
+        data: {} as Prisma.InputJsonValue,
+      },
+    });
+    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+    return { ok: true };
+  }
+
+  /**
+   * TODOS los documentos del pedido en UN solo PDF.
+   *
+   * Unir en el servidor y no abrir tres pestañas: cada PDF suelto es un dialogo
+   * de impresion mas, y el empacador acaba imprimiendo de tres en tres y
+   * perdiendo alguno. Un archivo, un dialogo, un trabajo.
+   *
+   * Se toma lo que HAY adjunto al chat, sin exigir una lista fija: lo que aplica
+   * cambia por pedido (domicilio en vez de guia, certificado solo en algunas
+   * sedes) y una regla rigida dejaria sin imprimir justo los casos raros.
+   */
+  async printPack(orderId: string, auth: AuthContext): Promise<{ pdf: Buffer; fileName: string }> {
+    const order = await this.loadAccessibleOrder(orderId, auth);
+    const { prisma } = getTenantContext();
+    if (!this.storage.isConfigured()) {
+      throw new BadRequestException('El almacenamiento de archivos no está configurado');
+    }
+    const docs = await prisma.orderMessage.findMany({
+      where: { orderId, attachmentMime: 'application/pdf', attachmentKey: { not: null } },
+      orderBy: { createdAt: 'asc' },
+      select: { body: true, attachmentKey: true },
+    });
+    if (docs.length === 0) {
+      throw new BadRequestException('Este pedido todavía no tiene documentos para imprimir');
+    }
+
+    const merged = await PDFDocument.create();
+    const fallidos: string[] = [];
+    for (const d of docs) {
+      try {
+        const obj = await this.storage.get(d.attachmentKey!);
+        if (!obj) throw new Error('no esta en el almacenamiento');
+        const src = await PDFDocument.load(obj.buffer);
+        const pages = await merged.copyPages(src, src.getPageIndices());
+        for (const pg of pages) merged.addPage(pg);
+      } catch {
+        // Un PDF ilegible no puede cancelar la impresion de los demas: se anota
+        // y se sigue. Si fallan TODOS si se avisa, abajo.
+        fallidos.push(d.body ?? 'documento');
+      }
+    }
+    if (merged.getPageCount() === 0) {
+      throw new BadRequestException(
+        `No se pudo leer ninguno de los ${docs.length} documentos del pedido`,
+      );
+    }
+    if (fallidos.length > 0) {
+      this.logger.warn(
+        `Imprimir todo (${order.externalId}): no se pudieron unir ${fallidos.join(', ')}`,
+      );
+    }
+    return {
+      pdf: Buffer.from(await merged.save()),
+      fileName: `PEDIDO-${order.externalId}.pdf`,
+    };
   }
 
   /** "Tomar pedido": queda a cargo de quien lo toma; nadie mas puede tomarlo. */
@@ -3917,6 +4015,8 @@ export class OrdersService {
       confirmedAddress: o.confirmedAddress,
       addressConfirmedAt: o.addressConfirmedAt ? o.addressConfirmedAt.toISOString() : null,
       invoicedAt: o.invoicedAt ? o.invoicedAt.toISOString() : null,
+      packedAt: o.packedAt ? o.packedAt.toISOString() : null,
+      packedByName: o.packedByName,
       marketplaceCreatedAt: o.marketplaceCreatedAt.toISOString(),
       receivedAt: o.receivedAt.toISOString(),
     };

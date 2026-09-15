@@ -131,11 +131,39 @@ export const orderSummarySchema = z.object({
   /** Cuando se facturo. null = todavia no (o pedido anterior a la columna).
    *  En Facturados es LA fecha que importa, y la que ordena esa vista. */
   invoicedAt: z.string().datetime().nullable().default(null),
+  /** Cuando se EMPACO y quien. null = todavia en la cola. */
+  packedAt: z.string().datetime().nullable().default(null),
+  packedByName: z.string().nullable().default(null),
   marketplaceCreatedAt: z.string().datetime(),
   receivedAt: z.string().datetime(),
 });
 
 export type OrderSummary = z.infer<typeof orderSummarySchema>;
+
+/**
+ * Marcar el pedido como EMPACADO (o deshacerlo).
+ *
+ * Se puede deshacer a proposito: la marca la pone el boton de imprimir, y una
+ * impresora atascada no puede dejar un pedido marcado para siempre.
+ */
+export const setPackedInputSchema = z.object({ packed: z.boolean() });
+export type SetPackedInput = z.infer<typeof setPackedInputSchema>;
+
+/** Un documento del pedido, listo para imprimir. */
+export const printableDocSchema = z.object({
+  messageId: z.string(),
+  name: z.string(),
+  /** 'factura' | 'guia' | 'mkt' | 'certificado' | 'soporte' | 'otro'. */
+  kind: z.string(),
+});
+export type PrintableDoc = z.infer<typeof printableDocSchema>;
+
+export const printPackSchema = z.object({
+  docs: z.array(printableDocSchema),
+  /** Paginas que tendra el PDF unido (0 si aun no hay nada que imprimir). */
+  pages: z.number().int().min(0),
+});
+export type PrintPack = z.infer<typeof printPackSchema>;
 
 /** Reaccionar a un PEDIDO (toggle, como en los mensajes del chat). */
 export const orderReactionInputSchema = z.object({
@@ -277,6 +305,8 @@ export const listOrdersQuerySchema = z.object({
   state: orderStateFilterSchema.optional(),
   // Filtro por estado del envio (Facturados).
   shipping: shippingStateSchema.optional(),
+  /** Empaque (Facturados): 'no' = la cola de trabajo, 'yes' = ya empacados. */
+  packed: z.enum(['yes', 'no']).optional(),
   // Filtro por confirmacion de direccion (General + Por preparar). Multiselect:
   // lista separada por comas, ej "confirmed,pending".
   address: z

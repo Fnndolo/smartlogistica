@@ -9,11 +9,14 @@ import {
   Param,
   Post,
   Query,
+  Res,
   Sse,
+  StreamableFile,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { Observable } from 'rxjs';
 import {
@@ -60,7 +63,9 @@ import {
   type OrdersDashboard,
   type OrdersPulse,
   type Inbox,
+  setPackedInputSchema,
   type ChatInboxItem,
+  type SetPackedInput,
   type MentionItem,
   type OrderSearchResult,
   type OrderEvent,
@@ -171,6 +176,38 @@ export class OrdersController {
   @Get('mentions')
   async mentions(@CurrentUser() user: AuthContext): Promise<MentionItem[]> {
     return this.orders.mentionsFeed(user);
+  }
+
+  /** Marcar / desmarcar EMPACADO. */
+  @Post(':id/packed')
+  async setPacked(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(setPackedInputSchema)) body: SetPackedInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ ok: true }> {
+    return this.orders.setPacked(id, body.packed, user);
+  }
+
+  /**
+   * Todos los documentos del pedido UNIDOS en un PDF, para imprimir de una.
+   *
+   * `inline` y no `attachment`: se abre en el visor del navegador, que ya trae
+   * su boton de imprimir. Descargarlo obligaria a buscar el archivo y abrirlo a
+   * mano, que es justo el paso que este boton viene a quitar.
+   */
+  @Get(':id/print-pack')
+  async printPack(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthContext,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<StreamableFile> {
+    const { pdf, fileName } = await this.orders.printPack(id, user);
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `inline; filename="${fileName}"`,
+      'Content-Length': String(pdf.length),
+    });
+    return new StreamableFile(pdf);
   }
 
   /** Bandeja del chat interno: los pedidos en los que participo. */

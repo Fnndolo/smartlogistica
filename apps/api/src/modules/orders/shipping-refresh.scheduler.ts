@@ -24,7 +24,9 @@ export class ShippingRefreshScheduler implements OnModuleInit {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    const ms = Number(this.config.get<string>('SHIPPING_REFRESH_MS') ?? DEFAULT_SHIPPING_REFRESH_MS);
+    const ms = Number(
+      this.config.get<string>('SHIPPING_REFRESH_MS') ?? DEFAULT_SHIPPING_REFRESH_MS,
+    );
 
     // Limpiar repeatables previos (evita acumulacion al cambiar el intervalo).
     const existing = await this.queue.getRepeatableJobs().catch(() => []);
