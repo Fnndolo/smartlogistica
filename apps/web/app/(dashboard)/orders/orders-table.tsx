@@ -81,6 +81,16 @@ function dateOf(
   return invoiced ? (order.invoicedAt ?? order.marketplaceCreatedAt) : order.marketplaceCreatedAt;
 }
 
+/**
+ * Quien reacciono. Antes decia "Reaccionaron 2" y no habia forma de saber
+ * quienes: la reaccion servia para marcar, pero no para preguntar.
+ */
+export function reactionTitle(r: { count: number; mine: boolean; names: string[] }): string {
+  const otros = r.names.join(', ');
+  const quienes = r.mine ? (otros ? `Tú y ${otros}` : 'Solo tú') : otros || `${r.count} persona(s)`;
+  return `${quienes} · clic para ${r.mine ? 'quitar' : 'sumarte'}`;
+}
+
 export function OrdersTable({
   items,
   sort,
@@ -476,11 +486,7 @@ function ReactionChips({
               onToggleReaction(order.id, r.emoji);
             }
           }}
-          title={
-            r.mine
-              ? 'Tu reacción · clic para quitar'
-              : `Reaccionaron ${r.count} · clic para sumarte`
-          }
+          title={reactionTitle(r)}
           className={cn(
             // Mas grandes que las del chat: en la fila deben NOTARSE.
             'inline-flex h-[24px] cursor-pointer items-center gap-1.5 rounded-full border px-2.5 text-[14px] leading-none shadow-card transition-all hover:-translate-y-px',

@@ -112,9 +112,21 @@ export const orderSummarySchema = z.object({
     .object({ userId: z.string(), name: z.string(), mine: z.boolean() })
     .nullable()
     .default(null),
-  // Reacciones al pedido (agregadas): emoji + cuantos + si yo reaccione.
+  // Reacciones al pedido (agregadas): emoji + cuantos + si yo reaccione + QUIENES.
+  // Los nombres viajan porque una reaccion sin autor no se puede ni preguntar:
+  // se ve que alguien marco el pedido y no hay forma de saber quien fue.
   reactions: z
-    .array(z.object({ emoji: z.string(), count: z.number().int(), mine: z.boolean() }))
+    .array(
+      z.object({
+        emoji: z.string(),
+        count: z.number().int(),
+        mine: z.boolean(),
+        /** Los OTROS, en el orden en que reaccionaron. Que uno mismo esta ya
+         *  lo dice `mine`; incluirse aqui obligaria al navegador a saber su
+         *  propio nombre para no escribirlo dos veces. */
+        names: z.array(z.string()).default([]),
+      }),
+    )
     .default([]),
   /** Cuando se facturo. null = todavia no (o pedido anterior a la columna).
    *  En Facturados es LA fecha que importa, y la que ordena esa vista. */

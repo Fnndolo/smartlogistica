@@ -476,18 +476,20 @@ export class OrdersService {
     const rows = await prisma.orderReaction.findMany({
       where: { orderId: { in: orderIds } },
       orderBy: { createdAt: 'asc' },
-      select: { orderId: true, emoji: true, userId: true },
+      select: { orderId: true, emoji: true, userId: true, userName: true },
     });
     const out = new Map<string, OrderSummary['reactions']>();
     for (const r of rows) {
       const list = out.get(r.orderId) ?? [];
       if (!out.has(r.orderId)) out.set(r.orderId, list);
       const agg = list.find((x) => x.emoji === r.emoji);
+      const yo = r.userId === viewerId;
       if (agg) {
         agg.count += 1;
-        if (r.userId === viewerId) agg.mine = true;
+        if (yo) agg.mine = true;
+        else agg.names.push(r.userName);
       } else {
-        list.push({ emoji: r.emoji, count: 1, mine: r.userId === viewerId });
+        list.push({ emoji: r.emoji, count: 1, mine: yo, names: yo ? [] : [r.userName] });
       }
     }
     return out;

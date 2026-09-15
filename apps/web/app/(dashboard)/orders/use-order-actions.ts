@@ -88,7 +88,8 @@ export function useOrderActions() {
             list[i] = { ...r, count: r.count + 1, mine: true };
           }
         } else {
-          list.push({ emoji, count: 1, mine: true });
+          // `names` son los OTROS: al reaccionar yo, no hay ninguno todavia.
+          list.push({ emoji, count: 1, mine: true, names: [] });
         }
         return { ...o, reactions: list };
       });
