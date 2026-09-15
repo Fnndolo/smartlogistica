@@ -549,7 +549,7 @@ export class OrdersService {
    */
   async printPack(orderId: string, auth: AuthContext): Promise<{ pdf: Buffer; fileName: string }> {
     const order = await this.loadAccessibleOrder(orderId, auth);
-    const { prisma } = getTenantContext();
+    const { tenantId, prisma } = getTenantContext();
     if (!this.storage.isConfigured()) {
       throw new BadRequestException('El almacenamiento de archivos no está configurado');
     }
@@ -587,6 +587,27 @@ export class OrdersService {
         `Imprimir todo (${order.externalId}): no se pudieron unir ${fallidos.join(', ')}`,
       );
     }
+    // Marca y aviso SOLO LA PRIMERA VEZ. El PDF se abre en una pestaña, asi que
+    // recargarla vuelve a pasar por aqui: sin esta guarda, cada F5 dejaria otro
+    // "X imprimio todo" en el chat. Y el aviso se escribe AQUI, cuando el PDF ya
+    // existe — anunciarlo desde el navegador seria contar algo que quiza fallo.
+    const { prisma: db } = getTenantContext();
+    const yaEstaba = await db.order.findUnique({
+      where: { id: orderId },
+      select: { packedAt: true },
+    });
+    if (!yaEstaba?.packedAt) {
+      await this.setPacked(orderId, true, auth);
+      const n = merged.getPageCount();
+      await this.systemMessage(
+        orderId,
+        auth,
+        `${displayName(auth)} imprimió todo · ${docs.length} documento${docs.length === 1 ? '' : 's'}, ${n} página${n === 1 ? '' : 's'}.`,
+      );
+      // Sin evento de tiempo real: los mensajes de sistema del resto del codigo
+      // tampoco lo publican, y setPacked ya dispara un refresco de la lista.
+    }
+
     return {
       pdf: Buffer.from(await merged.save()),
       fileName: `PEDIDO-${order.externalId}.pdf`,
