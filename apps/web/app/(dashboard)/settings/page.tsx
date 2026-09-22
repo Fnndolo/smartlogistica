@@ -6,13 +6,15 @@ import type { Platform, SessionUser, VtexFees } from '@smartlogistica/shared';
 import {
   canManageConnections,
   canManageMembers,
+  canManageOrders,
   canSeeAllWarehouses,
   isAdmin,
   ROLE_LABEL,
 } from '@/lib/rbac';
-import { serverFetch, serverFetchResult } from '@/lib/server-api';
+import { getWarehouses, serverFetch, serverFetchResult } from '@/lib/server-api';
 import { cn } from '@/lib/utils';
 
+import { AlegraSellerCard } from './alegra-seller-card';
 import { ChangePasswordCard } from './change-password-card';
 import { PlatformsCard } from './platforms-card';
 import {
@@ -33,8 +35,17 @@ export default async function SettingsPage() {
   const res = await serverFetchResult<SessionUser>('/v1/auth/me');
   const me = res.ok ? res.data : null;
   // TODA la configuracion del workspace es de administradores: el gestor entra
-  // a Ajustes solo por "Tu cuenta" (cambiar su clave).
+  // a Ajustes solo por "Tu cuenta" (su clave y su vendedor de Alegra).
   const isOwner = isAdmin(me?.role);
+  // El vendedor de Alegra es una preferencia PERSONAL y va en "Tu cuenta", no
+  // en los Ajustes de la sede: quien mas la necesita es el GESTOR, que factura
+  // en todas las sedes y no entra ahi. Se le ofrece a quien puede FACTURAR
+  // (admin y gestor): al emitir se lee la del usuario que pulsa el boton, asi
+  // que a un operador no le aplicaria nunca.
+  // Se lanza YA y se espera abajo, para que viaje en paralelo con lo de
+  // administrador en vez de sumar otro viaje al API.
+  const canInvoice = canManageOrders(me?.role);
+  const warehousesPromise = canInvoice ? getWarehouses() : Promise.resolve([]);
   // null = la lectura fallo (API caida/reiniciando). NUNCA se cae a defaults:
   // las cards guardan con PUT de reemplazo total y unos defaults sembrados a
   // ciegas pisarian la configuracion personalizada al primer "Guardar".
@@ -46,6 +57,7 @@ export default async function SettingsPage() {
         serverFetch<VtexFees>('/v1/vtex-fees'),
       ])
     : [null, null];
+  const warehouses = await warehousesPromise;
 
   return (
     <div>
@@ -88,6 +100,7 @@ export default async function SettingsPage() {
           </div>
 
           <ChangePasswordCard />
+          <AlegraSellerCard warehouses={warehouses} />
         </section>
 
         <section className="space-y-2.5">

@@ -9,7 +9,6 @@ import { canManageConnections } from '@/lib/rbac';
 import { getSessionUser, getWarehouses, serverFetch } from '@/lib/server-api';
 import { AlegraConnectionCard } from '../alegra-connection-card';
 import { AlegraFixedClientCard } from '../alegra-fixed-client-card';
-import { AlegraSellerCard } from '../alegra-seller-card';
 import { CertificateCard } from '../certificate-card';
 import { CoordinadoraConnectionCard } from '../coordinadora-connection-card';
 import { SkydropxSedeCard } from '../skydropx-sede-card';
@@ -59,7 +58,10 @@ export default async function WarehouseSettingsPage({
         <SkydropxSedeCard warehouseId={id} initial={skydropxSede ?? null} />
       </div>
       <AlegraFixedClientCard warehouseId={id} />
-      <AlegraSellerCard warehouseId={id} />
+      {/* "Tu vendedor en Alegra" YA NO vive aqui: es una preferencia por
+          usuario, y esta pagina es solo de administradores — el gestor, que
+          factura en todas las sedes, no podia llegar a ella. Se mudo a
+          Ajustes > Tu cuenta, donde entra cualquier rol. */}
       <CertificateCard warehouseId={id} warehouseName={name} />
     </div>
   );
