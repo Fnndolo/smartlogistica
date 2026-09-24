@@ -96,9 +96,7 @@ export function postalCodeForCity(
   const exact = BY_CITY.get(c);
   if (exact) return exact.postalCode;
   // contiene (en ambos sentidos), preferir mismo departamento
-  const loose = ALL.filter(
-    (e) => e.main && e.keys.some((k) => k.includes(c) || c.includes(k)),
-  );
+  const loose = ALL.filter((e) => e.main && e.keys.some((k) => k.includes(c) || c.includes(k)));
   if (loose.length === 0) return null;
   return (d ? loose.find((e) => e.deptKey === d) : undefined)?.postalCode ?? loose[0].postalCode;
 }
@@ -132,4 +130,31 @@ export function searchCoCities(query: string, limit = 15): SkydropxCity[] {
     .sort((a, b) => a.s - b.s || a.e.key.length - b.e.key.length)
     .slice(0, limit)
     .map((x) => toCity(x.e));
+}
+
+/**
+ * Municipios colombianos, por los 5 primeros digitos del DANE (DD = departamento,
+ * MMM = municipio). Sale del catalogo oficial de arriba, que es el mismo codigo
+ * de 8 digitos que usa Coordinadora.
+ */
+const CO_MUNICIPALITIES = new Set(ALL.map((e) => e.dane.slice(0, 5)));
+
+/**
+ * ¿Este codigo DANE es de COLOMBIA?
+ *
+ * El catalogo de Coordinadora trae tambien destinos internacionales
+ * (Aguascalientes y compania), y en esta plataforma no se despacha fuera del
+ * pais: aparecer en el selector solo es ruido y se presta a generar una guia
+ * a un destino imposible.
+ *
+ * Se compara por MUNICIPIO (5 digitos) y no por el codigo completo para no
+ * dejar fuera corregimientos que Coordinadora conozca y el listado postal no.
+ * Como lista blanca es segura: ningun departamento colombiano empieza por 01
+ * (el primero es 05, Antioquia), asi que los codigos extranjeros no entran por
+ * casualidad.
+ */
+export function isColombianDane(code: string | null | undefined): boolean {
+  const d = (code ?? '').replace(/\D/g, '');
+  if (d.length < 5) return false;
+  return CO_MUNICIPALITIES.has(d.slice(0, 5));
 }

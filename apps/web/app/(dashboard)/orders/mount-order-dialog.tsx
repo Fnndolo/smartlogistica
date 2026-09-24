@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { PackagePlus, Search, X } from 'lucide-react';
+import { PackagePlus, Search, Trash2, X } from 'lucide-react';
 import { toast } from 'sonner';
 import type { AlegraItem, CoordinadoraCity, OrderSummary } from '@smartlogistica/shared';
 
@@ -26,6 +26,17 @@ import { BADGE_COLOR_CLASSES, usePlatforms } from './platform-badge';
  * factura se eligen los medios de pago (hasta 3, de Alegra) y en la guia se
  * puede pedir recaudo contraentrega.
  */
+/**
+ * Una linea del pedido. Precio y cantidad viven como TEXTO porque son campos a
+ * medio escribir: pasarlos a numero aqui convierte un "" en 0 y el usuario ve
+ * un cero que el no puso.
+ */
+interface Line {
+  item: AlegraItem;
+  price: string;
+  quantity: string;
+}
+
 export function MountOrderDialog({
   warehouseId,
   warehouseName,
@@ -44,9 +55,22 @@ export function MountOrderDialog({
   const [email, setEmail] = useState('');
   const [address, setAddress] = useState('');
   const [city, setCity] = useState<CoordinadoraCity | null>(null);
-  const [item, setItem] = useState<AlegraItem | null>(null);
-  const [price, setPrice] = useState('');
-  const [quantity, setQuantity] = useState('1');
+  const [lines, setLines] = useState<Line[]>([]);
+
+  const addLine = (it: AlegraItem): void => {
+    setLines((prev) =>
+      // Repetir el mismo producto es subir la cantidad, no abrir otra linea:
+      // en la factura serian dos renglones identicos.
+      prev.some((l) => l.item.id === it.id)
+        ? prev.map((l) =>
+            l.item.id === it.id ? { ...l, quantity: String(Number(l.quantity || '1') + 1) } : l,
+          )
+        : [...prev, { item: it, price: it.price ?? '', quantity: '1' }],
+    );
+  };
+  const patchLine = (id: string, patch: Partial<Line>): void =>
+    setLines((prev) => prev.map((l) => (l.item.id === id ? { ...l, ...patch } : l)));
+  const removeLine = (id: string): void => setLines((prev) => prev.filter((l) => l.item.id !== id));
 
   // Plataformas elegibles (VTEX no: esos pedidos llegan solos por la integracion).
   const platformsQuery = usePlatforms();
@@ -66,8 +90,8 @@ export function MountOrderDialog({
     };
   }, [onClose]);
 
-  const qty = Math.max(1, Number(quantity) || 1);
-  const total = (Number(price) || 0) * qty;
+  const qtyOf = (l: Line): number => Math.max(1, Number(l.quantity) || 1);
+  const total = lines.reduce((s, l) => s + (Number(l.price) || 0) * qtyOf(l), 0);
   const canSubmit =
     platformId.length > 0 &&
     name.trim().length >= 2 &&
@@ -75,8 +99,9 @@ export function MountOrderDialog({
     phone.trim().length >= 5 &&
     address.trim().length >= 3 &&
     city !== null &&
-    item !== null &&
-    Number(price) > 0;
+    lines.length > 0 &&
+    // Todas las lineas con precio: una en cero pasaria a la factura en cero.
+    lines.every((l) => Number(l.price) > 0);
 
   const create = useMutation({
     mutationFn: () =>
@@ -93,12 +118,12 @@ export function MountOrderDialog({
           cityName: city!.name,
           cityDepartment: city!.department || null,
         },
-        product: {
-          itemId: item!.id,
-          name: item!.name,
-          price: Number(price),
-          quantity: qty,
-        },
+        products: lines.map((l) => ({
+          itemId: l.item.id,
+          name: l.item.name,
+          price: Number(l.price),
+          quantity: qtyOf(l),
+        })),
       }),
     onSuccess: (order) => {
       toast.success(`Pedido ${order.externalId} montado`);
@@ -183,7 +208,10 @@ export function MountOrderDialog({
                           : 'opacity-60 hover:opacity-100',
                       )}
                     >
-                      <span aria-hidden className="h-[6px] w-[6px] shrink-0 rounded-full bg-current" />
+                      <span
+                        aria-hidden
+                        className="h-[6px] w-[6px] shrink-0 rounded-full bg-current"
+                      />
                       {p.name}
                     </button>
                   );
@@ -198,7 +226,11 @@ export function MountOrderDialog({
             </h3>
             <div className="grid gap-3 sm:grid-cols-2">
               <Field label="Nombre completo">
-                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Herik Santiago Gómez" />
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Herik Santiago Gómez"
+                />
               </Field>
               <Field label="Cédula">
                 <Input
@@ -251,37 +283,63 @@ export function MountOrderDialog({
           </section>
 
           <section className="space-y-3">
-            <h3 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Producto (del catálogo de Alegra)
-            </h3>
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Productos (del catálogo de Alegra)
+              </h3>
+              {lines.length > 0 ? (
+                <span className="rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-semibold tabular-nums text-muted-foreground">
+                  {lines.length}
+                </span>
+              ) : null}
+            </div>
+
+            {lines.map((l) => (
+              <div key={l.item.id} className="rounded-lg border border-border bg-muted/30 p-3">
+                <div className="flex items-start gap-2">
+                  <span className="min-w-0 flex-1 break-words text-sm font-medium leading-snug">
+                    {l.item.name}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeLine(l.item.id)}
+                    aria-label={`Quitar ${l.item.name}`}
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background hover:text-destructive"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-3">
+                  <Field label="Precio de venta (COP)">
+                    <Input
+                      inputMode="numeric"
+                      value={l.price}
+                      onChange={(e) =>
+                        patchLine(l.item.id, { price: e.target.value.replace(/[^\d.]/g, '') })
+                      }
+                      placeholder="1600000"
+                      className="tabular-nums"
+                    />
+                  </Field>
+                  <Field label="Cantidad">
+                    <Input
+                      inputMode="numeric"
+                      value={l.quantity}
+                      onChange={(e) =>
+                        patchLine(l.item.id, { quantity: e.target.value.replace(/\D/g, '') })
+                      }
+                      className="tabular-nums"
+                    />
+                  </Field>
+                </div>
+              </div>
+            ))}
+
             <WarehouseItemPicker
               warehouseId={warehouseId}
-              item={item}
-              onPick={(it) => {
-                setItem(it);
-                if (it.price && !price) setPrice(it.price);
-              }}
-              onClear={() => setItem(null)}
+              hasLines={lines.length > 0}
+              onPick={addLine}
             />
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Precio de venta (COP)">
-                <Input
-                  inputMode="numeric"
-                  value={price}
-                  onChange={(e) => setPrice(e.target.value.replace(/[^\d.]/g, ''))}
-                  placeholder="1600000"
-                  className="tabular-nums"
-                />
-              </Field>
-              <Field label="Cantidad">
-                <Input
-                  inputMode="numeric"
-                  value={quantity}
-                  onChange={(e) => setQuantity(e.target.value.replace(/\D/g, ''))}
-                  className="tabular-nums"
-                />
-              </Field>
-            </div>
           </section>
         </div>
 
@@ -291,7 +349,11 @@ export function MountOrderDialog({
             <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Total</p>
             <p className="text-lg font-semibold tabular-nums leading-tight">{formatCOP(total)}</p>
           </div>
-          <Button onClick={() => create.mutate()} loading={create.isPending} disabled={!canSubmit || create.isPending}>
+          <Button
+            onClick={() => create.mutate()}
+            loading={create.isPending}
+            disabled={!canSubmit || create.isPending}
+          >
             <PackagePlus className="h-4 w-4" />
             Montar pedido
           </Button>
@@ -302,17 +364,19 @@ export function MountOrderDialog({
   );
 }
 
-/** Buscador de items del catalogo de Alegra de la SEDE (sin pedido de por medio). */
+/**
+ * Buscador de items del catalogo de Alegra de la SEDE (sin pedido de por medio).
+ * AGREGA a la lista: se queda abierto tras elegir, porque el caso que existe es
+ * el de varios productos seguidos.
+ */
 function WarehouseItemPicker({
   warehouseId,
-  item,
+  hasLines,
   onPick,
-  onClear,
 }: {
   warehouseId: string;
-  item: AlegraItem | null;
+  hasLines: boolean;
   onPick: (item: AlegraItem) => void;
-  onClear: () => void;
 }) {
   const [q, setQ] = useState('');
   const [open, setOpen] = useState(false);
@@ -326,24 +390,6 @@ function WarehouseItemPicker({
     staleTime: 30_000,
   });
 
-  if (item) {
-    return (
-      <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm">
-        <span className="break-words font-medium leading-snug">{item.name}</span>
-        <button
-          type="button"
-          onClick={() => {
-            onClear();
-            setOpen(true);
-          }}
-          className="shrink-0 text-xs text-muted-foreground hover:text-foreground"
-        >
-          Cambiar
-        </button>
-      </div>
-    );
-  }
-
   return (
     <div className="rounded-lg border border-border bg-card p-2">
       <div className="flex items-center gap-2">
@@ -355,7 +401,7 @@ function WarehouseItemPicker({
             setQ(e.target.value);
             setOpen(true);
           }}
-          placeholder="Buscar producto en Alegra..."
+          placeholder={hasLines ? 'Agregar otro producto...' : 'Buscar producto en Alegra...'}
           className="h-8 flex-1 bg-transparent text-sm outline-none"
         />
       </div>
@@ -370,7 +416,12 @@ function WarehouseItemPicker({
               <li key={it.id}>
                 <button
                   type="button"
-                  onClick={() => onPick(it)}
+                  onClick={() => {
+                    onPick(it);
+                    // Se limpia el texto pero NO se cierra: lo normal es seguir
+                    // agregando, y volver a abrir el buscador cada vez estorba.
+                    setQ('');
+                  }}
                   className="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted"
                 >
                   <span className="break-words leading-snug">{it.name}</span>

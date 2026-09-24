@@ -112,9 +112,17 @@ export class AlegraClient {
 
   // === Items / contactos / cuentas / facturas de venta (para facturar) ===
 
-  /** Busca items del catalogo de Alegra por texto (nombre/referencia). */
-  async searchItems(http: AxiosInstance, query: string): Promise<AlegraRawItem[]> {
-    const res = await http.get('/items', { params: { query, limit: 30 } });
+  /**
+   * Busca items del catalogo de Alegra por texto (nombre/referencia).
+   *
+   * `query` es una SUBCADENA para Alegra: "15c 256" solo encuentra lo que
+   * lleve esas dos cosas pegadas y en ese orden. Por eso quien llama manda UNA
+   * palabra y cruza los resultados el mismo (ver AlegraService.searchItems), y
+   * por eso el limite es regulable: con varias palabras hace falta traer mas
+   * candidatos de los que se van a mostrar.
+   */
+  async searchItems(http: AxiosInstance, query: string, limit = 30): Promise<AlegraRawItem[]> {
+    const res = await http.get('/items', { params: { query, limit } });
     return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
   }
 

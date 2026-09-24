@@ -21,6 +21,7 @@ import type { AuthContext } from '../../../common/types/authenticated-request';
 import { EnvelopeService } from '../../../infrastructure/crypto/envelope.service';
 import { getTenantContext } from '../../../infrastructure/tenant-context';
 import { WarehousesService } from '../../warehouses/warehouses.service';
+import { isColombianDane } from '../skydropx/co-postal';
 import {
   CoordinadoraClient,
   type CoordinadoraCreds,
@@ -148,7 +149,8 @@ export class CoordinadoraService {
     }
 
     // Validar credenciales (con el password nuevo o el ya guardado).
-    const password = input.password ?? (await this.envelope.decryptField(tenantId, existing!.encryptedPassword));
+    const password =
+      input.password ?? (await this.envelope.decryptField(tenantId, existing!.encryptedPassword));
     try {
       await this.client.testCredentials({
         usuario: input.usuario,
@@ -262,8 +264,14 @@ export class CoordinadoraService {
         : await this.credsFor(warehouseId);
     try {
       const cities = await this.client.listCities(creds);
+      // Solo Colombia: el catalogo de Coordinadora trae destinos internacionales
+      // y aqui no se despacha fuera del pais.
       return cities
-        .filter((c) => normalizeCity(c.name).includes(q) || normalizeCity(c.department).includes(q))
+        .filter(
+          (c) =>
+            isColombianDane(c.code) &&
+            (normalizeCity(c.name).includes(q) || normalizeCity(c.department).includes(q)),
+        )
         .slice(0, 30);
     } catch (err) {
       throw this.translateError(err, 'No se pudieron cargar las ciudades');
@@ -290,7 +298,11 @@ export class CoordinadoraService {
     const creds = await this.credsFor(warehouseId);
     const cities = await this.client.listCities(creds);
     return cities
-      .filter((c) => normalizeCity(c.name).includes(q) || normalizeCity(c.department).includes(q))
+      .filter(
+        (c) =>
+          isColombianDane(c.code) &&
+          (normalizeCity(c.name).includes(q) || normalizeCity(c.department).includes(q)),
+      )
       .slice(0, 30);
   }
 
@@ -406,17 +418,26 @@ export class CoordinadoraService {
     const { prisma } = getTenantContext();
     const conn = await prisma.coordinadoraConnection.findUnique({ where: { warehouseId } });
     if (!conn) {
-      throw new BadRequestException('Esta sede no tiene conexion con Coordinadora. Configurala primero.');
+      throw new BadRequestException(
+        'Esta sede no tiene conexion con Coordinadora. Configurala primero.',
+      );
     }
     return conn as ConnectionRow;
   }
 
   private async credsFor(warehouseId: string, row?: ConnectionRow): Promise<CoordinadoraCreds> {
     const { tenantId, prisma } = getTenantContext();
-    const conn = row ?? (await prisma.coordinadoraConnection.findUnique({ where: { warehouseId } }));
+    const conn =
+      row ?? (await prisma.coordinadoraConnection.findUnique({ where: { warehouseId } }));
     if (!conn) throw new BadRequestException('Esta sede no tiene conexion con Coordinadora.');
     const password = await this.envelope.decryptField(tenantId, conn.encryptedPassword);
-    return { usuario: conn.usuario, password, idCliente: conn.idCliente, nit: conn.nit, div: conn.div };
+    return {
+      usuario: conn.usuario,
+      password,
+      idCliente: conn.idCliente,
+      nit: conn.nit,
+      div: conn.div,
+    };
   }
 
   private credsFromInput(input: CoordinadoraCredentialsInput): CoordinadoraCreds {

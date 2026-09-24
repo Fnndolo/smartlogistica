@@ -238,28 +238,58 @@ export type OrdersDashboard = z.infer<typeof ordersDashboardSchema>;
  * de Alegra de la sede; la ciudad, del catalogo DANE de Coordinadora (asi la
  * guia sale sin adivinar). Solo existe dentro de una sede (nunca en generales).
  */
-export const createManualOrderSchema = z.object({
-  warehouseId: z.string().min(1, 'Falta la sede'),
-  // Plataforma de origen (Krediya, Mercado Libre... — del catalogo de Ajustes).
-  // VTEX no aplica aqui: esos llegan solos por la integracion.
-  platformId: z.string().min(1, 'Elige la plataforma').max(40),
-  customer: z.object({
-    name: z.string().trim().min(2, 'Nombre requerido').max(120),
-    document: z.string().trim().min(3, 'Cedula requerida').max(30),
-    phone: z.string().trim().min(5, 'Telefono requerido').max(30),
-    email: z.string().trim().email('Correo invalido').max(120).nullable().optional(),
-    address: z.string().trim().min(3, 'Direccion requerida').max(300),
-    cityCode: z.string().trim().min(4, 'Ciudad requerida').max(12), // codigo DANE
-    cityName: z.string().trim().max(120).nullable().optional(),
-    cityDepartment: z.string().trim().max(120).nullable().optional(),
-  }),
-  product: z.object({
-    itemId: z.string().min(1, 'Elige el producto de Alegra'),
-    name: z.string().trim().min(1).max(300),
-    price: z.number().positive('Precio invalido'),
-    quantity: z.number().int().min(1).max(50).default(1),
-  }),
+/** Una linea del pedido montado a mano: producto de Alegra + precio + cantidad. */
+export const manualProductSchema = z.object({
+  itemId: z.string().min(1, 'Elige el producto de Alegra'),
+  name: z.string().trim().min(1).max(300),
+  price: z.number().positive('Precio invalido'),
+  quantity: z.number().int().min(1).max(50).default(1),
 });
+export type ManualProduct = z.infer<typeof manualProductSchema>;
+
+/** Tope de lineas: un pedido a mano con mas de esto es un error de dedo. */
+export const MANUAL_PRODUCTS_MAX = 20;
+
+export const createManualOrderSchema = z
+  .object({
+    warehouseId: z.string().min(1, 'Falta la sede'),
+    // Plataforma de origen (Krediya, Mercado Libre... — del catalogo de Ajustes).
+    // VTEX no aplica aqui: esos llegan solos por la integracion.
+    platformId: z.string().min(1, 'Elige la plataforma').max(40),
+    customer: z.object({
+      name: z.string().trim().min(2, 'Nombre requerido').max(120),
+      document: z.string().trim().min(3, 'Cedula requerida').max(30),
+      phone: z.string().trim().min(5, 'Telefono requerido').max(30),
+      email: z.string().trim().email('Correo invalido').max(120).nullable().optional(),
+      address: z.string().trim().min(3, 'Direccion requerida').max(300),
+      cityCode: z.string().trim().min(4, 'Ciudad requerida').max(12), // codigo DANE
+      cityName: z.string().trim().max(120).nullable().optional(),
+      cityDepartment: z.string().trim().max(120).nullable().optional(),
+    }),
+    /** Los productos del pedido. Un cliente puede llevarse varias cosas. */
+    products: z.array(manualProductSchema).max(MANUAL_PRODUCTS_MAX).optional(),
+    /**
+     * Forma ANTIGUA (un solo producto). Se sigue aceptando porque web y api se
+     * despliegan por separado: durante ese minuto la pantalla vieja le habla al
+     * back nuevo, y rechazarla dejaria "Montar pedido" roto mientras tanto.
+     */
+    product: manualProductSchema.optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (!v.products?.length && !v.product) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['products'],
+        message: 'Agrega al menos un producto',
+      });
+    }
+  })
+  // A partir de aqui SIEMPRE es una lista: el servicio no tiene que preguntar
+  // por cual de las dos formas llego.
+  .transform(({ product, products, ...rest }) => ({
+    ...rest,
+    products: products?.length ? products : product ? [product] : [],
+  }));
 export type CreateManualOrderInput = z.infer<typeof createManualOrderSchema>;
 
 // Asignar/transferir/devolver pedidos. warehouseId null = devolver a generales.

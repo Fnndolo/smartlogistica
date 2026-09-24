@@ -989,9 +989,12 @@ export class OrdersService {
     }
 
     const c = input.customer;
-    const p = input.product;
+    // El schema ya normalizo la forma vieja (un solo `product`) a lista.
+    const productos = input.products;
+    if (productos.length === 0) throw new BadRequestException('Agrega al menos un producto');
     const phone = c.phone.replace(/\D/g, '') || c.phone;
-    const total = p.price * p.quantity;
+    const total = productos.reduce((s, p) => s + p.price * p.quantity, 0);
+    const unidades = productos.reduce((s, p) => s + p.quantity, 0);
     const nameParts = c.name.trim().split(/\s+/).filter(Boolean);
     // El rawPayload IMITA la forma de VTEX que ya leen extractInvoiceClient /
     // extractShippingAddress / extractRealEmail: cero ramas nuevas en factura y
@@ -1039,9 +1042,11 @@ export class OrdersService {
             status: 'ready-for-handling',
             totalValue: total,
             currency: 'COP',
-            totalUnits: p.quantity,
+            totalUnits: unidades,
             // Producto cabeza (denormalizado) para poder ordenar por producto.
-            primaryProduct: p.name,
+            // Con varias lineas manda la PRIMERA, que es la que se eligio antes
+            // — igual que en los pedidos de VTEX con varios articulos.
+            primaryProduct: productos[0].name,
             warehouseId: input.warehouseId,
             assignedAt: new Date(),
             // La direccion la dicto el cliente al montar el pedido: nace
@@ -1053,7 +1058,12 @@ export class OrdersService {
             items: {
               // sku = id del item de Alegra: el preview de factura lo usa para
               // sembrar la linea sin foto IMEI de por medio.
-              create: [{ sku: p.itemId, name: p.name, quantity: p.quantity, unitPrice: p.price }],
+              create: productos.map((p) => ({
+                sku: p.itemId,
+                name: p.name,
+                quantity: p.quantity,
+                unitPrice: p.price,
+              })),
             },
           },
           include: { items: { orderBy: { name: 'asc' } } },
@@ -1084,7 +1094,8 @@ export class OrdersService {
       this.systemMessage(
         order.id,
         auth,
-        `Pedido montado a mano (${platform.name}): ${p.quantity} × ${p.name} · ${formatCop(total)}.`,
+        `Pedido montado a mano (${platform.name}): ` +
+          `${productos.map((p) => `${p.quantity} × ${p.name}`).join(' · ')} · ${formatCop(total)}.`,
       ),
     ]);
 

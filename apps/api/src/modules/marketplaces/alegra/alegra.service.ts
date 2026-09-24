@@ -45,6 +45,25 @@ export interface InvoiceClient {
   } | null;
 }
 
+/** Cuantos candidatos se le piden a Alegra por cada palabra sondeada. */
+const ITEM_SEARCH_CANDIDATES = 100;
+/** Cuantos productos se devuelven al selector (lo que cabe sin marear). */
+const ITEM_SEARCH_RESULTS = 30;
+
+/**
+ * Texto comparable: sin mayusculas, sin tildes y con los signos convertidos en
+ * espacio. Lo ultimo importa — "256GB/4RAM" tiene que partirse en palabras
+ * igual que "256GB 4RAM", o la barra escondería el "4ram".
+ */
+function normalizeSearch(s: string): string {
+  return (s ?? '')
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
 // Sync inline con tope (para no colgar el request si hay muchas facturas).
 const SYNC_PAGE_LIMIT = 30;
 const SYNC_MAX_PAGES = 20; // hasta 600 facturas
@@ -404,12 +423,70 @@ export class AlegraService {
   }
 
   /** Busca items del catalogo de Alegra (selector manual de producto). */
+  /**
+   * Busca productos en el catalogo de Alegra POR PALABRAS SUELTAS.
+   *
+   * Alegra busca por subcadena: "15c 256" no encuentra
+   * "XIAOMI REDMI 15C 8RAM 256GB" porque entre "15c" y "256" hay un "8ram" de
+   * por medio. Pero quien escribe eso esta describiendo el equipo, no citando
+   * su nombre exacto — y espera los dos Redmi de 256.
+   *
+   * Asi que se parte en palabras y se pide un producto que las tenga TODAS, en
+   * cualquier orden y en cualquier parte del nombre. Como Alegra no sabe hacer
+   * eso, se le piden candidatos por las palabras mas distintivas (las mas
+   * largas, que son las que menos productos devuelven) y el cruce se hace aqui.
+   *
+   * Se sondea por DOS palabras y no por una sola porque el limite de Alegra
+   * corta: si solo se preguntara por "256" y el catalogo tuviera cientos, el
+   * Redmi podria quedar fuera del corte; preguntando tambien por "15c" entra
+   * por el otro lado. Se unen los dos conjuntos y luego se exige todo.
+   */
   async searchItems(warehouseId: string, query: string, auth: AuthContext): Promise<AlegraItem[]> {
     await this.assertWarehouseAccess(warehouseId, auth);
     const { tenantId } = getTenantContext();
     const http = await this.client.forWarehouse(tenantId, warehouseId);
-    const items = await this.client.searchItems(http, query);
-    return items.map((i) => this.toItem(i));
+
+    const tokens = normalizeSearch(query).split(' ').filter(Boolean);
+    if (tokens.length === 0) return [];
+
+    // Una sola palabra: Alegra ya hace exactamente esto. Sin vueltas.
+    if (tokens.length === 1) {
+      const items = await this.client.searchItems(http, tokens[0]);
+      return items.map((i) => this.toItem(i));
+    }
+
+    // Las mas largas primero: "256" descarta menos que "xiaomi".
+    const probes = [...tokens].sort((a, b) => b.length - a.length).slice(0, 2);
+    const batches = await Promise.all(
+      probes.map((p) => this.client.searchItems(http, p, ITEM_SEARCH_CANDIDATES).catch(() => [])),
+    );
+
+    const seen = new Set<string>();
+    const candidates: AlegraItem[] = [];
+    for (const raw of batches.flat()) {
+      const item = this.toItem(raw);
+      if (item.id && !seen.has(item.id)) {
+        seen.add(item.id);
+        candidates.push(item);
+      }
+    }
+
+    return (
+      candidates
+        .map((item) => ({ item, name: normalizeSearch(item.name) }))
+        .filter(({ name }) => tokens.every((t) => name.includes(t)))
+        // Lo que mas se parece a lo que se escribio, primero: primero los que
+        // llevan la frase tal cual, luego los nombres mas cortos — entre dos que
+        // cumplen, el corto es el que no trae palabras de mas.
+        .sort((a, b) => {
+          const full = tokens.join(' ');
+          const af = a.name.includes(full) ? 0 : 1;
+          const bf = b.name.includes(full) ? 0 : 1;
+          return af - bf || a.name.length - b.name.length || a.name.localeCompare(b.name);
+        })
+        .slice(0, ITEM_SEARCH_RESULTS)
+        .map(({ item }) => item)
+    );
   }
 
   /**
