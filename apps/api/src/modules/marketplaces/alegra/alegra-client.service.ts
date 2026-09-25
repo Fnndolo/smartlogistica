@@ -5,6 +5,14 @@ import { EnvelopeService } from '../../../infrastructure/crypto/envelope.service
 import { TenantConnectionService } from '../../../infrastructure/prisma/tenant-connection.service';
 import { ALEGRA_BASE_URL, ALEGRA_REQUEST_TIMEOUT_MS } from './alegra.constants';
 
+/**
+ * Cuantos registros acepta Alegra por pagina, COMO MAXIMO. Pedir mas no trae
+ * mas: responde 400 con
+ * {"message":"El limite de consulta debe ser máximo 30","code":903}.
+ * Comprobado con scripts/probe-alegra-item-search.mjs.
+ */
+export const ALEGRA_MAX_LIMIT = 30;
+
 export interface AlegraCredentialsRaw {
   email: string;
   token: string;
@@ -113,16 +121,37 @@ export class AlegraClient {
   // === Items / contactos / cuentas / facturas de venta (para facturar) ===
 
   /**
+   * Tope DURO de Alegra en cualquier listado. Pedir mas no devuelve mas: devuelve
+   * un 400 {"message":"El limite de consulta debe ser máximo 30","code":903}.
+   */
+  static readonly MAX_LIMIT = ALEGRA_MAX_LIMIT;
+
+  /**
    * Busca items del catalogo de Alegra por texto (nombre/referencia).
    *
-   * `query` es una SUBCADENA para Alegra: "15c 256" solo encuentra lo que
-   * lleve esas dos cosas pegadas y en ese orden. Por eso quien llama manda UNA
-   * palabra y cruza los resultados el mismo (ver AlegraService.searchItems), y
-   * por eso el limite es regulable: con varias palabras hace falta traer mas
-   * candidatos de los que se van a mostrar.
+   * `query` es una SUBCADENA para Alegra: "15c 256" solo encuentra lo que lleve
+   * esas dos cosas PEGADAS y en ese orden (verificado con
+   * scripts/probe-alegra-item-search.mjs). Por eso quien llama manda UNA
+   * palabra y cruza los resultados el mismo — ver AlegraService.searchItems.
+   *
+   * `start` es el desplazamiento: como no se pueden pedir mas de 30 de golpe,
+   * juntar un grupo decente de candidatos obliga a pedir varias paginas.
    */
-  async searchItems(http: AxiosInstance, query: string, limit = 30): Promise<AlegraRawItem[]> {
-    const res = await http.get('/items', { params: { query, limit } });
+  async searchItems(
+    http: AxiosInstance,
+    query: string,
+    limit: number = ALEGRA_MAX_LIMIT,
+    start = 0,
+  ): Promise<AlegraRawItem[]> {
+    const res = await http.get('/items', {
+      params: {
+        query,
+        // Se recorta en vez de confiar en quien llama: pasarse devuelve un 400
+        // y la busqueda entera se queda sin resultados.
+        limit: Math.min(Math.max(1, limit), ALEGRA_MAX_LIMIT),
+        ...(start > 0 ? { start } : {}),
+      },
+    });
     return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
   }
 

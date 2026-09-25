@@ -28,7 +28,12 @@ import { getTenantContext } from '../../../infrastructure/tenant-context';
 import { AiConnectionService } from '../../ai/ai-connection.service';
 import { extractValidImeis } from '../../ai/imei.util';
 import { WarehousesService } from '../../warehouses/warehouses.service';
-import { AlegraClient, type AlegraBankAccount } from './alegra-client.service';
+import {
+  AlegraClient,
+  ALEGRA_MAX_LIMIT,
+  type AlegraBankAccount,
+  type AlegraRawItem,
+} from './alegra-client.service';
 
 export interface InvoiceClient {
   name: string;
@@ -45,8 +50,13 @@ export interface InvoiceClient {
   } | null;
 }
 
-/** Cuantos candidatos se le piden a Alegra por cada palabra sondeada. */
-const ITEM_SEARCH_CANDIDATES = 100;
+/**
+ * Paginas de 30 que se piden por cada sondeo. Alegra no deja pedir mas de 30 de
+ * una (ALEGRA_MAX_LIMIT), asi que juntar candidatos es pedir varias paginas.
+ * Dos = 60 por palabra: suficiente para un catalogo de celulares sin convertir
+ * cada tecleo en una rafaga de peticiones.
+ */
+const ITEM_SEARCH_PAGES = 2;
 /** Cuantos productos se devuelven al selector (lo que cabe sin marear). */
 const ITEM_SEARCH_RESULTS = 30;
 
@@ -422,31 +432,33 @@ export class AlegraService {
     return accounts.filter((a) => a.name).map((a) => ({ id: String(a.id), name: String(a.name) }));
   }
 
-  /** Busca items del catalogo de Alegra (selector manual de producto). */
   /**
    * Busca productos en el catalogo de Alegra POR PALABRAS SUELTAS.
    *
-   * Alegra busca por subcadena: "15c 256" no encuentra
+   * Alegra busca por SUBCADENA: "15c 256" no encuentra
    * "XIAOMI REDMI 15C 8RAM 256GB" porque entre "15c" y "256" hay un "8ram" de
    * por medio. Pero quien escribe eso esta describiendo el equipo, no citando
    * su nombre exacto — y espera los dos Redmi de 256.
    *
    * Asi que se parte en palabras y se pide un producto que las tenga TODAS, en
    * cualquier orden y en cualquier parte del nombre. Como Alegra no sabe hacer
-   * eso, se le piden candidatos por las palabras mas distintivas (las mas
-   * largas, que son las que menos productos devuelven) y el cruce se hace aqui.
+   * eso, se le piden candidatos y el cruce se hace aqui. Los sondeos son:
    *
-   * Se sondea por DOS palabras y no por una sola porque el limite de Alegra
-   * corta: si solo se preguntara por "256" y el catalogo tuviera cientos, el
-   * Redmi podria quedar fuera del corte; preguntando tambien por "15c" entra
-   * por el otro lado. Se unen los dos conjuntos y luego se exige todo.
+   *  - La FRASE COMPLETA. Es lo que Alegra hace bien, y lo que salga de ahi es
+   *    lo mas parecido a lo que se escribio: asegura que los aciertos exactos
+   *    nunca se pierdan por el recorte de paginas.
+   *  - Las DOS palabras mas largas, que son las que menos productos devuelven.
+   *    Van dos y no una porque el tope de Alegra corta: preguntando solo por
+   *    "256" el Redmi podria quedar fuera de las paginas que se piden, pero
+   *    entra por "15c". Se unen los conjuntos y luego se exige tenerlas todas.
    */
   async searchItems(warehouseId: string, query: string, auth: AuthContext): Promise<AlegraItem[]> {
     await this.assertWarehouseAccess(warehouseId, auth);
     const { tenantId } = getTenantContext();
     const http = await this.client.forWarehouse(tenantId, warehouseId);
 
-    const tokens = normalizeSearch(query).split(' ').filter(Boolean);
+    const frase = normalizeSearch(query);
+    const tokens = frase.split(' ').filter(Boolean);
     if (tokens.length === 0) return [];
 
     // Una sola palabra: Alegra ya hace exactamente esto. Sin vueltas.
@@ -455,11 +467,28 @@ export class AlegraService {
       return items.map((i) => this.toItem(i));
     }
 
-    // Las mas largas primero: "256" descarta menos que "xiaomi".
-    const probes = [...tokens].sort((a, b) => b.length - a.length).slice(0, 2);
-    const batches = await Promise.all(
-      probes.map((p) => this.client.searchItems(http, p, ITEM_SEARCH_CANDIDATES).catch(() => [])),
+    const probes = [frase, ...[...tokens].sort((a, b) => b.length - a.length).slice(0, 2)];
+    const results = await Promise.allSettled(
+      probes.map((p, i) =>
+        // La frase completa con UNA pagina: si hay aciertos exactos son pocos,
+        // y su papel aqui es de precision, no de cobertura.
+        this.itemCandidates(http, p, i === 0 ? 1 : ITEM_SEARCH_PAGES),
+      ),
     );
+
+    // Si TODOS los sondeos fallaron es un fallo de Alegra, no un catalogo sin
+    // coincidencias: se avisa. Devolver [] fue exactamente lo que escondio que
+    // se estaba pidiendo un limite que Alegra rechaza.
+    const batches = results
+      .filter((r): r is PromiseFulfilledResult<AlegraRawItem[]> => r.status === 'fulfilled')
+      .map((r) => r.value);
+    if (batches.length === 0) {
+      const primero = results[0];
+      throw this.alegraError(
+        primero?.status === 'rejected' ? primero.reason : null,
+        'No se pudo buscar en el catalogo de Alegra',
+      );
+    }
 
     const seen = new Set<string>();
     const candidates: AlegraItem[] = [];
@@ -479,14 +508,36 @@ export class AlegraService {
         // llevan la frase tal cual, luego los nombres mas cortos — entre dos que
         // cumplen, el corto es el que no trae palabras de mas.
         .sort((a, b) => {
-          const full = tokens.join(' ');
-          const af = a.name.includes(full) ? 0 : 1;
-          const bf = b.name.includes(full) ? 0 : 1;
+          const af = a.name.includes(frase) ? 0 : 1;
+          const bf = b.name.includes(frase) ? 0 : 1;
           return af - bf || a.name.length - b.name.length || a.name.localeCompare(b.name);
         })
         .slice(0, ITEM_SEARCH_RESULTS)
         .map(({ item }) => item)
     );
+  }
+
+  /**
+   * Candidatos de Alegra para UN texto, pidiendo varias paginas seguidas.
+   * Corta en cuanto una pagina viene incompleta: ahi se acabo el catalogo.
+   */
+  private async itemCandidates(
+    http: AxiosInstance,
+    query: string,
+    pages: number,
+  ): Promise<AlegraRawItem[]> {
+    const out: AlegraRawItem[] = [];
+    for (let page = 0; page < pages; page++) {
+      const batch = await this.client.searchItems(
+        http,
+        query,
+        ALEGRA_MAX_LIMIT,
+        page * ALEGRA_MAX_LIMIT,
+      );
+      out.push(...batch);
+      if (batch.length < ALEGRA_MAX_LIMIT) break;
+    }
+    return out;
   }
 
   /**
