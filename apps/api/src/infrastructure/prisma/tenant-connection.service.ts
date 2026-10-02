@@ -72,9 +72,28 @@ export class TenantConnectionService implements OnModuleDestroy {
     return entry;
   }
 
+  /**
+   * URL de conexion a la DB de un tenant.
+   *
+   * El host sale de `TENANT_DB_HOST` si esta definido, y solo si no, de la
+   * columna `dbHost` de la fila.
+   *
+   * El motivo es que esa columna la COMPARTEN todos los entornos: se escribe
+   * una vez al aprovisionar y la leen por igual el servidor de produccion y
+   * cualquier maquina de desarrollo. Ponerle ahi el host de la red privada de
+   * Railway (que es lo que evita pagar el trafico como salida a internet)
+   * dejaria sin base de datos a todo lo que no corra dentro de Railway: el
+   * entorno local y los scripts de diagnostico, que no pueden resolver un
+   * nombre `.railway.internal`.
+   *
+   * Con el override cada entorno elige su ruta por variable de entorno y la
+   * columna no se toca — ni hace falta migrar nada.
+   */
   buildUrl(tenant: Pick<Tenant, 'dbHost' | 'dbName' | 'dbRole'>, password: string): string {
     const sslmode = this.config.get<string>('TENANT_DB_SSLMODE') ?? 'require';
-    const hostPort = tenant.dbHost.includes(':') ? tenant.dbHost : `${tenant.dbHost}:5432`;
+    const override = this.config.get<string>('TENANT_DB_HOST')?.trim();
+    const host = override || tenant.dbHost;
+    const hostPort = host.includes(':') ? host : `${host}:5432`;
     const encodedPwd = encodeURIComponent(password);
     // connection_limit=10: con 10-20 usuarios simultaneos del MISMO tenant, 5
     // conexiones hacian cola en picos (facturar + listas + chat a la vez).
