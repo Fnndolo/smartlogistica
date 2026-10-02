@@ -63,9 +63,8 @@ export class TenantConnectionService implements OnModuleDestroy {
       throw new Error(`Tenant ${tenant.slug} sin password de DB persistido`);
     }
 
-    const url = this.buildUrl(tenant, this.envelope.kekDecrypt(tenant.dbRolePassword).toString('utf8'));
-    const client = new TenantPrismaClient({ datasources: { db: { url } } });
-    await client.$connect();
+    const password = this.envelope.kekDecrypt(tenant.dbRolePassword).toString('utf8');
+    const client = await this.connect(tenant, password);
 
     const entry: CachedTenant = { client, slug: tenant.slug };
     this.cache.set(tenantId, entry);
@@ -73,10 +72,51 @@ export class TenantConnectionService implements OnModuleDestroy {
   }
 
   /**
-   * URL de conexion a la DB de un tenant.
+   * Conecta a la DB del tenant probando primero el host de `TENANT_DB_HOST` y,
+   * si ese no responde, el de la columna.
    *
-   * El host sale de `TENANT_DB_HOST` si esta definido, y solo si no, de la
-   * columna `dbHost` de la fila.
+   * La red privada de Railway no se puede probar desde fuera de Railway: solo
+   * se sabe si el nombre, el puerto y el TLS estan bien cuando el contenedor
+   * arranca alla. Sin esta segunda oportunidad, una variable mal escrita no
+   * seria "sigo pagando trafico de mas" sino "la plataforma no levanta".
+   *
+   * Cuando el host del ENV funciona lo dice en el log: es la unica forma de
+   * confirmar que el cambio surtio efecto, porque por fuera se ve igual.
+   */
+  private async connect(
+    tenant: Pick<Tenant, 'dbHost' | 'dbName' | 'dbRole' | 'slug'>,
+    password: string,
+  ): Promise<TenantPrismaClient> {
+    const override = this.config.get<string>('TENANT_DB_HOST')?.trim();
+    const hosts = [...new Set([override, tenant.dbHost].filter(Boolean))] as string[];
+
+    let ultimoError: unknown;
+    for (const host of hosts) {
+      const client = new TenantPrismaClient({
+        datasources: { db: { url: this.buildUrl(tenant, password, host) } },
+      });
+      try {
+        await client.$connect();
+        if (host !== tenant.dbHost) {
+          this.logger.log(
+            `Tenant ${tenant.slug} conectado por ${host} (override de TENANT_DB_HOST)`,
+          );
+        }
+        return client;
+      } catch (err) {
+        ultimoError = err;
+        await client.$disconnect().catch(() => null);
+        this.logger.warn(
+          `No se pudo conectar ${tenant.slug} por ${host}: ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+    throw ultimoError;
+  }
+
+  /**
+   * URL de conexion a la DB de un tenant. `hostOverride` gana sobre la columna
+   * `dbHost` de la fila.
    *
    * El motivo es que esa columna la COMPARTEN todos los entornos: se escribe
    * una vez al aprovisionar y la leen por igual el servidor de produccion y
@@ -89,11 +129,25 @@ export class TenantConnectionService implements OnModuleDestroy {
    * Con el override cada entorno elige su ruta por variable de entorno y la
    * columna no se toca — ni hace falta migrar nada.
    */
-  buildUrl(tenant: Pick<Tenant, 'dbHost' | 'dbName' | 'dbRole'>, password: string): string {
-    const sslmode = this.config.get<string>('TENANT_DB_SSLMODE') ?? 'require';
-    const override = this.config.get<string>('TENANT_DB_HOST')?.trim();
-    const host = override || tenant.dbHost;
+  buildUrl(
+    tenant: Pick<Tenant, 'dbHost' | 'dbName' | 'dbRole'>,
+    password: string,
+    hostOverride?: string,
+  ): string {
+    const host = hostOverride?.trim() || tenant.dbHost;
     const hostPort = host.includes(':') ? host : `${host}:5432`;
+    // El TLS lo decide el HOST, no una variable suelta.
+    //
+    // En la red privada de Railway no hay TLS que negociar y tampoco hace
+    // falta: el trafico no sale de la maquina. Pero por el proxy publico viajan
+    // por internet la contraseña del rol y todos los datos del tenant, asi que
+    // ahi exigirlo no es negociable. Con un solo `TENANT_DB_SSLMODE` para los
+    // dos, bajarlo para que entrara la red privada habria apagado el cifrado
+    // tambien en el camino publico — justo el que lo necesita.
+    const esRedPrivada = /\.railway\.internal(:\d+)?$/i.test(hostPort);
+    const sslmode = esRedPrivada
+      ? 'disable'
+      : (this.config.get<string>('TENANT_DB_SSLMODE') ?? 'require');
     const encodedPwd = encodeURIComponent(password);
     // connection_limit=10: con 10-20 usuarios simultaneos del MISMO tenant, 5
     // conexiones hacian cola en picos (facturar + listas + chat a la vez).
