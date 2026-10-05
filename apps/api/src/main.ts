@@ -48,15 +48,20 @@ async function bootstrap(): Promise<void> {
    * la ruta, porque segun cuando se evalue el filtro puede que la cabecera
    * todavia no este puesta.
    */
-  app.use(
-    compression({
-      filter: (req, res) => {
-        const tipo = String(res.getHeader('Content-Type') ?? '');
-        if (tipo.includes('text/event-stream') || req.path.endsWith('/stream')) return false;
-        return compression.filter(req, res);
-      },
-    }),
-  );
+  // Interruptor: COMPRESSION=off lo apaga sin tocar codigo ni esperar un
+  // despliegue nuevo. Es una variable de entorno justamente porque revertir
+  // codigo es lento cuando algo esta fallando en produccion.
+  if ((process.env.COMPRESSION ?? 'on').toLowerCase() !== 'off') {
+    app.use(
+      compression({
+        filter: (req, res) => {
+          const tipo = String(res.getHeader('Content-Type') ?? '');
+          if (tipo.includes('text/event-stream') || req.path.endsWith('/stream')) return false;
+          return compression.filter(req, res);
+        },
+      }),
+    );
+  }
 
   app.use(cookieParser());
 
