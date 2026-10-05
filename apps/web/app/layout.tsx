@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
-import { Geist, Geist_Mono } from 'next/font/google';
+import { GeistMono } from 'geist/font/mono';
+import { GeistSans } from 'geist/font/sans';
 
 import { QueryProvider } from '@/components/providers/query-provider';
 import { Toaster } from '@/components/ui/sonner-toaster';
@@ -7,17 +8,21 @@ import { ServiceWorker } from '@/components/pwa/service-worker';
 
 import './globals.css';
 
-const geistSans = Geist({
-  variable: '--font-geist-sans',
-  subsets: ['latin'],
-  display: 'swap',
-});
-
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
-  subsets: ['latin'],
-  display: 'swap',
-});
+/**
+ * Geist viene del paquete `geist`, que trae los archivos de la fuente DENTRO.
+ *
+ * Antes se pedia por `next/font/google`, que la descarga AL COMPILAR. Cuando
+ * la maquina que compila no alcanza a Google Fonts, Next no falla: se queda
+ * con la fuente de respaldo y sigue. Asi que un despliegue cualquiera, sin
+ * cambiar una linea de diseño, puede devolver la plataforma con otra letra —
+ * y eso ya paso en produccion.
+ *
+ * Con los archivos en el repositorio la compilacion es siempre la misma y no
+ * depende de que una red responda. Las variables CSS se llaman igual
+ * (--font-geist-sans / --font-geist-mono), que es lo que espera Tailwind.
+ */
+const geistSans = GeistSans;
+const geistMono = GeistMono;
 
 export const metadata: Metadata = {
   title: {
