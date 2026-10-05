@@ -62,10 +62,24 @@ export const getSessionUser = cache(
   async (): Promise<SessionUser | null> => serverFetch<SessionUser>('/v1/auth/me'),
 );
 
-/** Sedes del tenant (cacheado por request: layout + page comparten el fetch). */
-export const getWarehouses = cache(
-  async (): Promise<WarehouseSummary[]> => (await serverFetch<WarehouseSummary[]>('/v1/warehouses')) ?? [],
+/**
+ * Sedes del tenant, DISTINGUIENDO "no se pudo preguntar" de "no hay ninguna"
+ * (cacheado por request: layout + page comparten el fetch).
+ *
+ * Los dos casos se ven igual —una lista vacia— y no lo son: quien trata un
+ * fallo de red como "no hay sedes" acaba diciendole al usuario que su sede no
+ * existe. Usa esta version donde esa diferencia cambie lo que se muestra.
+ */
+export const getWarehousesResult = cache(
+  async (): Promise<ServerResult<WarehouseSummary[]>> =>
+    serverFetchResult<WarehouseSummary[]>('/v1/warehouses'),
 );
+
+/** Sedes del tenant. Lista vacia si no se pudieron traer — solo cuando da igual. */
+export const getWarehouses = cache(async (): Promise<WarehouseSummary[]> => {
+  const res = await getWarehousesResult();
+  return res.ok ? res.data : [];
+});
 
 const SHIPPING_VALUES = new Set(['sin_movimientos', 'en_transito', 'novedad', 'entregado']);
 const ADDRESS_VALUES = new Set(['confirmed', 'modified', 'pending']);

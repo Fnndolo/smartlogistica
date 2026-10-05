@@ -4,6 +4,7 @@ import * as https from 'node:https';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import axios from 'axios';
+import compression from 'compression';
 import { Logger } from 'nestjs-pino';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
@@ -31,6 +32,32 @@ async function bootstrap(): Promise<void> {
 
   app.useLogger(app.get(Logger));
   app.use(helmet({ contentSecurityPolicy: false }));
+
+  /**
+   * GZIP en las respuestas.
+   *
+   * Lo que sale de aqui es JSON —listas de pedidos, la bandeja, hilos de chat—
+   * y comprime como 4 veces. Medido en Railway: el API mandaba 119 GB a la
+   * semana SIN comprimir y el web reenviaba los mismos datos al navegador en
+   * 27 GB, porque Next si comprime. Ese factor de 4 se estaba pagando entero
+   * como salida a internet.
+   *
+   * SSE QUEDA FUERA, y no es un detalle: comprimir bufferiza, y un flujo de
+   * eventos que se bufferiza deja de ser tiempo real — los mensajes del chat
+   * llegarian a tirones o no llegarian. Se mira el tipo de contenido y ademas
+   * la ruta, porque segun cuando se evalue el filtro puede que la cabecera
+   * todavia no este puesta.
+   */
+  app.use(
+    compression({
+      filter: (req, res) => {
+        const tipo = String(res.getHeader('Content-Type') ?? '');
+        if (tipo.includes('text/event-stream') || req.path.endsWith('/stream')) return false;
+        return compression.filter(req, res);
+      },
+    }),
+  );
+
   app.use(cookieParser());
 
   const webOrigin = process.env.WEB_ORIGIN ?? 'http://localhost:3000';

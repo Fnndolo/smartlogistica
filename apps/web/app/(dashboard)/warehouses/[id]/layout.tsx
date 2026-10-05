@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation';
 
-import { getWarehouses, hasSession } from '@/lib/server-api';
+import { getWarehousesResult, hasSession } from '@/lib/server-api';
 
 import { SedeTabs } from './sede-tabs';
 
@@ -18,8 +18,18 @@ export default async function WarehouseLayout({
 }) {
   const { id } = await params;
   if (!(await hasSession())) notFound();
-  const warehouses = await getWarehouses();
-  const warehouse = warehouses.find((w) => w.id === id);
+
+  // Si NO se pudo preguntar, se levanta el error y lo recoge error.tsx, que
+  // ofrece reintentar. Antes esto caia en el mismo `notFound()` de abajo: un
+  // parpadeo del API y la sede "dejaba de existir" — con el agravante de que la
+  // barra lateral, alimentada por la misma lista vacia, invitaba a "crear la
+  // primera sede" cuando ya habia varias.
+  const res = await getWarehousesResult();
+  if (!res.ok) {
+    throw new Error('No se pudieron cargar las sedes');
+  }
+  const warehouse = res.data.find((w) => w.id === id);
+  // Esto si es un 404 de verdad: la lista llego y la sede no esta.
   if (!warehouse) notFound();
 
   return (
