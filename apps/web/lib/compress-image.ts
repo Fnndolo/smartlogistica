@@ -10,7 +10,12 @@
 export async function compressImage(file: File, maxDim = 1600, quality = 0.85): Promise<File> {
   try {
     if (!file.type.startsWith('image/') || file.type === 'image/gif') return file;
-    if (file.size < 400_000) return file; // ya es liviano
+    // Las imagenes que WhatsApp NO acepta (WebP y compañia) se convierten
+    // AUNQUE sean pequeñas. Antes el corte por tamaño las dejaba pasar tal
+    // cual, y justo las fotos de producto de las tiendas son webp de 30-60 KB:
+    // entraban por aqui sin tocarse y Meta las rechazaba.
+    const yaSirve = file.type === 'image/jpeg' || file.type === 'image/png';
+    if (yaSirve && file.size < 400_000) return file; // ya es liviano y valido
 
     const bitmap = await createImageBitmap(file);
     const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
@@ -28,7 +33,12 @@ export async function compressImage(file: File, maxDim = 1600, quality = 0.85): 
     const blob = await new Promise<Blob | null>((resolve) =>
       canvas.toBlob(resolve, 'image/jpeg', quality),
     );
-    if (!blob || blob.size >= file.size) return file;
+    if (!blob) return file;
+    // Quedarse con el original SOLO si ya era un formato valido. WebP comprime
+    // mejor que JPEG, asi que convertir casi siempre engorda el archivo: sin
+    // esta condicion el "no adelgazo, me quedo el original" devolvia el webp y
+    // deshacia la conversion justo en el caso que hay que arreglar.
+    if (yaSirve && blob.size >= file.size) return file;
 
     return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
   } catch {

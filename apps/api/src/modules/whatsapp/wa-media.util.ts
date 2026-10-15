@@ -91,3 +91,50 @@ export async function normalizeSticker(buffer: Buffer): Promise<Buffer> {
   }
   return encode(15);
 }
+
+/**
+ * Formatos de imagen que WhatsApp SI acepta como mensaje de imagen.
+ * WebP NO esta: Meta solo lo admite para STICKERS, y una imagen webp enviada
+ * como imagen falla con 131053 "Media upload error" (verificado en produccion:
+ * de 5 webp enviadas fallaron las 5, contra 0 fallos en 2.365 jpeg).
+ */
+const IMAGENES_ACEPTADAS = ['image/jpeg', 'image/png'];
+
+/**
+ * Deja una imagen en un formato que WhatsApp acepte.
+ *
+ * Importa porque las fotos de producto de las tiendas (MercadoLibre, Samsung,
+ * Falabella...) se descargan en WebP, y el asesor las manda tal cual sin tener
+ * forma de saber que ese formato no va a llegar. Antes el intento moria en Meta
+ * con un codigo que no le dice nada a nadie.
+ *
+ * Devuelve el buffer ORIGINAL si ya sirve o si la conversion falla: quedarse
+ * sin enviar por no poder convertir seria peor que intentarlo.
+ */
+export async function toWhatsappImage(
+  buffer: Buffer,
+  mime: string,
+  logger?: Logger,
+): Promise<{ buffer: Buffer; mime: string; ext: string | null }> {
+  const actual = (mime || '').toLowerCase();
+  if (IMAGENES_ACEPTADAS.includes(actual)) {
+    return { buffer, mime: actual, ext: actual === 'image/png' ? 'png' : 'jpg' };
+  }
+  try {
+    const sharp = (await import('sharp')).default;
+    // Fondo BLANCO al aplanar: el webp de una foto de producto suele traer
+    // transparencia, y JPEG no la tiene. Sin esto el recorte sale negro.
+    const out = await sharp(buffer)
+      .flatten({ background: { r: 255, g: 255, b: 255 } })
+      .jpeg({ quality: 88 })
+      .toBuffer();
+    return { buffer: out, mime: 'image/jpeg', ext: 'jpg' };
+  } catch (err) {
+    // Tal cual llego, incluida la extension del nombre original (ext null): el
+    // envio queda como antes de este arreglo en vez de a medio camino.
+    logger?.warn(
+      `No se pudo convertir ${actual} a jpeg: ${err instanceof Error ? err.message : err}`,
+    );
+    return { buffer, mime: actual || 'application/octet-stream', ext: null };
+  }
+}

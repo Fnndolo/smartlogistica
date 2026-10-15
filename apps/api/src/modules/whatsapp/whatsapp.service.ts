@@ -44,7 +44,7 @@ import { WaConnectionService } from './wa-connection.service';
 import { toTemplateLite } from './wa-template-mapper';
 import { recallTemplates, rememberTemplates } from './wa-template-store';
 import { WaFlowService } from './wa-flow.service';
-import { normalizeSticker, toOggOpus } from './wa-media.util';
+import { normalizeSticker, toOggOpus, toWhatsappImage } from './wa-media.util';
 import { WaPublisherService } from './wa-publisher.service';
 import { WaUpsellService } from './wa-upsell.service';
 import {
@@ -539,15 +539,25 @@ export class WhatsappService {
     this.requireD360(d360, provider);
 
     const name = file.originalname || 'archivo';
-    const ext = /\.([a-z0-9]{1,8})$/i.exec(name)?.[1];
+
+    // Las imagenes se normalizan ANTES de guardarlas, no al enviarlas: lo que
+    // se manda es el enlace a nuestro almacenamiento, asi que si ahi queda un
+    // webp, Meta lo descarga y lo rechaza igual. Convirtiendo antes, el archivo
+    // guardado y el que recibe el cliente son el mismo.
+    const esImagen = (file.mimetype || '').startsWith('image/');
+    const media = esImagen
+      ? await toWhatsappImage(file.buffer, file.mimetype || '', this.logger)
+      : { buffer: file.buffer, mime: file.mimetype || 'application/octet-stream', ext: null };
+
+    const ext = media.ext ?? /\.([a-z0-9]{1,8})$/i.exec(name)?.[1];
     const key = `tenants/${tenantId}/whatsapp/${phone}/${randomUUID()}${ext ? `.${ext.toLowerCase()}` : ''}`;
-    await this.storage.put(key, file.buffer, file.mimetype || 'application/octet-stream');
+    await this.storage.put(key, media.buffer, media.mime);
     const url = await this.storage.getSignedUrl(key);
 
     // ACK PRIMERO: la burbuja del medio aparece YA (nuestro storage firma la
     // URL) y el trabajo pesado (transcodificar audio, subir a Meta, enviar)
     // corre en la cola del chat. Un fallo se ve como bolita roja con motivo.
-    const kind = waTypeOf(file.mimetype || '');
+    const kind = waTypeOf(media.mime);
     const row = await prisma.waMessage.create({
       data: {
         phone,
