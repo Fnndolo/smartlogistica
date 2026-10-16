@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -30,12 +30,13 @@ import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { ApiError, api } from '@/lib/api-client';
 import { cn, titleCaseName } from '@/lib/utils';
 
+import { ImageLightbox, type LightboxImage } from '../image-lightbox';
 import { useOrdersStream } from '../use-orders-stream';
 
 import { LiveWave } from './audio';
 import { WaBubble } from './bubbles';
 import { EmojiStickerPicker } from './emoji-picker';
-import { VAR_HINTS, fmtSecs, renderTpl } from './helpers';
+import { VAR_HINTS, fmtSecs, mediaCaption, mediaFileName, renderTpl } from './helpers';
 import { WA_BG_DARK, WA_BG_LIGHT } from './icons';
 import type { BubbleActions } from './menus';
 import { ContactModal, ForwardModal, StickerViewer } from './modals';
@@ -46,6 +47,74 @@ import { ContactModal, ForwardModal, StickerViewer } from './modals';
  * encima, documentos con tarjeta y chulitos de entrega/lectura.
  * El historial vive en la plataforma (webhook de la Cloud API, 360dialog).
  * ===================================================================== */
+
+/**
+ * Se come la CONTINUACION de un clic multiple (doble, triple...) que empezo
+ * antes de que cambiara la pantalla —al abrir o cerrar el visor de fotos— y
+ * nada mas.
+ *
+ * Lo que separa "el resto de la misma secuencia" de "un clic nuevo" no es el
+ * reloj, es el navegador: asigna detail >= 2 a una pulsacion SOLO si cae dentro
+ * del tiempo y la distancia de doble clic del sistema operativo, y detail 1 a
+ * toda pulsacion que empieza otra secuencia (en otro punto o mas tarde). Asi que
+ * detail >= 2 ya es, por definicion, la misma secuencia. Cualquier ventana de
+ * tiempo propia encima de eso solo estorba, y las versiones anteriores lo
+ * demostraron por los dos lados:
+ *  - un tope de 600 ms dejaba pasar a quien tiene el doble clic lento (Windows
+ *    admite hasta 900 ms) y, en el celular, un segundo toque sostenido: ahi el
+ *    navegador genera mousedown/click al LEVANTAR el dedo, no al apoyarlo;
+ *  - quitar la guarda con el dblclick dejaba pasar la TERCERA pulsacion de un
+ *    triple clic, que en el drawer caia en el fondo y cerraba el pedido.
+ *
+ * Cada evento se decide por SU PROPIO detail, sin recordar nada entre uno y
+ * otro. Una version anterior guardaba "esta pulsacion se esta comiendo" al ver
+ * el mousedown y con eso decidia el click, pero NO todo click trae mousedown:
+ * el teclado no lo genera, y el boton Enviar lo cancela a proposito (para no
+ * robarle el foco al campo de texto). Con estado, Enviar dejaba de responder
+ * hasta 10 s despues de cerrar el visor con doble clic, el teclado quedaba
+ * muerto en toda la pagina, y al reves, si la segunda pulsacion del cierre
+ * caia sobre Enviar, el mensaje SALIA. Reglas:
+ *  - detail 0: teclado o un click programatico. Nunca es nuestro: pasa;
+ *  - detail 1: empieza OTRA secuencia. Pasa y DESARMA la guarda;
+ *  - detail >= 2: es la continuacion. Se come (mousedown, click o dblclick),
+ *    llegue cuando llegue. Comer el mousedown evita ademas que deje texto
+ *    seleccionado.
+ *
+ * El vencimiento es solo para no dejar oyentes colgados si no llega ningun
+ * clic mas: no cambia que se come, porque una secuencia nueva siempre empieza
+ * con detail 1 y desarma antes.
+ *
+ * Limite conocido: no frena pointerdown (llega antes del mousedown y sin
+ * detail), asi que un doble clic sobre el fondo del visor encima de la onda de
+ * una nota de voz la adelanta. Es inofensivo y frenarlo exigiria adivinar por
+ * posicion, que se comeria pulsaciones legitimas.
+ *
+ * Devuelve la funcion que la desarma, para limpiarla desde un efecto.
+ */
+function swallowRestOfDoubleClick(): () => void {
+  const tipos = ['mousedown', 'click', 'dblclick'] as const;
+
+  function desarmar() {
+    window.clearTimeout(vence);
+    tipos.forEach((t) => document.removeEventListener(t, guarda, true));
+  }
+
+  function guarda(e: MouseEvent) {
+    if (e.detail === 0) return;
+    if (e.detail === 1) {
+      desarmar();
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  tipos.forEach((t) => document.addEventListener(t, guarda, true));
+  // `desarmar` lo usa, pero nunca antes de esta linea: solo lo llaman eventos
+  // posteriores o el propio temporizador.
+  const vence = window.setTimeout(desarmar, 10_000);
+  return desarmar;
+}
 
 /* ============================== Panel ============================== */
 
@@ -354,6 +423,9 @@ export function WhatsappPanel({
             : old.messages.map((x) => (x.id === vars.tempId ? msg : x)),
         };
       });
+      // Si el visor estaba en la foto temporal, pasa a la real: el id cambia
+      // al confirmar el servidor y, sin esto, el visor se cerraria solo.
+      setViewImageId((cur) => (cur === vars.tempId ? msg.id : cur));
     },
     onError: (err, vars) => {
       qc.setQueryData<WaThread>(['wa-thread', base], (old) =>
@@ -371,6 +443,8 @@ export function WhatsappPanel({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [forwardMsg, setForwardMsg] = useState<WaMessage | null>(null);
   const [viewSticker, setViewSticker] = useState<WaMessage | null>(null);
+  // Foto abierta en el visor, por ID del mensaje (ver "Visor de FOTOS" abajo).
+  const [viewImageId, setViewImageId] = useState<string | null>(null);
   const [contactOpen, setContactOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const docRef = useRef<HTMLInputElement>(null);
@@ -734,6 +808,71 @@ export function WhatsappPanel({
       img.src = URL.createObjectURL(f);
     });
 
+  // ===== Visor de FOTOS embebido (el mismo ImageLightbox del chat interno) =====
+  // Antes la foto se abria en OTRA pestaña y solo el sticker tenia visor. La
+  // galeria son las fotos del hilo en orden (para pasar con las flechas);
+  // stickers y videos no entran. Hooks ANTES de los return tempranos de abajo.
+  const photos = useMemo(
+    () =>
+      (thread?.messages ?? []).filter(
+        (x): x is WaMessage & { mediaUrl: string } => x.kind === 'image' && Boolean(x.mediaUrl),
+      ),
+    [thread?.messages],
+  );
+  const gallery = useMemo<LightboxImage[]>(
+    () =>
+      photos.map((x) => ({ url: x.mediaUrl, name: mediaFileName(x), caption: mediaCaption(x) })),
+    [photos],
+  );
+  // Por ID, no por posicion ni por URL: el hilo cambia en vivo (SSE, refetch,
+  // borrados) y los reenvios comparten la misma URL firmada.
+  const viewIdx = viewImageId ? photos.findIndex((x) => x.id === viewImageId) : -1;
+  const viewerOpen = viewIdx >= 0;
+
+  // Si la foto abierta sale del hilo (fallo la subida, la borraron) el visor
+  // se cierra solo; se limpia el id para que no se reabra si la foto vuelve.
+  useEffect(() => {
+    if (viewImageId && !viewerOpen) setViewImageId(null);
+  }, [viewImageId, viewerOpen]);
+
+  useEffect(() => {
+    if (!viewerOpen) return;
+    // Esc cierra SOLO el visor: fase de CAPTURA + stopPropagation, como el
+    // ConfirmDialog del drawer. El drawer escucha Esc en document y la bandeja
+    // en window: sin esto el mismo Esc cerraba tambien el pedido o el chat.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      setViewImageId(null);
+    };
+    document.addEventListener('keydown', onKey, true);
+    // Doble clic en la foto: la 2da pulsacion cae ENCIMA del visor recien
+    // abierto; sin esto el fondo lo cerraria al instante y el mousedown dejaria
+    // texto del visor seleccionado en azul.
+    const soltarGuarda = swallowRestOfDoubleClick();
+    return () => {
+      document.removeEventListener('keydown', onKey, true);
+      soltarGuarda();
+    };
+  }, [viewerOpen]);
+
+  /**
+   * Cierra el visor desde un CLIC (fondo o X) y descarta el resto de ESE doble
+   * clic.
+   *
+   * El visor se cierra con el primer clic, asi que la segunda pulsacion caia en
+   * la fila del chat que quedo debajo, y el doble clic de la fila es
+   * "Responder": aparecia la cita de un mensaje que nadie eligio y, si no se
+   * notaba, se le escribia al cliente citandolo.
+   *
+   * Esc no llega aqui (lo atiende antes la guarda en captura de arriba), asi que
+   * un Esc seguido de doble clic lateral para responder sigue funcionando.
+   */
+  const closeViewerFromClick = () => {
+    setViewImageId(null);
+    swallowRestOfDoubleClick();
+  };
+
   const bubbleActions: BubbleActions = {
     reply: (m) => {
       setReplyTo(m);
@@ -751,6 +890,12 @@ export function WhatsappPanel({
     },
     favSticker: (m) => favSticker.mutate(m.id),
     openSticker: (m) => setViewSticker(m),
+    // Con el visor abierto se ignora: el visor tapa el chat, asi que lo unico
+    // que llega es un Enter/Espacio del boton que quedo con el foco detras, y
+    // haria saltar el visor de vuelta a esa foto.
+    openImage: (m) => {
+      if (!viewerOpen) setViewImageId(m.id);
+    },
   };
 
   const submit = () => {
@@ -945,6 +1090,17 @@ export function WhatsappPanel({
             setForwardMsg(viewSticker);
             setViewSticker(null);
           }}
+        />
+      ) : null}
+      {/* Visor de fotos: aqui, a nivel del PANEL, nunca dentro de la burbuja.
+          Los eventos de un portal suben por el arbol de React: dentro de
+          WaBubble, un doble clic en el visor dispararia "Responder". */}
+      {viewerOpen ? (
+        <ImageLightbox
+          images={gallery}
+          index={viewIdx}
+          onClose={closeViewerFromClick}
+          onNavigate={(i) => setViewImageId(photos[i]?.id ?? null)}
         />
       ) : null}
       {contactOpen ? (

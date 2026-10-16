@@ -63,28 +63,44 @@ export function ImageLightbox({
         className="flex items-center gap-2 px-3 py-2.5 md:px-4"
         onClick={(e) => e.stopPropagation()}
       >
-        <p className="min-w-0 flex-1 truncate text-[13px] text-white/80">
-          {img.name || 'Imagen'}
+        {/* El contador va FUERA del texto que se recorta. Dentro, un nombre de
+            camara largo (IMG_20261015_143022.jpg) se lo comia en un celular de
+            360 px desde que "Abrir en otra pestaña" tambien se ve en movil y le
+            quita ancho a esta barra. Ahora solo se recorta el nombre. */}
+        <div className="flex min-w-0 flex-1 items-baseline gap-2">
+          <p className="min-w-0 truncate text-[13px] text-white/80">{img.name || 'Imagen'}</p>
           {images.length > 1 ? (
-            <span className="ml-2 font-mono text-[11.5px] text-white/50">
+            <span className="shrink-0 font-mono text-[11.5px] text-white/50">
               {index + 1} / {images.length}
             </span>
           ) : null}
-        </p>
+        </div>
+        {/* target="_blank" es OBLIGATORIO. Las fotos vienen con URL firmada de
+            R2, que es de OTRO origen, y ahi el navegador ignora `download`: sin
+            target navegaba la PROPIA pestaña a la imagen y la app desaparecia,
+            con el drawer abierto, el texto sin enviar y lo editado en Facturar
+            o Guia. Con _blank se abre aparte; las URLs del mismo origen y los
+            blob: siguen descargando sin abrir nada. */}
         <a
           href={img.url}
           download={img.name ?? 'imagen'}
+          target="_blank"
+          rel="noreferrer"
           className="flex h-9 w-9 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/10 hover:text-white"
           aria-label="Descargar"
           title="Descargar"
         >
           <Download className="h-[18px] w-[18px]" />
         </a>
+        {/* Visible TAMBIEN en el celular: la app desactiva el zoom de la pagina
+            (userScalable: false) y el visor solo da un zoom fijo, asi que abrir
+            la foto aparte es la unica forma de pellizcar para ver un detalle —
+            un IMEI, un golpe en la pantalla. Antes estaba oculto en movil. */}
         <a
           href={img.url}
           target="_blank"
           rel="noreferrer"
-          className="hidden h-9 w-9 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/10 hover:text-white md:flex"
+          className="flex h-9 w-9 items-center justify-center rounded-full text-white/80 transition-colors hover:bg-white/10 hover:text-white"
           aria-label="Abrir en otra pestaña"
           title="Abrir en otra pestaña"
         >
@@ -100,23 +116,40 @@ export function ImageLightbox({
         </button>
       </div>
 
-      {/* Imagen (clic = zoom; clic afuera = cerrar) */}
-      <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-2 pb-2">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={img.url}
-          alt={img.name ?? 'Imagen'}
-          decoding="async"
-          onClick={(e) => {
-            e.stopPropagation();
-            setZoom((z) => !z);
-          }}
-          className={cn(
-            'max-h-full max-w-full select-none rounded-lg object-contain shadow-2xl transition-transform duration-300 ease-out',
-            zoom ? 'scale-[1.9] cursor-zoom-out' : 'cursor-zoom-in',
-          )}
-          draggable={false}
-        />
+      {/* Zona de la foto + su pie. Las flechas se anclan a ESTA zona y no al
+          contenedor de la imagen: ese se achica cuando aparece el pie, y las
+          flechas saltaban 22 px entre una foto con pie y otra sin el, asi que un
+          segundo clic rapido en "Siguiente" caia fuera del boton y cerraba el
+          visor. Esta zona mide siempre lo mismo; en una foto sin pie coincide
+          con el contenedor de la imagen y las flechas quedan donde estaban. */}
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {/* Imagen (clic = zoom; clic afuera = cerrar) */}
+        <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden px-2 pb-2">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={img.url}
+            alt={img.name ?? 'Imagen'}
+            decoding="async"
+            onClick={(e) => {
+              e.stopPropagation();
+              setZoom((z) => !z);
+            }}
+            className={cn(
+              'max-h-full max-w-full select-none rounded-lg object-contain shadow-2xl transition-transform duration-300 ease-out',
+              zoom ? 'scale-[1.9] cursor-zoom-out' : 'cursor-zoom-in',
+            )}
+            draggable={false}
+          />
+        </div>
+
+        {img.caption ? (
+          <p
+            className="mx-auto mb-3 max-w-[85%] truncate rounded-full bg-white/10 px-4 py-1.5 text-center text-[13px] text-white/90 backdrop-blur-sm"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {img.caption}
+          </p>
+        ) : null}
 
         {index > 0 ? (
           <button
@@ -145,15 +178,6 @@ export function ImageLightbox({
           </button>
         ) : null}
       </div>
-
-      {img.caption ? (
-        <p
-          className="mx-auto mb-3 max-w-[85%] truncate rounded-full bg-white/10 px-4 py-1.5 text-center text-[13px] text-white/90 backdrop-blur-sm"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {img.caption}
-        </p>
-      ) : null}
     </div>,
     document.body,
   );

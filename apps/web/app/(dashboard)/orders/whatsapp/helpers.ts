@@ -58,6 +58,15 @@ export const failText = (m: WaMessage): string => {
     : 'WhatsApp no entregó este mensaje.';
 };
 
+/* El body de una foto/video es su PIE, salvo que sea el nombre del archivo
+   (al enviar, el server guarda el nombre original). Una sola regla para la
+   burbuja y para el visor de fotos: asi nunca muestran cosas distintas. */
+const MEDIA_FILE_RE = /\.(jpe?g|png|gif|webp|mp4|mov|3gp)$/i;
+export const mediaCaption = (m: WaMessage): string | null =>
+  m.body && !MEDIA_FILE_RE.test(m.body) ? m.body : null;
+export const mediaFileName = (m: WaMessage): string | null =>
+  m.body && MEDIA_FILE_RE.test(m.body) ? m.body : null;
+
 // Celulares colombianos (3xx...), con o sin +57, con espacios/guiones/puntos.
 export const PHONE_RE = /(\+?57[\s.-]?)?(3\d{2}[\s.-]?\d{3}[\s.-]?\d{4})(?!\d)/g;
 

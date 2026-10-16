@@ -7,7 +7,7 @@ import type { WaMessage } from '@smartlogistica/shared';
 import { cn } from '@/lib/utils';
 
 import { WaAudio } from './audio';
-import { dayLabel, emojiCount, failText, isEmojiOnly, timeOf } from './helpers';
+import { dayLabel, emojiCount, failText, isEmojiOnly, mediaCaption, timeOf } from './helpers';
 import { Tail, Ticks } from './icons';
 import {
   AnchoredReactionBar,
@@ -144,7 +144,13 @@ export function WaBubble({
               )}
             >
               {mine && !grouped && m.authorName ? <AuthorTag name={m.authorName} /> : null}
-              <BubbleContent message={m} mine={mine} pending={pending} base={base} />
+              <BubbleContent
+                message={m}
+                mine={mine}
+                pending={pending}
+                base={base}
+                onOpenImage={() => actions.openImage(m)}
+              />
             </div>
             <ReactionChips message={m} mine={mine} actions={actions} />
           </div>
@@ -362,11 +368,14 @@ function BubbleContent({
   mine,
   pending,
   base,
+  onOpenImage,
 }: {
   message: WaMessage;
   mine: boolean;
   pending: boolean;
   base: string;
+  /** Abre la foto en el visor embebido del panel. */
+  onOpenImage?: () => void;
 }) {
   const timeRow = (onMedia = false) => (
     <span
@@ -386,13 +395,40 @@ function BubbleContent({
 
   // ===== Medios (foto / video) =====
   if ((m.kind === 'image' || m.kind === 'video') && m.mediaUrl) {
-    const caption = m.body && !/\.(jpe?g|png|gif|webp|mp4|mov|3gp)$/i.test(m.body) ? m.body : null;
+    const caption = mediaCaption(m);
+    const url = m.mediaUrl;
     return (
       <div className="p-[3px]">
         {m.replyTo ? <ReplyQuote replyTo={m.replyTo} mine={mine} /> : null}
         <div className="relative overflow-hidden rounded-[6px]">
           {m.kind === 'image' ? (
-            <a href={m.mediaUrl} target="_blank" rel="noreferrer" className="block bg-black/5">
+            // Clic -> visor EMBEBIDO con las fotos del chat, como WhatsApp. Antes
+            // abria la foto en OTRA pestaña (el sticker si tenia visor); el visor
+            // es el mismo ImageLightbox del chat interno.
+            //
+            // Sigue siendo el MISMO <a> de siempre y solo se intercepta el clic
+            // izquierdo normal. Con un <button> en su lugar se perdian Ctrl+clic y
+            // el clic con la rueda (abrir en otra pestaña) y, como el boton centra
+            // su texto, si la foto no cargaba el texto alternativo quedaba centrado
+            // y tapado por la hora. Con el <a> el DOM es identico al de antes.
+            <a
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => {
+                // Con teclas modificadoras manda el navegador (otra pestaña o
+                // ventana), igual que antes. Sin visor tambien.
+                if (!onOpenImage || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+                e.preventDefault();
+                // Con raton o dedo (detail > 0) se suelta el foco: si no, al cerrar
+                // el visor con Esc la foto queda :focus-visible y Chrome le pinta un
+                // contorno negro. Con teclado (detail 0) se conserva, por
+                // accesibilidad: el foco vuelve a donde estaba.
+                if (e.detail > 0) e.currentTarget.blur();
+                onOpenImage();
+              }}
+              className={cn('block bg-black/5', onOpenImage && 'cursor-zoom-in')}
+            >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={m.mediaUrl}
@@ -410,7 +446,17 @@ function BubbleContent({
             />
           )}
           {!caption ? (
-            <span className="pointer-events-none absolute bottom-0 right-0 flex items-center gap-1 rounded-tl-md bg-gradient-to-l from-black/45 to-transparent py-0.5 pl-6 pr-1.5">
+            // En VIDEO nada de esta capa recibe el mouse, ni la bolita roja de
+            // fallo: aqui queda ENCIMA del final de la barra de progreso nativa,
+            // y capturarla cambiaba un toque para adelantar el video por un
+            // tooltip tapando los controles. En FOTO la bolita si lo recibe
+            // (pointer-events-auto en FailDot) para poder leer el motivo.
+            <span
+              className={cn(
+                'pointer-events-none absolute bottom-0 right-0 flex items-center gap-1 rounded-tl-md bg-gradient-to-l from-black/45 to-transparent py-0.5 pl-6 pr-1.5',
+                m.kind === 'video' && '[&_*]:!pointer-events-none',
+              )}
+            >
               {timeRow(true)}
             </span>
           ) : null}

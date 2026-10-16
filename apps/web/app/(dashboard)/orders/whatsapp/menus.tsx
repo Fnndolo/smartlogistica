@@ -27,6 +27,8 @@ export interface BubbleActions {
   remove: (m: WaMessage) => void;
   favSticker: (m: WaMessage) => void;
   openSticker: (m: WaMessage) => void;
+  /** Clic en una foto: visor embebido del chat (antes abria otra pestaña). */
+  openImage: (m: WaMessage) => void;
 }
 
 const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];

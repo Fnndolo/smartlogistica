@@ -45,8 +45,14 @@ function FailDot({ text }: { text?: string }) {
   const [pos, setPos] = useState<null | { left: number; bottom: number }>(null);
   return (
     <>
+      {/* pointer-events-auto: en una FOTO sin texto la bolita vive dentro de
+          la capa de la hora, que es pointer-events-none para que el clic pase a
+          la imagen. Esa propiedad se hereda, asi que la bolita no recibia el
+          mouse y el motivo del fallo era imposible de leer: se veia la bolita
+          roja y nada mas. En VIDEO se vuelve a anular desde bubbles.tsx (ahi
+          tapa la barra de progreso); en texto y documentos no cambia nada. */}
       <span
-        className="inline-flex cursor-help"
+        className="pointer-events-auto inline-flex cursor-help"
         onMouseEnter={(e) => {
           if (!text) return;
           const r = e.currentTarget.getBoundingClientRect();
