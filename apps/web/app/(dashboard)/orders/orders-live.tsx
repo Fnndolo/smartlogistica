@@ -37,6 +37,7 @@ import { EmptyState } from './empty-state';
 import { DateRangeFilter } from './date-range-filter';
 import { MountOrderDialog } from './mount-order-dialog';
 import { OrdersPulseRow } from './orders-pulse';
+import { SearchElsewhere } from './search-elsewhere';
 import { SearchFilter } from './search-filter';
 import { useOrdersStream } from './use-orders-stream';
 
@@ -452,7 +453,23 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
         ) : null}
       </div>
 
-      {items.length === 0 ? (
+      {/* El buscador tambien mira FUERA de esta vista (otras sedes/secciones):
+          si aqui no hay nada, eso ocupa el lugar del vacio; si si hay, queda
+          una linea plegada que no tapa la tabla. */}
+      {q && items.length > 0 ? (
+        <SearchElsewhere q={q} scope={scope} state={state} mode="hint" />
+      ) : null}
+
+      {items.length === 0 && q ? (
+        <SearchElsewhere
+          q={q}
+          scope={scope}
+          state={state}
+          mode="empty"
+          pending={isPlaceholderData}
+          filtered={Boolean(from || to || product || address || shipping || packed || account)}
+        />
+      ) : items.length === 0 ? (
         <EmptyState />
       ) : (
         <>

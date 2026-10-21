@@ -8,7 +8,7 @@ import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { canManageOrders, canSeeAllWarehouses, type MaybeRole } from '@/lib/rbac';
 import { cn } from '@/lib/utils';
 
-import { GlobalSearch } from './global-search';
+// import { GlobalSearch } from './global-search';
 import { useChats } from './use-chats';
 
 /** Igual que el sidebar: cada pestaña dice QUE permiso la destapa. */
@@ -87,8 +87,9 @@ export function MobileTopBar() {
           </span>
         </span>
       </Link>
-      {/* Menciones vive en la barra INFERIOR; aqui solo la busqueda global. */}
-      <GlobalSearch variant="icon" />
+      {/* Menciones vive en la barra INFERIOR. La busqueda global esta APAGADA
+          por ahora (el buscador de cada vista ya busca en todas las sedes):
+      <GlobalSearch variant="icon" /> */}
     </header>
   );
 }

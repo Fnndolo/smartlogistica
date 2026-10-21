@@ -32,7 +32,7 @@ import {
 import { useCurrentUser } from '@/components/providers/current-user-provider';
 
 import { LogoutButton } from './_components/logout-button';
-import { GlobalSearch } from './global-search';
+// import { GlobalSearch } from './global-search';
 import { useChats } from './use-chats';
 
 /**
@@ -179,10 +179,13 @@ export function Sidebar() {
         </span>
       </Link>
 
-      {/* El disparador de la busqueda global vive dentro de <GlobalSearch/>
-          (mismo componente, mismas props, mismo atajo ⌘K). Aqui solo se le
-          repinta con la tinta del rail: el envoltorio gana por especificidad
-          (.wrapper > button) sin tocar el componente. */}
+      {/* Busqueda global APAGADA por ahora: el buscador de cada vista ya busca
+          en todas las sedes (orders/search-elsewhere.tsx), y dos buscadores
+          confundian. Para volver a mostrarla, descomentar esto y el import.
+
+          El disparador vive dentro de <GlobalSearch/> (mismo atajo ⌘K); aqui
+          solo se le repinta con la tinta del rail: el envoltorio gana por
+          especificidad (.wrapper > button) sin tocar el componente.
       <div
         className={cn(
           '[&>button]:mb-0 [&>button]:gap-2 [&>button]:rounded-[10px] [&>button]:border-rail-line [&>button]:bg-white/[0.04] [&>button]:px-2.5 [&>button]:py-[7px] [&>button]:text-rail-ink-2 [&>button]:[transition-duration:140ms]',
@@ -193,6 +196,7 @@ export function Sidebar() {
       >
         <GlobalSearch variant="sidebar" />
       </div>
+      */}
 
       <nav className="flex flex-col gap-0.5">
         {navItems.map((item) => {
