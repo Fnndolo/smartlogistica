@@ -23,6 +23,7 @@ import {
   MessageCircle,
   MessageSquare,
   Paperclip,
+  Pencil,
   Printer,
   Package,
   PlusCircle,
@@ -72,6 +73,7 @@ import { compressImage } from '@/lib/compress-image';
 
 import { EmojiPicker } from './emoji-picker';
 import { ImageLightbox, type LightboxImage } from './image-lightbox';
+import { MessageHistoryDialog } from './message-history-dialog';
 import { bumpReaction, topReactions } from './reaction-frequents';
 import {
   activeMention,
@@ -1457,6 +1459,7 @@ function ConversacionTab({
               mentions: Array.isArray(event.mentions) ? (event.mentions as string[]) : [],
               replyToId: typeof event.replyToId === 'string' ? event.replyToId : null,
               reactions: [],
+              editedAt: null,
               createdAt:
                 typeof event.createdAt === 'string' ? event.createdAt : new Date().toISOString(),
             };
@@ -1518,6 +1521,27 @@ function ConversacionTab({
             }),
           );
           reconcile();
+          return;
+        }
+
+        // Alguien edito un mensaje: el texto cambia en su burbuja al instante.
+        if (event.kind === 'chat.edit') {
+          const messageId = String(event.messageId ?? '');
+          qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) =>
+            old.map((m) =>
+              m.id === messageId
+                ? {
+                    ...m,
+                    body: typeof event.body === 'string' ? event.body : m.body,
+                    mentions: Array.isArray(event.mentions)
+                      ? (event.mentions as string[])
+                      : m.mentions,
+                    editedAt: typeof event.editedAt === 'string' ? event.editedAt : m.editedAt,
+                  }
+                : m,
+            ),
+          );
+          void qc.invalidateQueries({ queryKey: ['message-history', orderId, messageId] });
           return;
         }
 
@@ -1694,6 +1718,7 @@ function ConversacionTab({
         mentions,
         replyToId: replyToId ?? null,
         reactions: [],
+        editedAt: null,
         createdAt: new Date().toISOString(),
       };
       qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) => [...old, temp]);
@@ -1867,6 +1892,46 @@ function ConversacionTab({
     [qc, orderId],
   );
 
+  // Editar un mensaje propio. OPTIMISTA: el texto cambia al instante; si el
+  // server lo rechaza vuelve SOLO ese mensaje a como estaba (no se pisa lo que
+  // haya llegado entretanto).
+  const editMsg = useMutation({
+    mutationFn: ({ messageId, body }: { messageId: string; body: string }) =>
+      api.patch<OrderMessage>(`/v1/orders/${orderId}/messages/${messageId}`, {
+        body,
+        mentions: mentionsInText(body, members),
+      }),
+    onMutate: ({ messageId, body }) => {
+      const before = qc
+        .getQueryData<OrderMessage[]>(['order-messages', orderId])
+        ?.find((m) => m.id === messageId);
+      qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) =>
+        old.map((m) =>
+          m.id === messageId ? { ...m, body, editedAt: new Date().toISOString() } : m,
+        ),
+      );
+      return { before };
+    },
+    onSuccess: (real) => {
+      qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) =>
+        old.map((m) => (m.id === real.id ? real : m)),
+      );
+      void qc.invalidateQueries({ queryKey: ['message-history', orderId, real.id] });
+    },
+    onError: (err, { messageId }, ctx) => {
+      const before = ctx?.before;
+      if (before) {
+        qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) =>
+          old.map((m) => (m.id === messageId ? before : m)),
+        );
+      }
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo editar el mensaje');
+    },
+  });
+  // Historial de versiones abierto (solo admins).
+  const [historyFor, setHistoryFor] = useState<string | null>(null);
+  const closeHistory = useCallback(() => setHistoryFor(null), []);
+
   const closeActions = useCallback(() => setMobileActionsFor(null), []);
 
   // Long-press (cel): vibra y ancla las acciones del mensaje (reacciones
@@ -2014,6 +2079,7 @@ function ConversacionTab({
     mentions: [] as string[],
     replyToId: null,
     reactions: [] as OrderMessage['reactions'],
+    editedAt: null,
     createdAt: new Date().toISOString(),
   });
 
@@ -2237,6 +2303,15 @@ function ConversacionTab({
                     !isTemp && m.kind !== 'system' && (m.authorId === me?.id || canModerate)
                   }
                   onDelete={() => setConfirmDelete([m.id])}
+                  onEdit={
+                    !isTemp && m.kind === 'text' && m.authorId === me?.id
+                      ? (body) => editMsg.mutate({ messageId: m.id, body })
+                      : undefined
+                  }
+                  onEditStart={closeActions}
+                  onShowHistory={
+                    isAdmin(me?.role) && m.editedAt ? () => setHistoryFor(m.id) : undefined
+                  }
                   onReply={
                     !isTemp && m.kind !== 'system'
                       ? () => {
@@ -2647,6 +2722,8 @@ function ConversacionTab({
           if (ids?.length) deleteMessages(ids);
         }}
       />
+
+      <MessageHistoryDialog orderId={orderId} messageId={historyFor} onClose={closeHistory} />
     </div>
   );
 }
@@ -2842,6 +2919,9 @@ function MessageBubble({
   canDelete = false,
   onDelete,
   onReply,
+  onEdit,
+  onEditStart,
+  onShowHistory,
   onReact,
   onToggleReaction,
   onLongPress,
@@ -2864,6 +2944,12 @@ function MessageBubble({
   canDelete?: boolean;
   onDelete?: () => void;
   onReply?: () => void;
+  /** Guarda el texto editado (solo mensajes de texto PROPIOS). */
+  onEdit?: (body: string) => void;
+  /** Al abrir el editor: suelta las acciones ancladas por long-press. */
+  onEditStart?: () => void;
+  /** Abre el historial de versiones (solo admins, solo si se edito). */
+  onShowHistory?: () => void;
   onReact?: (e: { clientX: number; clientY: number }) => void;
   onToggleReaction?: (emoji: string) => void;
   /** Long-press (cel): abre las acciones ancladas a este mensaje. */
@@ -2882,6 +2968,49 @@ function MessageBubble({
   const isPhoto = message.kind === 'imei_photo' || message.kind === 'serial_photo';
   const isDoc = message.kind === 'document';
   const isFile = message.kind === 'file';
+
+  // Edicion EN LA BURBUJA (no en el composer: asi no se pisa lo que el usuario
+  // tenga a medio escribir abajo).
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const editRef = useRef<HTMLTextAreaElement>(null);
+  const startEdit = () => {
+    setDraft(message.body ?? '');
+    setEditing(true);
+    onEditStart?.();
+  };
+  const cancelEdit = () => setEditing(false);
+  const saveEdit = () => {
+    const next = draft.trim();
+    if (!next || next === (message.body ?? '').trim()) return cancelEdit();
+    onEdit?.(next);
+    setEditing(false);
+  };
+  useEffect(() => {
+    if (!editing) return;
+    const el = editRef.current;
+    if (el) {
+      el.focus();
+      el.setSelectionRange(el.value.length, el.value.length);
+    }
+    // Escape cancela la edicion, en fase de captura + stopPropagation: si no,
+    // tambien cerraria el drawer (que escucha Escape en document).
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setEditing(false);
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [editing]);
+  // Que el campo crezca con el texto (hasta un tope; luego scroll).
+  useEffect(() => {
+    const el = editRef.current;
+    if (!editing || !el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
+  }, [draft, editing]);
 
   // Long-press tactil: 420ms sin mover el dedo (>10px cancela: es scroll).
   // Doble TOQUE (o doble click en PC): 👍 al mensaje.
@@ -3012,6 +3141,49 @@ function MessageBubble({
     <DocumentCard message={message} mine={mine} />
   ) : isFile ? (
     <AttachmentCard message={message} mine={mine} onPreview={onPreview} />
+  ) : editing ? (
+    <div className="w-[440px] max-w-full rounded-2xl border border-accent bg-card p-2 shadow-sm ring-2 ring-accent/15">
+      <textarea
+        ref={editRef}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          // Con teclado fisico Enter guarda (Shift+Enter = salto de linea),
+          // igual que el composer; en el cel Enter es salto y se toca Guardar.
+          if (e.key === 'Enter' && !e.shiftKey && hoverActions && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            saveEdit();
+          }
+        }}
+        rows={1}
+        maxLength={2000}
+        aria-label="Editar mensaje"
+        className="block w-full select-text resize-none bg-transparent px-1.5 py-1 text-[16px] leading-[1.4] text-foreground outline-none md:text-[13.5px] md:leading-[1.45]"
+      />
+      <div className="mt-1.5 flex items-center gap-1.5">
+        <span className="mr-auto px-1.5 text-[11px] text-muted-foreground">
+          {hoverActions ? 'Enter guarda · Esc cancela' : ''}
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={cancelEdit}
+          className="h-7 px-2.5 text-xs"
+        >
+          Cancelar
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          onClick={saveEdit}
+          disabled={!draft.trim()}
+          className="h-7 px-2.5 text-xs"
+        >
+          Guardar
+        </Button>
+      </div>
+    </div>
   ) : (
     <div
       className={cn(
@@ -3026,6 +3198,27 @@ function MessageBubble({
       {quote}
       <p className="whitespace-pre-wrap break-words">
         <MentionText text={message.body ?? ''} mine={mine} members={members} />
+        {/* Todos ven que se edito; solo un admin puede abrir lo que decia. */}
+        {message.editedAt ? (
+          onShowHistory ? (
+            <button
+              type="button"
+              onClick={onShowHistory}
+              onDoubleClick={(e) => e.stopPropagation()}
+              className="ml-1.5 align-baseline text-[12px] underline-offset-2 opacity-75 hover:underline hover:opacity-100 md:text-[10.5px]"
+              title="Ver lo que decía antes"
+            >
+              (editado)
+            </button>
+          ) : (
+            <span
+              className="ml-1.5 text-[12px] opacity-70 md:text-[10.5px]"
+              title={`Editado el ${format(new Date(message.editedAt), "d MMM 'a las' HH:mm", { locale: es })}`}
+            >
+              (editado)
+            </span>
+          )
+        ) : null}
       </p>
     </div>
   );
@@ -3033,7 +3226,9 @@ function MessageBubble({
   return (
     <div
       id={`msg-${message.id}`}
-      {...touchHandlers}
+      // Editando, el dedo es del campo: sin long-press, sin 👍 por doble toque
+      // y sin bloquear el menu contextual (pegar/seleccionar).
+      {...(editing ? {} : touchHandlers)}
       className={cn(
         // touch-manipulation: sin zoom por doble toque (el doble toque es 👍).
         // Sin padding extra: los consecutivos del mismo autor quedan pegaditos
@@ -3067,7 +3262,7 @@ function MessageBubble({
       <div className="relative max-w-[min(85%,640px)]">
         {bubble}
 
-        {onReply || onReact || (canDelete && onDelete) ? (
+        {!editing && (onReply || onReact || onEdit || (canDelete && onDelete)) ? (
           <div
             data-msg-actions
             className={cn(
@@ -3116,6 +3311,17 @@ function MessageBubble({
                 title="Responder"
               >
                 <Reply className="h-3.5 w-3.5" />
+              </button>
+            ) : null}
+            {onEdit ? (
+              <button
+                type="button"
+                onClick={startEdit}
+                className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                aria-label="Editar mensaje"
+                title="Editar mensaje"
+              >
+                <Pencil className="h-3.5 w-3.5" />
               </button>
             ) : null}
             {canDelete && onDelete ? (

@@ -574,12 +574,31 @@ model OrderMessage {
   // Respuesta/cita: id del mensaje citado (mismo pedido). El front lo resuelve
   // contra la lista cargada; si el original se borro, muestra "eliminado".
   replyToId      String?
+  // Ultima edicion del texto (null = nunca se edito). Las versiones
+  // anteriores viven en OrderMessageEdit; solo los administradores las ven.
+  editedAt       DateTime?
   createdAt      DateTime @default(now())
 
-  order     Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order     Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
   reactions MessageReaction[]
+  edits     OrderMessageEdit[]
 
   @@index([orderId, createdAt])
+}
+
+/// Una edicion de un mensaje del chat: guarda el texto que TENIA antes de
+/// editarse. Con las filas en orden + el texto actual se arma el historial.
+model OrderMessageEdit {
+  id           String   @id @default(cuid())
+  messageId    String
+  previousBody String?
+  editedById   String
+  editedByName String
+  createdAt    DateTime @default(now())
+
+  message OrderMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId, createdAt])
 }
 
 /// Reaccion con emoji a un mensaje del chat (una por usuario+emoji+mensaje).

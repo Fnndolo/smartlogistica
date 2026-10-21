@@ -17,6 +17,7 @@ export interface OrderRealtimeEvent {
     | 'wa.typing'
     | 'chat.message'
     | 'chat.reaction'
+    | 'chat.edit'
     | 'chat.typing';
   externalId?: string;
   at: number;

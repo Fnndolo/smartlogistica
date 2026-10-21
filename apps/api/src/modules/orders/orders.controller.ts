@@ -7,6 +7,7 @@ import {
   HttpCode,
   type MessageEvent,
   Param,
+  Patch,
   Post,
   Query,
   Res,
@@ -26,6 +27,7 @@ import {
   createInvoiceSchema,
   createManualOrderSchema,
   createOrderMessageSchema,
+  editOrderMessageSchema,
   toggleReactionSchema,
   devicePhotoKindSchema,
   listOrdersQuerySchema,
@@ -48,6 +50,8 @@ import {
   type CreateInvoiceInput,
   type CreateManualOrderInput,
   type CreateOrderMessageInput,
+  type EditOrderMessageInput,
+  type OrderMessageHistory,
   type ToggleReactionInput,
   type DevicePhotoResponse,
   type Guide,
@@ -414,6 +418,27 @@ export class OrdersController {
     @CurrentUser() user: AuthContext,
   ): Promise<{ removed: boolean }> {
     return this.orders.toggleOrderReaction(id, body.emoji, user);
+  }
+
+  /** Edita el texto de un mensaje propio (queda historial para admins). */
+  @Patch(':id/messages/:messageId')
+  async editMessage(
+    @Param('id') id: string,
+    @Param('messageId') messageId: string,
+    @Body(new ZodValidationPipe(editOrderMessageSchema)) body: EditOrderMessageInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<OrderMessage> {
+    return this.orders.editMessage(id, messageId, body, user);
+  }
+
+  /** Versiones anteriores de un mensaje editado. Solo administradores. */
+  @Get(':id/messages/:messageId/history')
+  async messageHistory(
+    @Param('id') id: string,
+    @Param('messageId') messageId: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<OrderMessageHistory> {
+    return this.orders.messageHistory(id, messageId, user);
   }
 
   /** Elimina un mensaje del chat (incluidas las fotos). Autor o admin. */

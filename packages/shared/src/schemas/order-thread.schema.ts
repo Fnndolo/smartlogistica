@@ -54,9 +54,35 @@ export const orderMessageSchema = z.object({
   // Id del mensaje citado (responder); el front lo resuelve en la lista cargada.
   replyToId: z.string().nullable(),
   reactions: z.array(messageReactionSchema),
+  // Ultima edicion (null = nunca se edito): todos ven "editado"; el historial
+  // de versiones solo lo abren los administradores.
+  editedAt: z.string().datetime().nullable().default(null),
   createdAt: z.string().datetime(),
 });
 export type OrderMessage = z.infer<typeof orderMessageSchema>;
+
+/** Editar el texto de un mensaje propio. Mismo tope que al escribirlo. */
+export const editOrderMessageSchema = z.object({
+  body: z.string().trim().min(1, 'Escribe un mensaje').max(2000),
+  mentions: z.array(z.string()).max(20).optional(),
+});
+export type EditOrderMessageInput = z.infer<typeof editOrderMessageSchema>;
+
+/**
+ * Historial de un mensaje editado (solo administradores), de la version
+ * original a la actual. `at` = cuando se escribio ESA version.
+ */
+export const orderMessageHistorySchema = z.object({
+  versions: z.array(
+    z.object({
+      body: z.string().nullable(),
+      at: z.string().datetime(),
+      /** Quien escribio esta version (en la original, el autor). */
+      byName: z.string(),
+    }),
+  ),
+});
+export type OrderMessageHistory = z.infer<typeof orderMessageHistorySchema>;
 
 /** Alerta de SUPER MENCION (@todos) pendiente para el usuario. */
 export const superMentionAlertSchema = z.object({

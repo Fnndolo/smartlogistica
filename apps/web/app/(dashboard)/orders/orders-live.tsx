@@ -219,6 +219,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       if (
         event?.kind === 'chat.typing' ||
         event?.kind === 'chat.reaction' ||
+        event?.kind === 'chat.edit' ||
         event?.kind === 'wa.message'
       )
         return;

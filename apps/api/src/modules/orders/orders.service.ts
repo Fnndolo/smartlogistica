@@ -23,6 +23,8 @@ import type {
   CreateInvoiceLine,
   CreateManualOrderInput,
   CreateOrderMessageInput,
+  EditOrderMessageInput,
+  OrderMessageHistory,
   DevicePhotoKind,
   DevicePhotoResponse,
   ExistingInvoice,
@@ -1794,6 +1796,106 @@ export class OrdersService {
       stage: !r.warehouseId ? 'general' : invoiced.has(r.id) ? 'invoiced' : 'pending',
       createdAt: r.marketplaceCreatedAt.toISOString(),
     }));
+  }
+
+  /**
+   * Edita el texto de un mensaje del chat. SOLO su autor, y solo mensajes de
+   * texto (fotos/documentos/sistema no). El texto anterior se guarda en
+   * OrderMessageEdit: todos ven "editado", pero el historial de lo que decia
+   * solo lo abren los administradores (messageHistory).
+   *
+   * Las menciones se recalculan con el texto nuevo, pero editar no notifica:
+   * ni push ni super mencion — eso queda para mensajes nuevos.
+   */
+  async editMessage(
+    orderId: string,
+    messageId: string,
+    input: EditOrderMessageInput,
+    auth: AuthContext,
+  ): Promise<OrderMessageDto> {
+    await this.loadAccessibleOrder(orderId, auth);
+    const { tenantId, prisma } = getTenantContext();
+    const msg = await prisma.orderMessage.findUnique({
+      where: { id: messageId },
+      include: { reactions: true },
+    });
+    if (!msg || msg.orderId !== orderId) {
+      throw new NotFoundException('Mensaje no encontrado');
+    }
+    if (msg.kind !== 'text') {
+      throw new BadRequestException('Solo se pueden editar los mensajes de texto.');
+    }
+    if (msg.authorId !== auth.userId) {
+      throw new ForbiddenException('Solo quien escribió el mensaje puede editarlo.');
+    }
+    // Sin cambios: no se ensucia el historial con una "edicion" vacia.
+    if ((msg.body ?? '') === input.body) return this.toMessage(msg, auth.userId);
+
+    const mentions = await this.validMentions(tenantId, input.mentions);
+    const editedAt = new Date();
+    const [, fresh] = await prisma.$transaction([
+      prisma.orderMessageEdit.create({
+        data: {
+          messageId,
+          previousBody: msg.body,
+          editedById: auth.userId,
+          editedByName: displayName(auth),
+          createdAt: editedAt,
+        },
+      }),
+      prisma.orderMessage.update({
+        where: { id: messageId },
+        data: { body: input.body, mentions, editedAt },
+        include: { reactions: true },
+      }),
+    ]);
+
+    // Los chats abiertos cambian el texto en su cache al instante.
+    await this.realtime.publish(tenantId, {
+      kind: 'chat.edit',
+      orderId,
+      messageId,
+      authorId: auth.userId,
+      body: input.body,
+      mentions,
+      editedAt: editedAt.toISOString(),
+    });
+    return this.toMessage(fresh, auth.userId);
+  }
+
+  /** Versiones de un mensaje editado, de la original a la actual. Solo admins. */
+  async messageHistory(
+    orderId: string,
+    messageId: string,
+    auth: AuthContext,
+  ): Promise<OrderMessageHistory> {
+    if (!isAdmin(auth)) {
+      throw new ForbiddenException('Solo los administradores ven el historial de un mensaje.');
+    }
+    await this.loadAccessibleOrder(orderId, auth);
+    const { prisma } = getTenantContext();
+    const msg = await prisma.orderMessage.findUnique({
+      where: { id: messageId },
+      include: { edits: { orderBy: { createdAt: 'asc' } } },
+    });
+    if (!msg || msg.orderId !== orderId) {
+      throw new NotFoundException('Mensaje no encontrado');
+    }
+    // Cada edicion guarda el texto que REEMPLAZO: la version i se escribio
+    // cuando se creo el mensaje (i=0) o en la edicion i-1, y la ultima es el
+    // texto actual.
+    const versions = msg.edits.map((e, i) => ({
+      body: e.previousBody,
+      at: (i === 0 ? msg.createdAt : msg.edits[i - 1]!.createdAt).toISOString(),
+      byName: i === 0 ? msg.authorName : msg.edits[i - 1]!.editedByName,
+    }));
+    const last = msg.edits[msg.edits.length - 1];
+    versions.push({
+      body: msg.body,
+      at: (last?.createdAt ?? msg.createdAt).toISOString(),
+      byName: last?.editedByName ?? msg.authorName,
+    });
+    return { versions };
   }
 
   /**
@@ -4094,6 +4196,7 @@ export class OrdersService {
       mentions: m.mentions,
       replyToId: m.replyToId ?? null,
       reactions: groupReactions(m.reactions ?? [], viewerId),
+      editedAt: m.editedAt?.toISOString() ?? null,
       createdAt: m.createdAt.toISOString(),
     };
   }
