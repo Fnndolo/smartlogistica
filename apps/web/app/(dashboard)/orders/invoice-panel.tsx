@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { useIsMutating, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle,
@@ -43,7 +44,7 @@ interface Line {
   price: string;
   quantity: number;
   // AVISO de la IA: el producto de la compra no corresponde al del pedido
-  // (modelo/almacenamiento/RAM). Solo informa; se puede facturar igual.
+  // (modelo/almacenamiento/RAM). Se puede facturar igual, previa confirmacion.
   mismatch?: { expected: string; found: string; note: string } | null;
 }
 
@@ -187,6 +188,11 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
   const current = lines ?? [];
   const total = current.reduce((s, l) => s + (Number(l.price) || 0) * l.quantity, 0);
 
+  // Si la IA dice que algun IMEI trae un producto distinto al del pedido, no se
+  // factura de un clic: primero un modal que obliga a leer el aviso.
+  const mismatches = current.flatMap((l) => (l.mismatch ? [l.mismatch] : []));
+  const [pendingAction, setPendingAction] = useState<'invoice' | 'all' | null>(null);
+
   // Codigos que llegaron por FOTO del chat: el preview arma UNA linea por foto,
   // asi que su presencia aqui dice (SOLO al pintar) si la linea nacio de una foto
   // y el paso 1 del recorrido puede marcarse cumplido. Sin fetch ni estado nuevo.
@@ -319,6 +325,13 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
   const invoicing = useIsMutating({ mutationKey: ['op-invoice', orderId] }) > 0;
   const doingAll = useIsMutating({ mutationKey: ['op-all', orderId] }) > 0;
   const busy = invoicing || doingAll;
+
+  const run = (action: 'invoice' | 'all') =>
+    action === 'invoice' ? invoice.mutate() : processAll.mutate();
+  const requestRun = (action: 'invoice' | 'all') => {
+    if (mismatches.length > 0) setPendingAction(action);
+    else run(action);
+  };
 
   // Si la operacion la disparo una instancia YA desmontada (cerraron el drawer
   // mientras facturaba), sus onSuccess no corren aqui: al terminar (busy
@@ -661,7 +674,7 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
 
       <div className="!mt-1.5 flex flex-wrap items-center gap-3 border-t border-border pt-4">
         <Button
-          onClick={() => invoice.mutate()}
+          onClick={() => requestRun('invoice')}
           loading={invoicing}
           disabled={!canInvoice || busy}
           className={BTN_PRIMARY_CLS}
@@ -674,7 +687,7 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
         {!manual ? (
           <Button
             variant="outline"
-            onClick={() => processAll.mutate()}
+            onClick={() => requestRun('all')}
             loading={doingAll}
             disabled={!canInvoice || !guideReady || busy}
             className={BTN_GHOST_CLS}
@@ -709,7 +722,150 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
           </span>
         )}
       </div>
+
+      <MismatchConfirm
+        action={pendingAction}
+        mismatches={mismatches}
+        onCancel={() => setPendingAction(null)}
+        onConfirm={() => {
+          const action = pendingAction;
+          setPendingAction(null);
+          if (action && !busy) run(action);
+        }}
+      />
     </div>
+  );
+}
+
+/** Segundos que el boton de confirmar queda bloqueado: el tiempo de leer el aviso. */
+const MISMATCH_READ_SECONDS = 5;
+
+/**
+ * Confirmacion antes de facturar cuando la IA dice que el IMEI trae un producto
+ * distinto al del pedido. El boton de seguir arranca bloqueado unos segundos
+ * para que el aviso se lea y no se despache con el reflejo del clic; el foco
+ * cae en "Revisar", asi un Enter tampoco factura.
+ */
+function MismatchConfirm({
+  action,
+  mismatches,
+  onCancel,
+  onConfirm,
+}: {
+  action: 'invoice' | 'all' | null;
+  mismatches: NonNullable<Line['mismatch']>[];
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const open = action !== null;
+  const [left, setLeft] = useState(MISMATCH_READ_SECONDS);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  // La cuenta se reinicia cada vez que se abre, contra el reloj (no por ticks).
+  useEffect(() => {
+    if (!open) return;
+    const until = Date.now() + MISMATCH_READ_SECONDS * 1000;
+    setLeft(MISMATCH_READ_SECONDS);
+    const id = setInterval(() => {
+      const s = Math.max(0, Math.ceil((until - Date.now()) / 1000));
+      setLeft(s);
+      if (s === 0) clearInterval(id);
+    }, 200);
+    cancelRef.current?.focus();
+    return () => clearInterval(id);
+  }, [open]);
+
+  // Escape cancela, en fase de captura + stopPropagation: si no, tambien
+  // cerraria el drawer (que escucha Escape en document).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onCancel();
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [open, onCancel]);
+
+  if (!open || typeof document === 'undefined') return null;
+  const locked = left > 0;
+  const verb = action === 'all' ? 'Hacer todo' : 'Facturar';
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[120] flex items-center justify-center bg-scrim/55 p-4 backdrop-blur-[2px]"
+      onClick={onCancel}
+    >
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="mismatch-title"
+        aria-describedby="mismatch-desc"
+        className="shadow-pop w-full max-w-md rounded-2xl border border-border bg-card p-5"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start gap-3">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">
+            <AlertTriangle className="h-[18px] w-[18px]" />
+          </span>
+          <div className="min-w-0">
+            <h3 id="mismatch-title" className="text-[15px] font-semibold leading-tight">
+              {mismatches.length > 1
+                ? `${mismatches.length} equipos no corresponden al pedido`
+                : 'El equipo no corresponde al pedido'}
+            </h3>
+            <p
+              id="mismatch-desc"
+              className="mt-1.5 text-[12.5px] leading-relaxed text-muted-foreground"
+            >
+              La IA revisó el IMEI contra lo que compró el cliente. Si sigues, la factura sale con
+              un equipo que <b className="text-foreground">no es el que pidió</b>.
+            </p>
+          </div>
+        </div>
+
+        <ul className="mt-4 max-h-[40vh] space-y-2 overflow-y-auto">
+          {mismatches.map((m, i) => (
+            <li
+              key={i}
+              className="rounded-xl border border-border bg-surface px-3.5 py-2.5 text-[12.5px] leading-[1.45]"
+            >
+              <dl className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-2 gap-y-1">
+                <dt className="font-semibold text-hint">Pedido</dt>
+                <dd className="min-w-0 break-words font-semibold">{m.expected}</dd>
+                <dt className="font-semibold text-hint">IMEI</dt>
+                <dd className="min-w-0 break-words font-semibold text-amber-600 dark:text-amber-400">
+                  {m.found}
+                </dd>
+              </dl>
+              {m.note ? <p className="mt-1.5 break-words text-muted-foreground">{m.note}</p> : null}
+            </li>
+          ))}
+        </ul>
+
+        <div className="mt-5 flex flex-wrap justify-end gap-2">
+          <Button
+            ref={cancelRef}
+            variant="outline"
+            onClick={onCancel}
+            className={cn(BTN_GHOST_CLS, FOCUS_RING)}
+          >
+            Revisar
+          </Button>
+          <Button
+            onClick={onConfirm}
+            disabled={locked}
+            aria-live="polite"
+            className={cn(BTN_PRIMARY_CLS, 'tabular-nums', FOCUS_RING)}
+          >
+            {locked ? `Lee el aviso · ${left}` : `${verb} igual`}
+          </Button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -973,14 +1129,14 @@ function LineRow({
         ) : null}
 
         {/* AVISO de la IA (experta en celulares): el IMEI leido trae una compra
-            que NO corresponde al producto del pedido. Solo avisa, no bloquea. */}
+            que NO corresponde al producto del pedido. Facturar pide confirmarlo. */}
         {line.mismatch ? (
           <div className="mt-[9px] flex items-start gap-2.5 rounded-xl bg-amber-500/10 px-3.5 py-[11px] text-[12.5px] leading-[1.45] text-amber-600 dark:text-amber-400">
             <AlertTriangle className="mt-px h-[15px] w-[15px] shrink-0" />
             <span className="min-w-0 break-words">
               <b>Aviso de la IA:</b> el IMEI corresponde a «{line.mismatch.found}» y el pedido dice
               «{line.mismatch.expected}».{line.mismatch.note ? ` ${line.mismatch.note}.` : ''}{' '}
-              Verifica antes de facturar (puedes facturar igual).
+              Verifica antes de facturar: si sigues, te pediremos confirmarlo.
             </span>
           </div>
         ) : null}

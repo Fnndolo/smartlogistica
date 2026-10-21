@@ -848,7 +848,9 @@ export class AlegraService {
       const options = await this.listBodegas(warehouseId, auth);
       const match = options.find((o) => o.id === bodega.id);
       if (!match) {
-        throw new BadRequestException('Esa bodega no existe o está inactiva en el Alegra de la sede');
+        throw new BadRequestException(
+          'Esa bodega no existe o está inactiva en el Alegra de la sede',
+        );
       }
       saved = { id: match.id, name: match.name };
     } else {

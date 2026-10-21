@@ -89,8 +89,8 @@ export function AlegraBodegaCard({ warehouseId }: { warehouseId: string }) {
             </div>
             <p className="mt-0.5 text-sm text-muted-foreground">
               De qué bodega se descuenta lo que factura esta sede. Si la empresa de Alegra la
-              comparten varias sedes, cada una debe tener la suya: si no, Alegra busca el
-              producto en la bodega predeterminada y{' '}
+              comparten varias sedes, cada una debe tener la suya: si no, Alegra busca el producto
+              en la bodega predeterminada y{' '}
               <span className="font-medium text-foreground">
                 rechaza la factura o descuenta el inventario de otra sede
               </span>
