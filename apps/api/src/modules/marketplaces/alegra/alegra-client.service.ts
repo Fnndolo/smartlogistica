@@ -163,6 +163,33 @@ export class AlegraClient {
     return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
   }
 
+  /**
+   * Un vendedor por id, o null si no existe en ESTA empresa. Sirve para validar
+   * la preferencia guardada antes de facturar: los ids son por empresa, y una
+   * sede reconectada a otra empresa de Alegra puede tener guardado un id que
+   * alla es otra persona (o una inactiva).
+   */
+  async getSeller(
+    http: AxiosInstance,
+    id: string,
+  ): Promise<{ id: number | string; name: string; status?: string } | null> {
+    const res = await http.get(`/sellers/${encodeURIComponent(id)}`, {
+      validateStatus: (s) => s < 500,
+    });
+    if (res.status === 404 || !res.data || typeof res.data !== 'object' || !('id' in res.data)) {
+      return null;
+    }
+    return res.data as { id: number | string; name: string; status?: string };
+  }
+
+  /** Bodegas de la empresa (para elegir desde cual factura cada sede). */
+  async listBodegas(
+    http: AxiosInstance,
+  ): Promise<Array<{ id: number | string; name?: string; status?: string; isDefault?: boolean }>> {
+    const res = await http.get('/warehouses');
+    return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
+  }
+
   /** Lista facturas de venta, mas nuevas primero (para traer la ultima). */
   async listInvoices(
     http: AxiosInstance,

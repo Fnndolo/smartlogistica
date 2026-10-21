@@ -2,6 +2,8 @@ import { ForbiddenException, Injectable, Logger, NotFoundException } from '@nest
 import { BadRequestException } from '@nestjs/common';
 import { isAxiosError, type AxiosInstance } from 'axios';
 import type {
+  AlegraBodega,
+  AlegraBodegaOption,
   AlegraConnectionSummary,
   AlegraContact,
   AlegraCredentialsInput,
@@ -17,7 +19,7 @@ import type {
   InvoicePaymentInput,
   InvoiceResult,
 } from '@smartlogistica/shared';
-import { alegraFixedClientSchema } from '@smartlogistica/shared';
+import { alegraBodegaSchema, alegraFixedClientSchema } from '@smartlogistica/shared';
 import { Prisma } from '.prisma/tenant-client';
 
 import { canManageOrders, isAdmin } from '../../../common/rbac';
@@ -254,6 +256,11 @@ export class AlegraService {
     // 2. Cifrar el token con la DEK del tenant (blob auto-contenido iv+tag+ct).
     const encryptedToken = await this.envelope.encryptField(tenantId, input.token);
 
+    const previous = await prisma.alegraConnection.findUnique({
+      where: { warehouseId },
+      select: { companyName: true },
+    });
+
     // 3. Upsert (1:1 con la sede).
     const conn = await prisma.alegraConnection.upsert({
       where: { warehouseId },
@@ -273,6 +280,30 @@ export class AlegraService {
         lastError: null,
       },
     });
+
+    // 4. Si la sede quedo en OTRA empresa de Alegra, lo configurado contra la
+    //    anterior no sirve: los ids de vendedor, cliente fijo y bodega son por
+    //    empresa, y el mismo numero alla es otra persona/cliente/bodega. Se
+    //    limpia para que se vuelva a elegir, en vez de facturar a nombre de
+    //    quien no es.
+    const fold = (v: string | null | undefined): string =>
+      (v ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim();
+    if (previous?.companyName && companyName && fold(previous.companyName) !== fold(companyName)) {
+      await prisma.$transaction([
+        prisma.alegraSellerPref.deleteMany({ where: { warehouseId } }),
+        prisma.warehouse.update({
+          where: { id: warehouseId },
+          data: { alegraFixedClient: Prisma.DbNull, alegraBodega: Prisma.DbNull },
+        }),
+      ]);
+      this.logger.log(
+        `Sede ${warehouseId} paso de «${previous.companyName}» a «${companyName}»: se limpiaron vendedores, cliente fijo y bodega`,
+      );
+    }
+    this.bankAccountsCache.delete(warehouseId);
+    for (const key of this.sellerCheckCache.keys()) {
+      if (key.startsWith(`${warehouseId}:`)) this.sellerCheckCache.delete(key);
+    }
 
     return this.toSummary(conn);
   }
@@ -415,6 +446,56 @@ export class AlegraService {
     const accounts = await this.client.listBankAccounts(http);
     this.bankAccountsCache.set(warehouseId, { at: Date.now(), accounts });
     return accounts;
+  }
+
+  private static readonly SELLER_CHECK_TTL_MS = 10 * 60_000;
+  private readonly sellerCheckCache = new Map<
+    string,
+    { at: number; name: string | null; status: string | null }
+  >();
+
+  /**
+   * La preferencia de vendedor guardada sigue siendo la MISMA persona en el
+   * Alegra de la sede?
+   *
+   * Los ids de vendedor son por empresa. Si una sede se reconecta a otra
+   * empresa de Alegra, la preferencia guardada apunta a un id que alla es otra
+   * persona: paso con PEDIDOS PEREIRA, donde el "ESTEBAN RODRIGUEZ" guardado
+   * como id 17 es, en la empresa actual, "ESTEFANY (EXTERNA)", inactiva. Si
+   * esta inactivo Alegra lo rechaza con un mensaje que no dice que hacer; si
+   * esta activo, la factura sale a nombre de OTRO vendedor sin que nadie lo
+   * note (y con ella la comision). Se compara id + nombre + estado.
+   *
+   * Si Alegra no responde, no se bloquea: se deja que la factura decida.
+   */
+  private async assertSellerStillValid(
+    warehouseId: string,
+    http: AxiosInstance,
+    pref: { sellerId: string; sellerName: string },
+  ): Promise<void> {
+    const key = `${warehouseId}:${pref.sellerId}`;
+    let hit = this.sellerCheckCache.get(key);
+    if (!hit || Date.now() - hit.at > AlegraService.SELLER_CHECK_TTL_MS) {
+      const seller = await this.client.getSeller(http, pref.sellerId).catch(() => undefined);
+      if (seller === undefined) return;
+      hit = { at: Date.now(), name: seller?.name ?? null, status: seller?.status ?? null };
+      this.sellerCheckCache.set(key, hit);
+    }
+    const fold = (v: string): string =>
+      v.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+    const active = (hit.status ?? 'active') === 'active';
+    if (hit.name != null && active && fold(hit.name) === fold(pref.sellerName)) return;
+
+    const ahora =
+      hit.name == null
+        ? 'no existe'
+        : !active
+          ? `es «${hit.name}» y está inactivo`
+          : `ahora es «${hit.name}»`;
+    throw new BadRequestException(
+      `Tu vendedor de Alegra en esta sede quedó desactualizado: guardaste «${pref.sellerName}», ` +
+        `pero en el Alegra de la sede ese vendedor ${ahora}. Elígelo de nuevo en Ajustes › Tu cuenta.`,
+    );
   }
 
   /**
@@ -703,6 +784,84 @@ export class AlegraService {
     return client;
   }
 
+  // === BODEGA de la sede ===
+
+  /**
+   * Bodega de Alegra desde la que factura esta sede. null = la predeterminada
+   * de la empresa (lo de antes). Lee la columna sin ir a Alegra: esta en el
+   * camino critico de CADA factura.
+   */
+  async getBodega(warehouseId: string): Promise<AlegraBodega | null> {
+    const { prisma } = getTenantContext();
+    const wh = await prisma.warehouse.findUnique({
+      where: { id: warehouseId },
+      select: { alegraBodega: true },
+    });
+    if (!wh?.alegraBodega) return null;
+    const parsed = alegraBodegaSchema.safeParse(wh.alegraBodega);
+    return parsed.success ? parsed.data : null;
+  }
+
+  /** Igual que getBodega pero comprobando acceso a la sede (para el API). */
+  async getBodegaFor(warehouseId: string, auth: AuthContext): Promise<AlegraBodega | null> {
+    await this.assertWarehouseAccess(warehouseId, auth);
+    return this.getBodega(warehouseId);
+  }
+
+  /** Bodegas activas de la empresa de Alegra de la sede, para el selector. Solo admin. */
+  async listBodegas(warehouseId: string, auth: AuthContext): Promise<AlegraBodegaOption[]> {
+    if (!isAdmin(auth)) {
+      throw new ForbiddenException('Solo administradores gestionan la facturación de la sede');
+    }
+    await this.assertWarehouseAccess(warehouseId, auth);
+    const { tenantId } = getTenantContext();
+    const http = await this.client.forWarehouse(tenantId, warehouseId);
+    try {
+      const rows = await this.client.listBodegas(http);
+      return rows
+        .filter((b) => (b.status ?? 'active') === 'active')
+        .map((b) => ({
+          id: String(b.id),
+          name: String(b.name ?? `Bodega ${b.id}`),
+          isDefault: Boolean(b.isDefault),
+        }));
+    } catch (err) {
+      throw this.alegraError(err, 'No se pudieron traer las bodegas de Alegra');
+    }
+  }
+
+  /**
+   * Fija (o quita, con null) la bodega desde la que factura la sede. Solo
+   * admin. Se valida contra Alegra que la bodega exista y este activa: un id
+   * que no es de esta empresa haria fallar todas las facturas de la sede.
+   */
+  async setBodega(
+    warehouseId: string,
+    bodega: AlegraBodega | null,
+    auth: AuthContext,
+  ): Promise<AlegraBodega | null> {
+    if (!isAdmin(auth)) {
+      throw new ForbiddenException('Solo administradores cambian la bodega de la sede');
+    }
+    let saved: AlegraBodega | null = null;
+    if (bodega) {
+      const options = await this.listBodegas(warehouseId, auth);
+      const match = options.find((o) => o.id === bodega.id);
+      if (!match) {
+        throw new BadRequestException('Esa bodega no existe o está inactiva en el Alegra de la sede');
+      }
+      saved = { id: match.id, name: match.name };
+    } else {
+      await this.assertWarehouseAccess(warehouseId, auth);
+    }
+    const { prisma } = getTenantContext();
+    await prisma.warehouse.update({
+      where: { id: warehouseId },
+      data: { alegraBodega: saved ? (saved as unknown as Prisma.InputJsonValue) : Prisma.DbNull },
+    });
+    return saved;
+  }
+
   /**
    * Busca contactos en la cuenta de Alegra de la sede (selector del cliente
    * fijo). Se re-filtra en memoria: si Alegra ignorara el parametro `query`
@@ -840,11 +999,15 @@ export class AlegraService {
       const priced = lines.map((l) => ({ ...l, price: Math.round(l.price) }));
       const total = priced.reduce((s, l) => s + l.price * l.quantity, 0);
       const today = new Date().toISOString().slice(0, 10);
-      const sellerPref = await getTenantContext()
-        .prisma.alegraSellerPref.findUnique({
-          where: { warehouseId_userId: { warehouseId, userId: auth.userId } },
-        })
-        .catch(() => null);
+      const [sellerPref, bodega] = await Promise.all([
+        getTenantContext()
+          .prisma.alegraSellerPref.findUnique({
+            where: { warehouseId_userId: { warehouseId, userId: auth.userId } },
+          })
+          .catch(() => null),
+        this.getBodega(warehouseId),
+      ]);
+      if (sellerPref) await this.assertSellerStillValid(warehouseId, http, sellerPref);
 
       // 4. Pagos: ADDI por el total (marketplace) o los elegidos por el usuario
       //    (montado a mano; la suma no puede superar el total, y puede ser menor
@@ -872,6 +1035,9 @@ export class AlegraService {
         // En marketplace, "anotaciones" siempre dice ADDI; montado a mano, nada.
         ...(manual ? {} : { anotation: 'ADDI' }),
         ...(sellerPref ? { seller: Number(sellerPref.sellerId) || sellerPref.sellerId } : {}),
+        // La bodega va en la RAIZ de la factura: verificado con borradores,
+        // Alegra ignora la que viaja en cada item y rechaza igual (code 3095).
+        ...(bodega ? { warehouse: { id: Number(bodega.id) || bodega.id } } : {}),
         items: priced.map((l) => ({
           id: l.itemId,
           price: l.price,

@@ -7,6 +7,7 @@ import type {
 
 import { canManageConnections } from '@/lib/rbac';
 import { getSessionUser, getWarehouses, serverFetch } from '@/lib/server-api';
+import { AlegraBodegaCard } from '../alegra-bodega-card';
 import { AlegraConnectionCard } from '../alegra-connection-card';
 import { AlegraFixedClientCard } from '../alegra-fixed-client-card';
 import { CertificateCard } from '../certificate-card';
@@ -57,6 +58,7 @@ export default async function WarehouseSettingsPage({
         {/* Remitente Skydropx: gestion SEPARADA de Coordinadora. */}
         <SkydropxSedeCard warehouseId={id} initial={skydropxSede ?? null} />
       </div>
+      <AlegraBodegaCard warehouseId={id} />
       <AlegraFixedClientCard warehouseId={id} />
       {/* "Tu vendedor en Alegra" YA NO vive aqui: es una preferencia por
           usuario, y esta pagina es solo de administradores — el gestor, que

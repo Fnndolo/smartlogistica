@@ -2,7 +2,10 @@ import { Body, Controller, Delete, Get, HttpCode, Param, Post, Put, Query } from
 import {
   alegraCredentialsSchema,
   saveSellerPrefSchema,
+  setAlegraBodegaSchema,
   setAlegraFixedClientSchema,
+  type AlegraBodega,
+  type AlegraBodegaOption,
   type AlegraConnectionSummary,
   type AlegraContact,
   type AlegraFixedClient,
@@ -13,6 +16,7 @@ import {
   type AlegraSyncResult,
   type AlegraTestResult,
   type SaveSellerPrefInput,
+  type SetAlegraBodegaInput,
   type SetAlegraFixedClientInput,
 } from '@smartlogistica/shared';
 
@@ -130,6 +134,34 @@ export class AlegraController {
     @CurrentUser() user: AuthContext,
   ): Promise<{ client: AlegraFixedClient | null }> {
     return { client: await this.alegra.setFixedClient(warehouseId, body.client, user) };
+  }
+
+  /** Bodega de Alegra desde la que factura la sede (null = la predeterminada). */
+  @Get('bodega')
+  async getBodega(
+    @Param('warehouseId') warehouseId: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ bodega: AlegraBodega | null }> {
+    return { bodega: await this.alegra.getBodegaFor(warehouseId, user) };
+  }
+
+  /** Bodegas activas de la empresa de Alegra de la sede, para elegir una. */
+  @Get('bodegas')
+  async listBodegas(
+    @Param('warehouseId') warehouseId: string,
+    @CurrentUser() user: AuthContext,
+  ): Promise<AlegraBodegaOption[]> {
+    return this.alegra.listBodegas(warehouseId, user);
+  }
+
+  /** Fija (o quita, con null) la bodega de la que se descuenta lo facturado. */
+  @Put('bodega')
+  async setBodega(
+    @Param('warehouseId') warehouseId: string,
+    @Body(new ZodValidationPipe(setAlegraBodegaSchema)) body: SetAlegraBodegaInput,
+    @CurrentUser() user: AuthContext,
+  ): Promise<{ bodega: AlegraBodega | null }> {
+    return { bodega: await this.alegra.setBodega(warehouseId, body.bodega, user) };
   }
 
   /** Buscador de contactos de Alegra para elegir el cliente fijo. */

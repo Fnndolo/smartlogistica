@@ -41,6 +41,12 @@ model Warehouse {
   // comprador. Ojo: el documento que se le manda al comprador por el chat sigue
   // llevando SU nombre — eso lo resuelve la plantilla del certificado.
   alegraFixedClient Json?
+  // BODEGA de Alegra desde la que factura la sede ({id, name}). Varias sedes
+  // comparten empresa de Alegra con bodegas distintas (PEDIDOS PEREIRA factura
+  // en la empresa de Pasto desde "Bodega Pereira"); sin bodega, Alegra usa la
+  // predeterminada y rechaza lo que solo esta en la otra, o descuenta el
+  // inventario de otra sede. null = la predeterminada de la empresa.
+  alegraBodega Json?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

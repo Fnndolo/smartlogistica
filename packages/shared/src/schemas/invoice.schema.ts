@@ -87,6 +87,35 @@ export const setAlegraFixedClientSchema = z.object({
 });
 export type SetAlegraFixedClientInput = z.infer<typeof setAlegraFixedClientSchema>;
 
+/**
+ * BODEGA de Alegra de una sede: de que bodega salen los productos que factura.
+ *
+ * Varias sedes pueden compartir una misma empresa de Alegra con bodegas
+ * distintas (PEDIDOS PEREIRA factura en la empresa de Pasto, desde "Bodega
+ * Pereira"). Sin esto la factura no lleva bodega y Alegra usa la
+ * predeterminada: un producto que solo existe en otra bodega se rechaza
+ * ("No se encontró el ítem ... en la bodega", code 3095) y uno que existe en
+ * las dos se descuenta del inventario de OTRA sede sin que nadie lo note.
+ * null = la predeterminada de la empresa, que es lo de antes.
+ */
+export const alegraBodegaSchema = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+});
+export type AlegraBodega = z.infer<typeof alegraBodegaSchema>;
+
+/** Una bodega de la empresa de Alegra, para el selector de la sede. */
+export const alegraBodegaOptionSchema = alegraBodegaSchema.extend({
+  isDefault: z.boolean(),
+});
+export type AlegraBodegaOption = z.infer<typeof alegraBodegaOptionSchema>;
+
+/** Fijar (o quitar, con null) la bodega desde la que factura una sede. */
+export const setAlegraBodegaSchema = z.object({
+  bodega: alegraBodegaSchema.nullable(),
+});
+export type SetAlegraBodegaInput = z.infer<typeof setAlegraBodegaSchema>;
+
 export const invoicePreviewSchema = z.object({
   client: z.object({
     name: z.string(),
