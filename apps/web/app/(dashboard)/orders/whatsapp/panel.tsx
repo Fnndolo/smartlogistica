@@ -446,7 +446,17 @@ export function WhatsappPanel({
   // Foto abierta en el visor, por ID del mensaje (ver "Visor de FOTOS" abajo).
   const [viewImageId, setViewImageId] = useState<string | null>(null);
   const [contactOpen, setContactOpen] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  // El campo CRECE con los saltos de linea hasta 140px; recien ahi aparece el
+  // scroll. Al enviar (text vacio) vuelve a una linea.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const max = 140;
+    el.style.height = `${Math.min(el.scrollHeight, max)}px`;
+    el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden';
+  }, [text]);
   const docRef = useRef<HTMLInputElement>(null);
   const mediaRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
@@ -1482,9 +1492,10 @@ export function WhatsappPanel({
             >
               <Smile className="h-6 w-6" />
             </button>
-            <input
+            <textarea
               ref={inputRef}
               value={text}
+              rows={1}
               onChange={(e) => {
                 setText(e.target.value);
                 // Desde la PRIMERA letra: "escribiendo..." a los demas admins
@@ -1498,7 +1509,8 @@ export function WhatsappPanel({
                   setText('');
                   return;
                 }
-                if (e.key === 'Enter' && !e.shiftKey) {
+                // Enter envia; Shift+Enter = salto de linea (como todo chat).
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   if (slashMode) {
                     // Enter en modo "/": elige la primera plantilla aprobada.
@@ -1510,7 +1522,9 @@ export function WhatsappPanel({
                 }
               }}
               placeholder='Escribe un mensaje — "/" para plantillas'
-              className="mx-1 h-10 min-w-0 flex-1 rounded-lg bg-white px-4 text-[16px] text-[#111b21] outline-none placeholder:text-[#667781] dark:bg-[#2a3942] dark:text-[#e9edef] dark:placeholder:text-[#8696a0] md:text-[14.5px]"
+              // Una linea mide EXACTO lo que el input de antes (40px) y crece
+              // sola con los saltos de linea (efecto de arriba) hasta 140px.
+              className="scrollbar-none mx-1 block max-h-[140px] min-h-10 min-w-0 flex-1 resize-none overflow-hidden rounded-lg bg-white px-4 py-[9px] text-[16px] leading-[22px] text-[#111b21] outline-none placeholder:text-[#667781] dark:bg-[#2a3942] dark:text-[#e9edef] dark:placeholder:text-[#8696a0] md:text-[14.5px]"
             />
             {text.trim() ? (
               /* Con texto: ENVIAR (boton verde como WhatsApp). */
