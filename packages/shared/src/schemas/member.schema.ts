@@ -4,8 +4,11 @@ import { z } from 'zod';
  * Equipo: los usuarios que tienen acceso al workspace (tenant).
  *
  * El rol vive en el control-plane (Membership) y el acceso por sede en la base
- * del tenant (WarehouseMember). OWNER (el propietario, el primero) y ADMIN ven
- * y hacen todo; un GESTOR entra a TODAS las sedes y hace todo el trabajo de
+ * del tenant (WarehouseMember). OWNER (Propietario) es el rol de arriba: hace
+ * todo lo de un admin y ademas es el UNICO que ve los registros (la bitacora,
+ * la actividad de los pedidos, el historial de ediciones y los mensajes
+ * eliminados); solo otro propietario puede crear, editar o retirar uno. ADMIN
+ * ve y hace todo lo demas; un GESTOR entra a TODAS las sedes y hace todo el trabajo de
  * pedidos (generales, tomar, chat, facturar en Alegra, generar guias) pero NO
  * toca configuracion, conexiones, equipo ni transfiere pedidos entre sedes; un
  * OPERATOR solo ve las sedes que se le asignen (detalle + conversacion, sin

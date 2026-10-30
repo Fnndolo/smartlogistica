@@ -36,6 +36,8 @@ import { OrderDrawer } from './order-drawer';
 import { EmptyState } from './empty-state';
 import { DateRangeFilter } from './date-range-filter';
 import { MountOrderDialog } from './mount-order-dialog';
+import { orderDrag, type DropTarget } from './order-drag';
+import { OrderDragLayer } from './order-drag-layer';
 import { OrdersPulseRow } from './orders-pulse';
 import { SearchElsewhere } from './search-elsewhere';
 import { SearchFilter } from './search-filter';
@@ -82,8 +84,14 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   // Pestaña de tienda: solo tiene sentido en generales (en la sede los pedidos
   // de las dos tiendas ya conviven a proposito).
   const account = scope.kind === 'general' ? (searchParams.get('account') ?? undefined) : undefined;
-  const sort = parseSort(searchParams.get('sort'), state === 'invoiced' ? 'invoiced' : 'date');
-  const dir = parseDir(searchParams.get('dir'));
+  // SEDE · Por preparar: SIEMPRE del mas antiguo al mas reciente (lo fuerza
+  // tambien el API). Pedido expreso: si se deja elegir, lo cambian y los
+  // pedidos viejos se quedan atras.
+  const sortLocked = scope.kind === 'warehouse' && state !== 'invoiced';
+  const sort = sortLocked
+    ? 'date'
+    : parseSort(searchParams.get('sort'), state === 'invoiced' ? 'invoiced' : 'date');
+  const dir = sortLocked ? 'asc' : parseDir(searchParams.get('dir'));
   const warehouseId = scope.kind === 'warehouse' ? scope.id : undefined;
 
   const queryKey = [
@@ -283,6 +291,7 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   };
 
   const handleSort = (field: OrderSortField) => {
+    if (sortLocked) return;
     const params = new URLSearchParams(searchParams.toString());
     if (sort === field) {
       // mismo campo -> alternar direccion
@@ -365,6 +374,46 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       }
     },
     [queryClient, items],
+  );
+
+  // ARRASTRAR a una sede del rail. Si la fila agarrada esta en la seleccion
+  // (de 2 o mas), viaja la seleccion completa; si no, solo esa fila — sin
+  // tener que seleccionarla antes. Mismos permisos que la barra de asignar.
+  const canDrag = canSelect;
+  const startDrag = useCallback(
+    (order: OrderSummary, at: { x: number; y: number }) => {
+      const ids =
+        selected.has(order.id) && selected.size > 1
+          ? [order.id, ...[...selected].filter((id) => id !== order.id)]
+          : [order.id];
+      const byId = new Map(items.map((o) => [o.id, o]));
+      const list = ids.map((id) => byId.get(id)).filter((o): o is OrderSummary => Boolean(o));
+      const nameOf = (id: string) => warehouses.find((w) => w.id === id)?.name ?? 'la sede';
+      orderDrag.start({
+        orderIds: list.map((o) => o.id),
+        fromWarehouseId: warehouseId ?? null,
+        canReturn: !list.some((o) => o.provider === 'manual'),
+        preview: list.map((o) => ({
+          externalId: o.externalId,
+          customerName: o.customerName,
+          product: o.items[0]?.name ?? null,
+        })),
+        origin: at,
+        drop: (target: DropTarget) => {
+          const destId = target === 'general' ? null : target;
+          void handleAssign(
+            list.map((o) => o.id),
+            destId,
+            destId === null
+              ? 'devueltos a generales'
+              : scope.kind === 'warehouse'
+                ? `transferidos a ${nameOf(destId)}`
+                : `asignados a ${nameOf(destId)}`,
+          );
+        },
+      });
+    },
+    [selected, items, warehouses, warehouseId, scope.kind, handleAssign],
   );
 
   const sectionLabel = state === 'invoiced' ? 'Facturados' : 'Por preparar';
@@ -501,6 +550,8 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
               showAddress={state !== 'invoiced'}
               // Plataforma (VTEX / Krediya / Mercado Libre...): solo en la sede.
               showPlatform={scope.kind === 'warehouse'}
+              sortLocked={sortLocked}
+              onDragOrder={canDrag ? startDrag : undefined}
             />
           </div>
 
@@ -538,6 +589,8 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
           }}
         />
       ) : null}
+
+      {canDrag ? <OrderDragLayer warehouses={warehouses} /> : null}
 
       <OrderDrawer
         order={openOrder}

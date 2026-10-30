@@ -899,14 +899,15 @@ export class AlegraService {
    *   (balance 0 -> queda cerrada/cobrada) y anotacion "ADDI".
    * - Pedidos MONTADOS a mano (`opts.manualPayments`): pagos elegidos por el
    *   usuario (hasta 3 cuentas de Alegra); si la suma no llega al total, la
-   *   factura queda ABIERTA por el resto (p. ej. recaudo contraentrega).
+   *   factura queda ABIERTA por el resto (p. ej. recaudo contraentrega). Su
+   *   anotacion es la plataforma del pedido (`opts.anotation`: KREDIYA...).
    */
   async createInvoiceForWarehouse(
     warehouseId: string,
     client: InvoiceClient,
     lines: CreateInvoiceLine[],
     auth: AuthContext,
-    opts?: { manualPayments?: InvoicePaymentInput[] },
+    opts?: { manualPayments?: InvoicePaymentInput[]; anotation?: string | null },
   ): Promise<{
     result: InvoiceResult;
     /** Forma/medio de pago REALES de la factura (ya traducidos), para el Certificado. */
@@ -1034,8 +1035,13 @@ export class AlegraService {
         date: today,
         dueDate: today,
         client: { id: clientId },
-        // En marketplace, "anotaciones" siempre dice ADDI; montado a mano, nada.
-        ...(manual ? {} : { anotation: 'ADDI' }),
+        // "Anotaciones": en marketplace siempre ADDI; montado a mano, la
+        // plataforma que se eligio al montarlo (sin plataforma, nada).
+        ...(manual
+          ? opts?.anotation
+            ? { anotation: opts.anotation }
+            : {}
+          : { anotation: 'ADDI' }),
         ...(sellerPref ? { seller: Number(sellerPref.sellerId) || sellerPref.sellerId } : {}),
         // La bodega va en la RAIZ de la factura: verificado con borradores,
         // Alegra ignora la que viaja en cada item y rechaza igual (code 3095).

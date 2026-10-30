@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, api } from '@/lib/api-client';
+import { isAdmin } from '@/lib/rbac';
 import { cn } from '@/lib/utils';
 
 import {
@@ -46,7 +47,7 @@ const PROVIDERS = aiProviderSchema.options;
 export function AiConnectionCard({ initial }: { initial?: AiConnectionSummary | null }) {
   const qc = useQueryClient();
   const user = useCurrentUser();
-  const canManage = user?.role === 'OWNER';
+  const canManage = isAdmin(user?.role);
 
   const {
     data: connection,

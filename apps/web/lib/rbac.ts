@@ -5,6 +5,9 @@ import type { TenantRole } from '@smartlogistica/shared';
  * quien manda es el server (aqui solo decidimos que se muestra, para no
  * ofrecerle a nadie un boton que terminaria en 403).
  *
+ * - OWNER (Propietario) = el rol de arriba: todo lo de un admin y ademas el
+ *   UNICO que ve los registros (bitacora, actividad de los pedidos, historial
+ *   de ediciones, mensajes eliminados). Solo otro propietario nombra uno.
  * - OWNER / ADMIN = todo: configuracion (sedes, conexiones, plantillas,
  *   catalogos, tarifas), equipo y transferencias entre sedes.
  * - GESTOR = entra a TODAS las sedes y hace todo el trabajo de PEDIDOS
@@ -27,6 +30,20 @@ export type MaybeRole = TenantRole | null | undefined;
  */
 export function isAdmin(role: MaybeRole): boolean {
   return role === 'OWNER' || role === 'ADMIN';
+}
+
+/** El PROPIETARIO, el rol de arriba (espejo de isOwner() del API). */
+export function isOwner(role: MaybeRole): boolean {
+  return role === 'OWNER';
+}
+
+/**
+ * RASTRO: Registros (bitacora), la pestaña Actividad del pedido, el historial
+ * de ediciones de un mensaje y los mensajes eliminados en rojo. Solo el
+ * propietario — ni los admins (espejo de canSeeAudit() del API).
+ */
+export function canSeeAudit(role: MaybeRole): boolean {
+  return isOwner(role);
 }
 
 /** Ve TODAS las sedes y los pedidos generales (no solo las sedes asignadas). */
@@ -94,7 +111,8 @@ export const ROLE_LABEL: Record<TenantRole, string> = {
 };
 
 export const ROLE_HELP: Record<TenantRole, string> = {
-  OWNER: 'Ve y gestiona todo. Es el dueño del workspace (el primer usuario).',
+  OWNER:
+    'Por encima del admin: hace todo y es el único que ve los registros (bitácora, actividad, ediciones y mensajes eliminados).',
   ADMIN: 'Ve y gestiona todo: sedes, conexiones, equipo y facturación.',
   GESTOR:
     'Trabaja los pedidos de todas las sedes: factura y genera guías. No gestiona equipo ni conexiones, y no transfiere pedidos entre sedes.',

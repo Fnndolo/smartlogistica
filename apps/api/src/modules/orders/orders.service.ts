@@ -58,7 +58,7 @@ import { PDFDocument } from 'pdf-lib';
 import { Prisma } from '.prisma/tenant-client';
 import type { PrismaClient } from '.prisma/tenant-client';
 
-import { canManageOrders, canTransferOrders, isAdmin } from '../../common/rbac';
+import { canManageOrders, canSeeAudit, canTransferOrders, isAdmin } from '../../common/rbac';
 import type { AuthContext } from '../../common/types/authenticated-request';
 import { getTenantContext } from '../../infrastructure/tenant-context';
 import { ControlPlaneService } from '../../infrastructure/prisma/control-plane.service';
@@ -67,6 +67,7 @@ import { RealtimeService } from '../../infrastructure/realtime/realtime.service'
 import { CatalogService } from '../../infrastructure/catalog/catalog.service';
 import { StorageService } from '../../infrastructure/storage/storage.service';
 import { AiConnectionService } from '../ai/ai-connection.service';
+import { actorOf, AuditService } from '../audit/audit.service';
 import { type ImageMime } from '../ai/ai-vision-client.service';
 import { AlegraService, type InvoiceClient } from '../marketplaces/alegra/alegra.service';
 import { ExternalCertificateService } from '../marketplaces/alegra/external-certificate.service';
@@ -106,6 +107,31 @@ type OrderWithItems = Prisma.OrderGetPayload<{ include: { items: true } }>;
 type OrderMessageRow = Prisma.OrderMessageGetPayload<Record<string, never>>;
 type OrderEventRow = Prisma.OrderEventGetPayload<Record<string, never>>;
 type MessageReactionRow = Prisma.MessageReactionGetPayload<Record<string, never>>;
+
+/** Copia de un mensaje borrado del chat, tal como queda en la bitacora. */
+interface DeletedMessageSnapshot {
+  id: string;
+  kind: string;
+  authorId: string | null;
+  authorName: string | null;
+  body: string | null;
+  caption: string | null;
+  attachmentKey: string | null;
+  attachmentMime: string | null;
+  imeis: string[];
+  mentions: string[];
+  replyToId: string | null;
+  editedAt: string | null;
+  createdAt: string;
+}
+
+/** Texto del aviso de un adjunto sin pie de foto ("📷 Foto", "🎥 Video"...). */
+function attachmentLabel(mime: string, name: string): string {
+  if (mime.startsWith('image/')) return '📷 Foto';
+  if (mime.startsWith('video/')) return '🎥 Video';
+  if (mime.startsWith('audio/')) return '🎤 Audio';
+  return `📎 ${name}`;
+}
 
 /** Nombre visible del usuario para chat/actividad (cae al correo si no tiene). */
 function displayName(auth: AuthContext): string {
@@ -191,6 +217,7 @@ export class OrdersService {
     private readonly skydropx: SkydropxService,
     private readonly dispatchRelation: DispatchRelationService,
     private readonly deliverySupport: DeliverySupportService,
+    private readonly audit: AuditService,
   ) {}
 
   async list(query: ListOrdersQuery, auth: AuthContext): Promise<ListOrdersResponse> {
@@ -289,7 +316,13 @@ export class OrdersService {
       where.OR = this.searchConditions(q);
     }
 
-    const orderBy = this.buildOrderBy(query.sort, query.dir);
+    // SEDE · Por preparar: SIEMPRE del mas antiguo al mas reciente, sin opcion
+    // de cambiarlo (pedido expreso: si se deja elegir, lo cambian y los
+    // pedidos viejos se quedan atras). El id desempata para paginar estable.
+    const orderBy: Prisma.OrderOrderByWithRelationInput[] =
+      query.warehouse && query.state !== 'invoiced'
+        ? [{ marketplaceCreatedAt: 'asc' }, { id: 'asc' }]
+        : [this.buildOrderBy(query.sort, query.dir)];
     const skip = (query.page - 1) * query.limit;
 
     const [rows, total] = await Promise.all([
@@ -1150,6 +1183,11 @@ export class OrdersService {
     }
 
     // Keys de adjuntos ANTES de borrar (la cascada se lleva los mensajes).
+    const sede = order.warehouseId
+      ? await prisma.warehouse
+          .findUnique({ where: { id: order.warehouseId }, select: { name: true } })
+          .catch(() => null)
+      : null;
     const attachments = await prisma.orderMessage.findMany({
       where: { orderId, attachmentKey: { not: null } },
       select: { attachmentKey: true },
@@ -1175,6 +1213,18 @@ export class OrdersService {
     }
 
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+    // La cascada borro tambien su actividad: esta fila es lo unico que queda.
+    await this.audit.log(actorOf(auth), {
+      action: 'order.deleted',
+      resource: `order:${orderId}`,
+      summary: `Eliminó el pedido montado a mano${sede ? ` de ${sede.name}` : ''}`,
+      detail: hasDocs ? 'Ya tenía factura o guía: hay que anularlas aparte.' : null,
+      data: {
+        externalId: order.externalId,
+        customerName: order.customerName,
+        warehouseId: order.warehouseId,
+      },
+    });
   }
 
   // === Drawer por pedido: detalle + conversacion + actividad ===
@@ -1208,7 +1258,49 @@ export class OrdersService {
       orderBy: { createdAt: 'asc' },
       include: { reactions: true },
     });
-    return Promise.all(rows.map((m) => this.toMessage(m, auth.userId)));
+    const live = await Promise.all(rows.map((m) => this.toMessage(m, auth.userId)));
+    if (!canSeeAudit(auth)) return live;
+    // El PROPIETARIO sigue viendo lo que se borro, en su sitio y en rojo.
+    const deleted = await this.deletedMessages(orderId);
+    if (deleted.length === 0) return live;
+    return [...live, ...deleted].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  /**
+   * Mensajes BORRADOS del chat de un pedido, tal como estaban (la foja que
+   * dejo deleteMessage en la bitacora). Solo para el propietario.
+   */
+  private async deletedMessages(orderId: string): Promise<OrderMessageDto[]> {
+    const gone = await this.audit.forResource(['chat.message_deleted'], `order:${orderId}`);
+    const out = await Promise.all(
+      gone.map(async (g): Promise<OrderMessageDto | null> => {
+        const snap = g.meta.message as DeletedMessageSnapshot | undefined;
+        if (!snap?.id || !snap.createdAt) return null;
+        const dto = await this.toMessage({
+          id: snap.id,
+          orderId,
+          authorId: snap.authorId ?? '',
+          authorName: snap.authorName ?? '',
+          kind: snap.kind ?? 'text',
+          body: snap.body ?? null,
+          caption: snap.caption ?? null,
+          attachmentKey: snap.attachmentKey ?? null,
+          attachmentUrl: null,
+          attachmentMime: snap.attachmentMime ?? null,
+          imeis: snap.imeis ?? [],
+          mentions: snap.mentions ?? [],
+          replyToId: snap.replyToId ?? null,
+          editedAt: snap.editedAt ? new Date(snap.editedAt) : null,
+          createdAt: new Date(snap.createdAt),
+        }).catch(() => null);
+        if (!dto) return null;
+        return {
+          ...dto,
+          deleted: { at: g.createdAt.toISOString(), byName: g.actorName ?? 'Alguien' },
+        };
+      }),
+    );
+    return out.filter((m): m is OrderMessageDto => m !== null);
   }
 
   async postMessage(
@@ -1217,15 +1309,53 @@ export class OrdersService {
     auth: AuthContext,
   ): Promise<OrderMessageDto> {
     const order = await this.loadAccessibleOrder(orderId, auth);
-    const { tenantId, prisma } = getTenantContext();
-    let mentions = await this.validMentions(tenantId, input.mentions);
+    const { prisma } = getTenantContext();
+    const mentionAll = input.mentionAll === true;
+    const { mentions, superRecipients } = await this.resolveMentions(
+      order,
+      input.mentions,
+      mentionAll,
+      auth,
+    );
+    const replyTo = await this.resolveReplyTo(orderId, input.replyToId);
+    const msg = await prisma.orderMessage.create({
+      data: {
+        orderId,
+        authorId: auth.userId,
+        authorName: displayName(auth),
+        kind: 'text',
+        body: input.body,
+        mentions,
+        replyToId: replyTo?.id ?? null,
+      },
+    });
+    await this.announceMessage(order, msg, {
+      mentions,
+      superRecipients,
+      mentionAll,
+      replyTo,
+      preview: input.body ?? '',
+      auth,
+    });
+    return this.toMessage(msg, auth.userId);
+  }
 
-    // SUPER MENCION (@todos): destinatarios = todos los que ven todas las sedes
-    // (admins y gestores) + los operadores con acceso a la sede del pedido
-    // (nunca el autor). Se agregan a mentions (asi cuentan en /mentions y
-    // no-leidos) y se crean alertas persistentes.
+  /**
+   * Menciones validas del mensaje. Con SUPER MENCION (@todos) se suman como
+   * destinatarios todos los que ven todas las sedes (admins y gestores) + los
+   * operadores con acceso a la sede del pedido (nunca el autor): asi cuentan en
+   * /mentions y en no-leidos, y ademas reciben su alerta persistente.
+   */
+  private async resolveMentions(
+    order: { warehouseId: string | null },
+    requested: string[] | undefined,
+    mentionAll: boolean,
+    auth: AuthContext,
+  ): Promise<{ mentions: string[]; superRecipients: string[] }> {
+    const { tenantId, prisma } = getTenantContext();
+    let mentions = await this.validMentions(tenantId, requested);
     let superRecipients: string[] = [];
-    if (input.mentionAll) {
+    if (mentionAll) {
       const memberships = await this.control.membership.findMany({
         where: { tenantId },
         select: { userId: true, role: true },
@@ -1247,35 +1377,54 @@ export class OrdersService {
         .map((m) => m.userId);
       mentions = [...new Set([...mentions, ...superRecipients])];
     }
+    return { mentions, superRecipients };
+  }
 
-    // La cita solo vale si el mensaje citado es de ESTE pedido.
-    const replyTo = input.replyToId
-      ? await prisma.orderMessage.findFirst({
-          where: { id: input.replyToId, orderId },
-          select: { id: true, authorId: true },
-        })
-      : null;
-    const msg = await prisma.orderMessage.create({
-      data: {
-        orderId,
-        authorId: auth.userId,
-        authorName: displayName(auth),
-        kind: 'text',
-        body: input.body,
-        mentions,
-        replyToId: replyTo?.id ?? null,
-      },
+  /** La cita solo vale si el mensaje citado es de ESTE pedido. */
+  private async resolveReplyTo(
+    orderId: string,
+    replyToId: string | undefined,
+  ): Promise<{ id: string; authorId: string } | null> {
+    if (!replyToId) return null;
+    const { prisma } = getTenantContext();
+    return prisma.orderMessage.findFirst({
+      where: { id: replyToId, orderId },
+      select: { id: true, authorId: true },
     });
+  }
+
+  /**
+   * Avisa de un mensaje NUEVO del chat (texto o adjunto): super mencion, SSE
+   * para los chats abiertos y las campanas, marca de leido del autor y web
+   * push. Antes esto vivia dentro de postMessage y un adjunto con texto no
+   * avisaba a nadie: la mencion de la foto se perdia.
+   */
+  private async announceMessage(
+    order: { id: string; externalId: string; customerName: string; warehouseId: string | null },
+    msg: { id: string; kind: string; createdAt: Date },
+    opts: {
+      mentions: string[];
+      superRecipients: string[];
+      mentionAll: boolean;
+      replyTo: { id: string; authorId: string } | null;
+      /** Texto del aviso: el cuerpo, o el pie de foto, o "📷 Foto". */
+      preview: string;
+      auth: AuthContext;
+    },
+  ): Promise<void> {
+    const { tenantId, prisma } = getTenantContext();
+    const { mentions, superRecipients, mentionAll, replyTo, auth } = opts;
+    const orderId = order.id;
     // Alertas de SUPER MENCION: una fila por destinatario. Persisten hasta que
     // cada quien la cierre — el que no esta en la plataforma la ve al volver.
-    if (input.mentionAll && superRecipients.length > 0) {
+    if (mentionAll && superRecipients.length > 0) {
       await prisma.superMentionAlert.createMany({
         data: superRecipients.map((userId) => ({
           orderId,
           messageId: msg.id,
           userId,
           authorName: displayName(auth),
-          preview: (input.body ?? '').slice(0, 140),
+          preview: opts.preview.slice(0, 140),
         })),
       });
     }
@@ -1298,16 +1447,19 @@ export class OrdersService {
       customerName: order.customerName,
       warehouseId: order.warehouseId,
       messageId: msg.id,
+      // 'text' se inyecta tal cual en el chat abierto; un adjunto no (su URL
+      // va firmada): el receptor lo trae con un refetch.
+      messageKind: msg.kind,
       authorId: auth.userId,
       authorName: displayName(auth),
       // Cuerpo COMPLETO: el chat abierto del receptor lo inyecta directo a su
       // cache (aparece al instante, sin refetch).
-      body: input.body ?? '',
+      body: opts.preview,
       mentions,
       replyToId: replyTo?.id ?? null,
       replyToAuthorId: replyTo?.authorId ?? null,
       participantIds: participants,
-      superMention: input.mentionAll === true,
+      superMention: mentionAll,
       createdAt: msg.createdAt.toISOString(),
     });
     // Quien escribe obviamente ya "leyo" el hilo -> marcar leido para no contarse a si mismo.
@@ -1320,7 +1472,7 @@ export class OrdersService {
     const url = order.warehouseId
       ? `/warehouses/${order.warehouseId}?order=${orderId}`
       : `/orders?order=${orderId}`;
-    const preview = (input.body ?? '').slice(0, 120);
+    const preview = opts.preview.slice(0, 120);
     const sede = order.warehouseId
       ? ((
           await prisma.warehouse.findUnique({
@@ -1337,7 +1489,7 @@ export class OrdersService {
     );
     void Promise.all([
       this.push.sendToUsers([...mentioned], {
-        title: input.mentionAll
+        title: mentionAll
           ? `📢 SÚPER MENCIÓN · ${sede} · ${order.customerName}`
           : `${sede} · ${order.customerName}`,
         body: preview,
@@ -1357,8 +1509,6 @@ export class OrdersService {
         sede,
       }),
     ]).catch(() => undefined);
-
-    return this.toMessage(msg, auth.userId);
   }
 
   /**
@@ -1802,7 +1952,7 @@ export class OrdersService {
    * Edita el texto de un mensaje del chat. SOLO su autor, y solo mensajes de
    * texto (fotos/documentos/sistema no). El texto anterior se guarda en
    * OrderMessageEdit: todos ven "editado", pero el historial de lo que decia
-   * solo lo abren los administradores (messageHistory).
+   * solo lo abre el propietario (messageHistory).
    *
    * Las menciones se recalculan con el texto nuevo, pero editar no notifica:
    * ni push ni super mencion — eso queda para mensajes nuevos.
@@ -1863,14 +2013,14 @@ export class OrdersService {
     return this.toMessage(fresh, auth.userId);
   }
 
-  /** Versiones de un mensaje editado, de la original a la actual. Solo admins. */
+  /** Versiones de un mensaje editado, de la original a la actual. Solo el propietario. */
   async messageHistory(
     orderId: string,
     messageId: string,
     auth: AuthContext,
   ): Promise<OrderMessageHistory> {
-    if (!isAdmin(auth)) {
-      throw new ForbiddenException('Solo los administradores ven el historial de un mensaje.');
+    if (!canSeeAudit(auth)) {
+      throw new ForbiddenException('Solo el propietario ve el historial de un mensaje.');
     }
     await this.loadAccessibleOrder(orderId, auth);
     const { prisma } = getTenantContext();
@@ -1900,8 +2050,11 @@ export class OrdersService {
 
   /**
    * Elimina un mensaje del chat (incluidas las fotos). Puede hacerlo el autor del
-   * mensaje o un administrador. Si tiene adjunto en storage, tambien lo borra.
-   * No se permite borrar mensajes de sistema.
+   * mensaje o un administrador. No se permite borrar mensajes de sistema.
+   *
+   * Para el equipo el mensaje desaparece, pero NO se pierde: queda copiado en la
+   * bitacora (y su adjunto sigue en storage) para que el PROPIETARIO lo siga
+   * viendo en el chat, en rojo, con quien y cuando lo borro.
    */
   async deleteMessage(orderId: string, messageId: string, auth: AuthContext): Promise<void> {
     await this.loadAccessibleOrder(orderId, auth);
@@ -1917,14 +2070,52 @@ export class OrdersService {
       throw new ForbiddenException('Solo el autor o un administrador puede eliminar el mensaje.');
     }
 
-    if (msg.attachmentKey && this.storage.isConfigured()) {
-      await this.storage.delete(msg.attachmentKey).catch(() => null);
-    }
     await prisma.orderMessage.delete({ where: { id: messageId } });
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+
+    const order = await prisma.order
+      .findUnique({ where: { id: orderId }, select: { externalId: true, customerName: true } })
+      .catch(() => null);
+    const snapshot: DeletedMessageSnapshot = {
+      id: msg.id,
+      kind: msg.kind,
+      authorId: msg.authorId,
+      authorName: msg.authorName,
+      body: msg.body,
+      caption: msg.caption,
+      attachmentKey: msg.attachmentKey,
+      attachmentMime: msg.attachmentMime,
+      imeis: msg.imeis,
+      mentions: msg.mentions,
+      replyToId: msg.replyToId,
+      editedAt: msg.editedAt?.toISOString() ?? null,
+      createdAt: msg.createdAt.toISOString(),
+    };
+    await this.audit.log(actorOf(auth), {
+      action: 'chat.message_deleted',
+      resource: `order:${orderId}`,
+      summary:
+        msg.authorId === auth.userId
+          ? 'Eliminó un mensaje suyo del chat'
+          : `Eliminó un mensaje de ${msg.authorName} del chat`,
+      // Lo que decia: el texto entero, o "📎 archivo · pie de foto".
+      detail:
+        msg.kind === 'text'
+          ? msg.body
+          : [messagePreview(msg.kind, msg.body), msg.caption].filter(Boolean).join(' · '),
+      data: {
+        message: snapshot,
+        externalId: order?.externalId ?? null,
+        customerName: order?.customerName ?? null,
+      },
+    });
   }
 
+  /** Linea de tiempo del pedido (pestaña Actividad). Solo el propietario. */
   async listEvents(orderId: string, auth: AuthContext): Promise<OrderEventDto[]> {
+    if (!canSeeAudit(auth)) {
+      throw new ForbiddenException('Solo el propietario ve la actividad del pedido.');
+    }
     await this.loadAccessibleOrder(orderId, auth);
     const { prisma } = getTenantContext();
     const rows = await prisma.orderEvent.findMany({
@@ -2004,8 +2195,9 @@ export class OrdersService {
     file: { buffer: Buffer; mimetype: string; originalname?: string },
     auth: AuthContext,
     caption?: string,
+    extras: { mentions?: string[]; mentionAll?: boolean; replyToId?: string } = {},
   ): Promise<OrderMessageDto> {
-    await this.loadAccessibleOrder(orderId, auth);
+    const order = await this.loadAccessibleOrder(orderId, auth);
     const { tenantId, prisma } = getTenantContext();
 
     if (!this.storage.isConfigured()) {
@@ -2022,6 +2214,15 @@ export class OrdersService {
 
     await this.storage.put(key, file.buffer, mime, contentDisposition(originalName));
 
+    // El pie de foto se trata como cualquier texto del chat: sus @menciones
+    // notifican, @todos es super mencion y puede responder citando.
+    const text = caption?.trim().slice(0, 2000) || null;
+    const mentionAll = Boolean(text) && extras.mentionAll === true;
+    const { mentions, superRecipients } = text
+      ? await this.resolveMentions(order, extras.mentions, mentionAll, auth)
+      : { mentions: [] as string[], superRecipients: [] as string[] };
+    const replyTo = await this.resolveReplyTo(orderId, extras.replyToId);
+
     const msg = await prisma.orderMessage.create({
       data: {
         orderId,
@@ -2030,14 +2231,23 @@ export class OrdersService {
         kind: 'file',
         body: originalName,
         // Texto que acompaña al adjunto (estilo WhatsApp): mismo mensaje.
-        caption: caption?.trim().slice(0, 2000) || null,
+        caption: text,
         attachmentKey: key,
         attachmentMime: mime,
         imeis: [],
+        mentions,
+        replyToId: replyTo?.id ?? null,
       },
     });
-    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
-    return this.toMessage(msg);
+    await this.announceMessage(order, msg, {
+      mentions,
+      superRecipients,
+      mentionAll,
+      replyTo,
+      preview: text ?? attachmentLabel(mime, originalName),
+      auth,
+    });
+    return this.toMessage(msg, auth.userId);
   }
 
   /** Busca codigos (IMEI/serial) en el catalogo — para re-mostrar los matches. */
@@ -2373,7 +2583,14 @@ export class OrdersService {
       client,
       input.lines,
       auth,
-      manual ? { manualPayments: input.payments ?? [] } : undefined,
+      manual
+        ? {
+            manualPayments: input.payments ?? [],
+            // Las de marketplace dicen ADDI; las montadas a mano, la plataforma
+            // que se eligio al montarlas (Krediya, Mercado Libre...).
+            anotation: manualPlatformOf(order)?.name.toUpperCase() ?? null,
+          }
+        : undefined,
     );
 
     // Registrar en el pedido: mensaje de sistema + evento en la actividad.
@@ -4197,6 +4414,7 @@ export class OrdersService {
       replyToId: m.replyToId ?? null,
       reactions: groupReactions(m.reactions ?? [], viewerId),
       editedAt: m.editedAt?.toISOString() ?? null,
+      deleted: null,
       createdAt: m.createdAt.toISOString(),
     };
   }

@@ -70,6 +70,8 @@ export const waMessageSchema = z.object({
   error: z.string().nullable().default(null),
   /** Editado desde el celular ("Editado" junto a la hora). */
   edited: z.boolean().default(false),
+  /** Eliminado DE LA PLATAFORMA. Solo le llega al propietario, que lo ve en rojo. */
+  deleted: z.object({ at: z.string(), byName: z.string() }).nullable().default(null),
   /** Destacado (estrella), como en WhatsApp. */
   starred: z.boolean().default(false),
   createdAt: z.string(),

@@ -12,11 +12,20 @@ import type {
   UpdateMemberInput,
 } from '@smartlogistica/shared';
 
-import { isAdmin } from '../../common/rbac';
+import { isAdmin, isOwner } from '../../common/rbac';
 import type { AuthContext } from '../../common/types/authenticated-request';
 import { ControlPlaneService } from '../../infrastructure/prisma/control-plane.service';
 import { getTenantContext } from '../../infrastructure/tenant-context';
+import { actorOf, AuditService } from '../audit/audit.service';
 import { PasswordService } from '../auth/password.service';
+
+/** Nombre del rol en la bitacora (mismo vocabulario que la pantalla de Equipo). */
+const ROLE_NAME: Record<string, string> = {
+  OWNER: 'Propietario',
+  ADMIN: 'Admin',
+  GESTOR: 'Gestor',
+  OPERATOR: 'Operador',
+};
 
 /**
  * Equipo del workspace.
@@ -31,6 +40,7 @@ export class MembersService {
   constructor(
     private readonly prisma: ControlPlaneService,
     private readonly passwords: PasswordService,
+    private readonly audit: AuditService,
   ) {}
 
   private tenantId(auth: AuthContext): string {
@@ -47,6 +57,19 @@ export class MembersService {
   private assertOwner(auth: AuthContext): void {
     if (!isAdmin(auth)) {
       throw new ForbiddenException('Solo administradores pueden gestionar el equipo');
+    }
+  }
+
+  /**
+   * Un PROPIETARIO solo lo nombra, lo edita o lo retira otro propietario. Sin
+   * esto un admin podria degradarlo (o ascenderse) y el rol perderia sentido:
+   * el que mira los registros no puede depender de quien es mirado.
+   */
+  private assertCanTouchOwner(auth: AuthContext): void {
+    if (!isOwner(auth)) {
+      throw new ForbiddenException(
+        'Solo un propietario puede nombrar, editar o retirar a un propietario.',
+      );
     }
   }
 
@@ -93,6 +116,7 @@ export class MembersService {
    */
   async create(input: CreateMemberInput, auth: AuthContext): Promise<MemberSummary> {
     this.assertOwner(auth);
+    if (input.role === 'OWNER') this.assertCanTouchOwner(auth);
     const tenantId = this.tenantId(auth);
 
     const existing = await this.prisma.user.findUnique({
@@ -128,6 +152,17 @@ export class MembersService {
 
     const warehouseIds = await this.setWarehouses(user.id, input.role, input.warehouseIds);
 
+    const sedes = await this.warehouseNames(warehouseIds);
+    await this.audit.log(actorOf(auth), {
+      action: 'member.created',
+      resource: `user:${user.id}`,
+      summary: `Agregó a ${user.name ?? user.email} al equipo como ${ROLE_NAME[input.role] ?? input.role}`,
+      detail: [user.email, sedes.length ? `Sedes: ${sedes.join(', ')}` : null]
+        .filter(Boolean)
+        .join('\n'),
+      data: { userId: user.id, email: user.email, role: input.role, warehouseIds },
+    });
+
     return {
       userId: user.id,
       email: user.email,
@@ -152,10 +187,13 @@ export class MembersService {
 
     const role = input.role ?? membership.role;
 
-    // No dejar el workspace sin propietario (incluye degradarte a ti mismo).
+    if (membership.role === 'OWNER' || role === 'OWNER') this.assertCanTouchOwner(auth);
+    // No dejar el workspace sin propietario (incluye degradarte a ti mismo):
+    // nadie podria volver a nombrar uno.
     if (membership.role === 'OWNER' && role !== 'OWNER') {
       await this.assertNotLastOwner(tenantId, userId);
     }
+    const prevWarehouses = await this.currentWarehouses(userId, membership.role);
 
     const updated =
       input.role && input.role !== membership.role
@@ -177,6 +215,33 @@ export class MembersService {
       input.warehouseIds || role !== membership.role
         ? await this.setWarehouses(userId, role, input.warehouseIds ?? [])
         : await this.currentWarehouses(userId, role);
+
+    // Bitacora: solo lo que CAMBIO (guardar sin tocar nada no deja fila).
+    const changes: string[] = [];
+    if (updated.role !== membership.role) {
+      changes.push(
+        `Rol: ${ROLE_NAME[membership.role] ?? membership.role} → ${ROLE_NAME[updated.role] ?? updated.role}`,
+      );
+    }
+    if (name !== membership.user.name) {
+      changes.push(`Nombre: ${membership.user.name ?? '—'} → ${name ?? '—'}`);
+    }
+    const sameSedes =
+      prevWarehouses.length === warehouseIds.length &&
+      prevWarehouses.every((id) => warehouseIds.includes(id));
+    if (!sameSedes) {
+      const names = await this.warehouseNames(warehouseIds);
+      changes.push(`Sedes: ${names.length ? names.join(', ') : 'ninguna'}`);
+    }
+    if (changes.length > 0) {
+      await this.audit.log(actorOf(auth), {
+        action: 'member.updated',
+        resource: `user:${userId}`,
+        summary: `Editó a ${name ?? membership.user.email}`,
+        detail: changes.join('\n'),
+        data: { userId, role: updated.role, previousRole: membership.role, warehouseIds },
+      });
+    }
 
     return {
       userId,
@@ -200,14 +265,26 @@ export class MembersService {
 
     const membership = await this.prisma.membership.findUnique({
       where: { userId_tenantId: { userId, tenantId } },
+      include: { user: { select: { email: true, name: true } } },
     });
     if (!membership) throw new NotFoundException('Ese miembro no existe en este workspace');
-    if (membership.role === 'OWNER') await this.assertNotLastOwner(tenantId, userId);
+    if (membership.role === 'OWNER') {
+      this.assertCanTouchOwner(auth);
+      await this.assertNotLastOwner(tenantId, userId);
+    }
 
     await this.prisma.membership.delete({ where: { userId_tenantId: { userId, tenantId } } });
 
     const { prisma } = getTenantContext();
     await prisma.warehouseMember.deleteMany({ where: { userId } });
+
+    await this.audit.log(actorOf(auth), {
+      action: 'member.removed',
+      resource: `user:${userId}`,
+      summary: `Retiró a ${membership.user.name ?? membership.user.email} del equipo`,
+      detail: `${membership.user.email} · era ${ROLE_NAME[membership.role] ?? membership.role}`,
+      data: { userId, email: membership.user.email, role: membership.role },
+    });
   }
 
   /** Cambia la clave del propio usuario. Exige la actual. */
@@ -234,6 +311,16 @@ export class MembersService {
         'El workspace debe tener al menos un propietario. Nombra otro antes de hacer este cambio.',
       );
     }
+  }
+
+  /** Nombres de sedes para la bitacora (ids sueltos no le dicen nada a nadie). */
+  private async warehouseNames(ids: string[]): Promise<string[]> {
+    if (ids.length === 0) return [];
+    const { prisma } = getTenantContext();
+    const rows = await prisma.warehouse
+      .findMany({ where: { id: { in: ids } }, select: { name: true } })
+      .catch(() => []);
+    return rows.map((w) => w.name);
   }
 
   private async currentWarehouses(userId: string, role: string): Promise<string[]> {

@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
+import { AnimatePresence, motion } from 'framer-motion';
 import {
   Boxes,
   Building2,
@@ -12,6 +13,7 @@ import {
   MessageCircle,
   MessagesSquare,
   Plus,
+  ScrollText,
   Settings,
   Users,
 } from 'lucide-react';
@@ -24,6 +26,7 @@ import {
   canManageMembers,
   canManageOrders,
   canSeeAllWarehouses,
+  canSeeAudit,
   canUseWhatsapp,
   isAdmin,
   roleLabel,
@@ -32,6 +35,13 @@ import {
 import { useCurrentUser } from '@/components/providers/current-user-provider';
 
 import { LogoutButton } from './_components/logout-button';
+import {
+  isValidTarget,
+  useLastDrop,
+  useOrderDrag,
+  type DropTarget,
+  type OrderDragState,
+} from './orders/order-drag';
 // import { GlobalSearch } from './global-search';
 import { useChats } from './use-chats';
 
@@ -50,6 +60,8 @@ const NAV_ITEMS = [
   // mismo mirado de otra forma, y separadas obligaban a elegir en cual entrar
   // antes de saber que habia en cada una.
   { href: '/chats', label: 'Chats', icon: MessagesSquare, show: everyone },
+  // La bitacora: solo el propietario (ni los admins).
+  { href: '/registros', label: 'Registros', icon: ScrollText, show: canSeeAudit },
   { href: '/connections', label: 'Conexiones', icon: Link2, show: canManageConnections },
   { href: '/settings/team', label: 'Equipo', icon: Users, show: canManageMembers },
   { href: '/settings', label: 'Ajustes', icon: Settings, show: everyone },
@@ -73,6 +85,43 @@ const ITEM_ACTIVE = 'bg-gradient-to-r from-accent/[0.34] to-accent/[0.14] text-w
  */
 const SUB_BASE =
   'flex items-center rounded-[9px] px-[9px] py-1.5 text-[12.5px] font-medium transition-colors [transition-duration:140ms]';
+
+/**
+ * Como se ve un destino mientras se ARRASTRAN pedidos: los validos con un
+ * contorno punteado (ahi se puede soltar), el que esta bajo el puntero bien
+ * encendido, y los que no aplican (la sede de origen) se apagan.
+ */
+function dropCls(drag: OrderDragState | null, target: DropTarget): string {
+  if (!drag) return '';
+  if (!isValidTarget(drag.payload, target)) return 'opacity-35';
+  return drag.over === target
+    ? 'scale-[1.03] bg-accent/[0.42] text-white outline outline-2 -outline-offset-2 outline-accent shadow-[0_6px_22px_-8px_hsl(var(--ring))]'
+    : 'outline outline-1 -outline-offset-1 outline-dashed outline-accent/55';
+}
+
+/**
+ * "+N" que sube y se desvanece sobre el destino que acaba de RECIBIR pedidos:
+ * la confirmacion de que el soltar caio donde se queria.
+ */
+function DropPulse({ target }: { target: DropTarget }) {
+  const last = useLastDrop();
+  const fresh = last && last.target === target && Date.now() - last.at < 1600 ? last : null;
+  return (
+    <AnimatePresence>
+      {fresh ? (
+        <motion.span
+          key={fresh.at}
+          initial={{ opacity: 0, y: 4, scale: 0.8 }}
+          animate={{ opacity: [0, 1, 1, 0], y: [4, -6, -10, -18], scale: [0.8, 1.05, 1, 0.95] }}
+          transition={{ duration: 1.3, times: [0, 0.15, 0.7, 1], ease: 'easeOut' }}
+          className="pointer-events-none absolute right-2 top-1 z-10 rounded-full bg-accent px-1.5 py-px text-[10.5px] font-extrabold tabular-nums text-white shadow-[0_4px_14px_-4px_hsl(var(--ring))]"
+        >
+          +{fresh.count}
+        </motion.span>
+      ) : null}
+    </AnimatePresence>
+  );
+}
 
 /** Riel de 3px pegado al borde IZQUIERDO del rail (el padding es px-3 = 12px). */
 function ActiveRail() {
@@ -129,6 +178,8 @@ export function Sidebar() {
     staleTime: 30_000,
   });
   const generalCount = dashboard?.unassigned ?? 0;
+  // Pedidos en vuelo (arrastre desde la tabla): las sedes se vuelven destinos.
+  const drag = useOrderDrag();
 
   // La barra de scroll del rail solo se ve MIENTRAS se scrollea: se enciende
   // con el evento y se apaga sola al segundo de quietud (el hover tambien la
@@ -212,8 +263,17 @@ export function Sidebar() {
                 // El estado activo se comunicaba SOLO por color: sin esto un
                 // lector de pantalla no sabe en que pagina estas.
                 aria-current={isActive ? 'page' : undefined}
-                className={cn(ITEM_BASE, isActive ? ITEM_ACTIVE : ITEM_IDLE)}
+                // Pedidos = generales: soltar aqui DEVUELVE a generales.
+                {...(item.href === '/orders' ? { 'data-drop-target': 'general' } : {})}
+                className={cn(
+                  ITEM_BASE,
+                  isActive ? ITEM_ACTIVE : ITEM_IDLE,
+                  item.href === '/orders' &&
+                    drag &&
+                    cn('transition-[transform,background-color,opacity]', dropCls(drag, 'general')),
+                )}
               >
+                {item.href === '/orders' ? <DropPulse target="general" /> : null}
                 {isActive ? <ActiveRail /> : null}
                 <Icon className="h-4 w-4 shrink-0" />
                 <span className="truncate">{item.label}</span>
@@ -276,7 +336,17 @@ export function Sidebar() {
 
         {/* Sedes */}
         <div className="flex items-center px-2 pb-1 pt-2.5 text-[10px] font-extrabold uppercase tracking-[0.09em] text-rail-ink-2">
-          Sedes
+          {drag ? (
+            <motion.span
+              initial={{ opacity: 0, x: -4 }}
+              animate={{ opacity: 1, x: 0 }}
+              className="normal-case tracking-normal text-rail-ink"
+            >
+              Suelta en una sede
+            </motion.span>
+          ) : (
+            'Sedes'
+          )}
           {isAdminUser ? (
             <Link
               href="/warehouses"
@@ -305,11 +375,18 @@ export function Sidebar() {
               ...(isAdminUser ? [{ href: `${base}/ajustes`, label: 'Ajustes' }] : []),
             ];
             return (
-              <div key={w.id}>
+              // El bloque ENTERO de la sede (con sus sub-secciones) es destino.
+              <div key={w.id} data-drop-target={w.id} className="relative">
+                <DropPulse target={w.id} />
                 <Link
                   href={base}
                   prefetch
-                  className={cn(ITEM_BASE, active ? ITEM_ACTIVE : ITEM_IDLE)}
+                  className={cn(
+                    ITEM_BASE,
+                    active ? ITEM_ACTIVE : ITEM_IDLE,
+                    drag &&
+                      cn('transition-[transform,background-color,opacity]', dropCls(drag, w.id)),
+                  )}
                 >
                   {active ? <ActiveRail /> : null}
                   <Building2 className="h-4 w-4 shrink-0" />

@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { Boxes, Building2, Link2, Mail, Package, Users } from 'lucide-react';
+import { Boxes, Building2, Link2, Mail, Package, ScrollText, Users } from 'lucide-react';
 import type { Platform, SessionUser, VtexFees } from '@smartlogistica/shared';
 
 import {
@@ -8,6 +8,7 @@ import {
   canManageMembers,
   canManageOrders,
   canSeeAllWarehouses,
+  canSeeAudit,
   isAdmin,
   ROLE_LABEL,
 } from '@/lib/rbac';
@@ -90,11 +91,13 @@ export default async function SettingsPage() {
                 ) : null
               }
               description={
-                isOwner
-                  ? 'Ves y gestionas todo: sedes, conexiones, equipo y facturación.'
-                  : canSeeAllWarehouses(me?.role)
-                    ? 'Trabajas los pedidos de todas las sedes: facturas y generas guías.'
-                    : 'Ves únicamente las sedes que te asignaron.'
+                canSeeAudit(me?.role)
+                  ? 'Ves y gestionas todo, y eres el único que ve los registros: la bitácora, la actividad, las ediciones y los mensajes eliminados.'
+                  : isOwner
+                    ? 'Ves y gestionas todo: sedes, conexiones, equipo y facturación.'
+                    : canSeeAllWarehouses(me?.role)
+                      ? 'Trabajas los pedidos de todas las sedes: facturas y generas guías.'
+                      : 'Ves únicamente las sedes que te asignaron.'
               }
             />
           </div>
@@ -115,6 +118,14 @@ export default async function SettingsPage() {
             />
           </div>
 
+          {canSeeAudit(me?.role) ? (
+            <SettingsLink
+              href="/registros"
+              icon={<ScrollText />}
+              title="Registros"
+              description="La bitácora de todo lo que pasa: ingresos, facturas, guías, movidas de sede, mensajes eliminados o editados y cambios del equipo. Solo la ves tú."
+            />
+          ) : null}
           {canManageMembers(me?.role) ? (
             <SettingsLink
               href="/settings/team"

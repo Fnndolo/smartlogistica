@@ -20,7 +20,10 @@ enum TenantStatus {
   DELETED
 }
 
-// De mas a menos permisos. GESTOR entra a TODAS las sedes y hace todo el
+// De mas a menos permisos. OWNER (Propietario) hace todo lo de un admin y
+// ademas es el unico que ve los registros (bitacora, actividad de los pedidos,
+// historial de ediciones, mensajes eliminados) y el unico que nombra otro
+// propietario. GESTOR entra a TODAS las sedes y hace todo el
 // trabajo de pedidos (facturar, guias, generales) pero no toca configuracion,
 // conexiones, equipo ni transfiere pedidos entre sedes.
 enum TenantRole {

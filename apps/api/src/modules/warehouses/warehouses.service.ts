@@ -16,6 +16,7 @@ import type { Prisma } from '.prisma/tenant-client';
 import type { AuthContext } from '../../common/types/authenticated-request';
 import { canSeeAllWarehouses, isAdmin } from '../../common/rbac';
 import { getTenantContext } from '../../infrastructure/tenant-context';
+import { actorOf, AuditService } from '../audit/audit.service';
 
 // Eventos que FINALIZAN un pedido (mismo criterio que OrdersService): cerrado
 // en VTEX (marketplace) o completado a mano (pedido montado).
@@ -35,6 +36,8 @@ function slugify(input: string): string {
 
 @Injectable()
 export class WarehousesService {
+  constructor(private readonly audit: AuditService) {}
+
   async create(input: CreateWarehouseInput, auth: AuthContext): Promise<WarehouseSummary> {
     if (!isAdmin(auth)) throw new ForbiddenException('Solo administradores pueden crear sedes');
     const { prisma } = getTenantContext();
@@ -47,6 +50,13 @@ export class WarehousesService {
 
     const w = await prisma.warehouse.create({
       data: { name: input.name, slug, invoicePrefix: input.invoicePrefix || null },
+    });
+    await this.audit.log(actorOf(auth), {
+      action: 'warehouse.created',
+      resource: `warehouse:${w.id}`,
+      summary: `Creó la sede ${w.name}`,
+      detail: w.invoicePrefix ? `Prefijo de factura: ${w.invoicePrefix}` : null,
+      data: { warehouseId: w.id },
     });
     return this.toSummary(w, 0);
   }
@@ -88,6 +98,21 @@ export class WarehousesService {
       where: { id },
       data: { name: input.name, invoicePrefix: input.invoicePrefix || null },
     });
+    const changes = [
+      existing.name !== w.name ? `Nombre: ${existing.name} → ${w.name}` : null,
+      existing.invoicePrefix !== w.invoicePrefix
+        ? `Prefijo de factura: ${existing.invoicePrefix ?? '—'} → ${w.invoicePrefix ?? '—'}`
+        : null,
+    ].filter((c): c is string => c !== null);
+    if (changes.length > 0) {
+      await this.audit.log(actorOf(auth), {
+        action: 'warehouse.updated',
+        resource: `warehouse:${id}`,
+        summary: `Editó la sede ${w.name}`,
+        detail: changes.join('\n'),
+        data: { warehouseId: id },
+      });
+    }
     const count = await prisma.order.count({
       where: { warehouseId: id, events: { none: { type: { in: FINALIZED_EVENTS } } } },
     });
@@ -128,6 +153,12 @@ export class WarehousesService {
       );
     }
     await prisma.warehouse.update({ where: { id }, data: { archived: true } });
+    await this.audit.log(actorOf(auth), {
+      action: 'warehouse.archived',
+      resource: `warehouse:${id}`,
+      summary: `Archivó la sede ${existing.name}`,
+      data: { warehouseId: id },
+    });
   }
 
   /**

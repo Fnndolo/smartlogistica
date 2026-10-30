@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, api } from '@/lib/api-client';
+import { isAdmin } from '@/lib/rbac';
 import { cn } from '@/lib/utils';
 
 import {
@@ -36,12 +37,12 @@ import {
  * Conexion a 360dialog (Cloud API de Meta, api-first): EL canal de WhatsApp.
  * Al conectar, el webhook del numero queda apuntando SOLO a esta plataforma
  * (mensajes, medios y echoes del celular entran directo al hilo del pedido).
- * TEMPORAL: solo el propietario, igual que el resto de WhatsApp.
+ * La gestionan los administradores (el propietario incluido).
  */
 export function Dialog360ConnectionCard({ initial }: { initial?: Dialog360ConnectionSummary | null }) {
   const qc = useQueryClient();
   const user = useCurrentUser();
-  const canManage = user?.role === 'OWNER' || user?.role === 'ADMIN';
+  const canManage = isAdmin(user?.role);
 
   const {
     data: connection,

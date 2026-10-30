@@ -3,8 +3,11 @@ import type { AuthContext } from './types/authenticated-request';
 /**
  * Permisos de SmartLogistica. Cuatro roles, de mas a menos:
  *
- * - OWNER   = el propietario (el primer usuario) y
- * - ADMIN   = administrador: ambos ven y gestionan TODO (pedidos generales,
+ * - OWNER   = el PROPIETARIO, el rol de arriba: todo lo de un admin y ademas
+ *             el UNICO que ve los registros (bitacora, actividad de los
+ *             pedidos, historial de ediciones, mensajes eliminados). Solo otro
+ *             propietario lo crea, lo edita o lo retira.
+ * - ADMIN   = administrador: ve y gestiona TODO lo demas (pedidos generales,
  *             sedes, conexiones, equipo, transferencias, facturar, guias).
  * - GESTOR  = entra a TODAS las sedes y hace todo el trabajo de PEDIDOS (ver
  *             generales, tomar, chatear, subir fotos, facturar en Alegra,
@@ -26,6 +29,26 @@ import type { AuthContext } from './types/authenticated-request';
  */
 export function isAdmin(auth: AuthContext): boolean {
   return auth.role === 'OWNER' || auth.role === 'ADMIN';
+}
+
+/**
+ * El PROPIETARIO, el rol de arriba. Ojo: los gates de administracion siguen
+ * siendo isAdmin() (que ya lo incluye) — por instruccion del propietario, un
+ * admin hace TODO lo demas. Esto es solo para lo que el propietario ve o toca
+ * y nadie mas (canSeeAudit y nombrar/retirar propietarios).
+ */
+export function isOwner(auth: AuthContext): boolean {
+  return auth.role === 'OWNER';
+}
+
+/**
+ * RASTRO: la bitacora (Registros), la pestaña Actividad del pedido, el
+ * historial de ediciones de un mensaje y los mensajes eliminados (que el
+ * propietario sigue viendo en rojo dentro del chat). Nadie mas, ni los admins:
+ * es control sobre el equipo, y el equipo incluye a los admins.
+ */
+export function canSeeAudit(auth: AuthContext): boolean {
+  return isOwner(auth);
 }
 
 /**

@@ -15,6 +15,7 @@ import { StorageModule } from './infrastructure/storage/storage.module';
 import { CatalogModule } from './infrastructure/catalog/catalog.module';
 import { AiModule } from './modules/ai/ai.module';
 import { AlegraModule } from './modules/marketplaces/alegra/alegra.module';
+import { AuditModule } from './modules/audit/audit.module';
 import { CoordinadoraModule } from './modules/marketplaces/coordinadora/coordinadora.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { MembersModule } from './modules/members/members.module';
@@ -76,6 +77,7 @@ import { WhatsappModule } from './modules/whatsapp/whatsapp.module';
     PushModule,
     StorageModule,
     CatalogModule,
+    AuditModule,
     HealthModule,
     TenantsModule,
     AuthModule,

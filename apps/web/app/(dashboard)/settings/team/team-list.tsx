@@ -9,6 +9,7 @@ import {
   Plus,
   RefreshCw,
   Shield,
+  ShieldCheck,
   Trash2,
   User,
   UserCog,
@@ -22,7 +23,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, api } from '@/lib/api-client';
-import { canManageMembers, ROLE_HELP, ROLE_LABEL } from '@/lib/rbac';
+import { canManageMembers, isOwner, ROLE_HELP, ROLE_LABEL, type MaybeRole } from '@/lib/rbac';
 import { cn } from '@/lib/utils';
 
 import {
@@ -42,13 +43,21 @@ import {
 
 type Role = MemberSummary['role'];
 
-/** Roles que se pueden asignar aqui (Propietario no: es el primer usuario). */
-const ASSIGNABLE_ROLES = ['OPERATOR', 'GESTOR', 'ADMIN'] as const satisfies readonly Role[];
+/**
+ * Roles que puede asignar quien esta mirando. Propietario (el rol de arriba,
+ * el que ve los registros) solo lo nombra otro propietario: a un admin ni se le
+ * ofrece, y el API igual lo rechazaria.
+ */
+function assignableRoles(meRole: MaybeRole): Role[] {
+  const base: Role[] = ['OPERATOR', 'GESTOR', 'ADMIN'];
+  return isOwner(meRole) ? [...base, 'OWNER'] : base;
+}
 
-/** Icono por rol: admin = escudo, gestor = usuario con engranaje, operador = usuario. */
+/** Icono por rol: propietario = escudo con check, admin = escudo, gestor = engranaje, operador = usuario. */
 function RoleIcon({ role, className }: { role: Role; className?: string }) {
   if (role === 'OPERATOR') return <User className={className} />;
   if (role === 'GESTOR') return <UserCog className={className} />;
+  if (role === 'OWNER') return <ShieldCheck className={className} />;
   return <Shield className={className} />;
 }
 
@@ -120,7 +129,14 @@ export function TeamList({ initial }: { initial?: MemberSummary[] }) {
     body = (
       <div className="grid gap-2.5">
         {data.map((m) => (
-          <MemberRow key={m.userId} member={m} warehouses={warehouses} canManage={canManage} />
+          <MemberRow
+            key={m.userId}
+            member={m}
+            warehouses={warehouses}
+            // A un propietario solo lo toca otro propietario.
+            canManage={canManage && (m.role !== 'OWNER' || isOwner(me?.role))}
+            roles={assignableRoles(me?.role)}
+          />
         ))}
       </div>
     );
@@ -147,6 +163,7 @@ export function TeamList({ initial }: { initial?: MemberSummary[] }) {
         {canManage && adding ? (
           <AddMemberForm
             warehouses={warehouses}
+            roles={assignableRoles(me?.role)}
             onClose={() => setAdding(false)}
             onDone={() => {
               setAdding(false);
@@ -165,10 +182,12 @@ function MemberRow({
   member,
   warehouses,
   canManage,
+  roles,
 }: {
   member: MemberSummary;
   warehouses: WarehouseSummary[];
   canManage: boolean;
+  roles: Role[];
 }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
@@ -310,7 +329,7 @@ function MemberRow({
               Con este nombre se le menciona (@{name.trim() || 'Nombre'}) y firma sus mensajes.
             </p>
           </div>
-          {member.role !== 'OWNER' ? <RolePicker value={role} onChange={setRole} /> : null}
+          <RolePicker roles={roles} value={role} onChange={setRole} />
           {role === 'OPERATOR' ? (
             <SedePicker warehouses={warehouses} value={sedes} onChange={setSedes} />
           ) : null}
@@ -344,10 +363,12 @@ function MemberRow({
 
 function AddMemberForm({
   warehouses,
+  roles,
   onClose,
   onDone,
 }: {
   warehouses: WarehouseSummary[];
+  roles: Role[];
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -438,7 +459,7 @@ function AddMemberForm({
         existe en la plataforma, se le suma el acceso a este workspace y su clave no cambia.
       </p>
 
-      <RolePicker value={role} onChange={setRole} />
+      <RolePicker roles={roles} value={role} onChange={setRole} />
       {role === 'OPERATOR' ? (
         <SedePicker warehouses={warehouses} value={sedes} onChange={setSedes} />
       ) : null}
@@ -456,14 +477,27 @@ function AddMemberForm({
   );
 }
 
-function RolePicker({ value, onChange }: { value: Role; onChange: (r: Role) => void }) {
+function RolePicker({
+  roles,
+  value,
+  onChange,
+}: {
+  roles: Role[];
+  value: Role;
+  onChange: (r: Role) => void;
+}) {
   return (
     <div className="space-y-1.5">
       <Label>Rol</Label>
-      {/* Propietario no se asigna aqui: es el primer usuario del workspace. */}
-      {/* Tres columnas desde 761px, como .rolecards del mockup. */}
-      <div className="grid gap-[9px] min-[761px]:grid-cols-3">
-        {ASSIGNABLE_ROLES.map((r) => (
+      {/* Tres columnas desde 761px, como .rolecards del mockup; con Propietario
+          (solo lo ve otro propietario) son cuatro: dos y dos, y en fila en xl. */}
+      <div
+        className={cn(
+          'grid gap-[9px]',
+          roles.length > 3 ? 'min-[761px]:grid-cols-2 xl:grid-cols-4' : 'min-[761px]:grid-cols-3',
+        )}
+      >
+        {roles.map((r) => (
           <button
             key={r}
             type="button"

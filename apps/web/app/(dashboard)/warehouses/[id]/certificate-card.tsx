@@ -10,6 +10,7 @@ import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ApiError, api } from '@/lib/api-client';
+import { isAdmin } from '@/lib/rbac';
 import { cn } from '@/lib/utils';
 
 import { CertificateEditor } from './certificate-editor';
@@ -50,7 +51,7 @@ export function CertificateCard({
 }) {
   const qc = useQueryClient();
   const user = useCurrentUser();
-  const canManage = user?.role === 'OWNER';
+  const canManage = isAdmin(user?.role);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
 

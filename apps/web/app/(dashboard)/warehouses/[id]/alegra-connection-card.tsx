@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, api } from '@/lib/api-client';
+import { isAdmin } from '@/lib/rbac';
 
 interface Props {
   warehouseId: string;
@@ -25,7 +26,7 @@ const ICON_TILE =
 export function AlegraConnectionCard({ warehouseId, warehouseName, initial }: Props) {
   const qc = useQueryClient();
   const user = useCurrentUser();
-  const canManage = user?.role === 'OWNER';
+  const canManage = isAdmin(user?.role);
 
   const { data: connection } = useQuery({
     queryKey: ['alegra', warehouseId],

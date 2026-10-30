@@ -1,5 +1,7 @@
 /**
  * Roles del workspace, de mas a menos permisos:
+ * OWNER (Propietario) = todo lo de un admin + los registros (bitacora,
+ * actividad de los pedidos, historial de ediciones, mensajes eliminados).
  * OWNER/ADMIN = todo (configuracion, equipo, conexiones, transferencias).
  * GESTOR = todas las sedes y todo el trabajo de PEDIDOS (facturar, guias,
  * generales, tomar, chat), pero sin configuracion, equipo ni transferencias.

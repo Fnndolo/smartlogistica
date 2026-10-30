@@ -87,6 +87,7 @@ export class WaPublisherService {
       status,
       error: r.error ?? null,
       edited: Boolean(r.edited),
+      deleted: null,
       starred: Boolean(r.starred),
       createdAt: r.createdAt.toISOString(),
     };

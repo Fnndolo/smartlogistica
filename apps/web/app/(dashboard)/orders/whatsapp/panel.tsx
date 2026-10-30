@@ -262,6 +262,7 @@ export function WhatsappPanel({
     status: null,
     error: null,
     edited: false,
+    deleted: null,
     starred: false,
     createdAt: new Date().toISOString(),
   });

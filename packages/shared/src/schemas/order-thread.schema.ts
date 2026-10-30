@@ -37,6 +37,13 @@ export const messageReactionSchema = z.object({
 });
 export type MessageReaction = z.infer<typeof messageReactionSchema>;
 
+/** Quien borro un mensaje y cuando (chat interno y WhatsApp). */
+export const deletedMarkSchema = z.object({
+  at: z.string().datetime(),
+  byName: z.string(),
+});
+export type DeletedMark = z.infer<typeof deletedMarkSchema>;
+
 export const orderMessageSchema = z.object({
   id: z.string(),
   orderId: z.string(),
@@ -55,8 +62,13 @@ export const orderMessageSchema = z.object({
   replyToId: z.string().nullable(),
   reactions: z.array(messageReactionSchema),
   // Ultima edicion (null = nunca se edito): todos ven "editado"; el historial
-  // de versiones solo lo abren los administradores.
+  // de versiones solo lo abre el propietario.
   editedAt: z.string().datetime().nullable().default(null),
+  /**
+   * Mensaje ELIMINADO. Solo le llega al propietario (al resto el mensaje
+   * simplemente ya no esta): se pinta en rojo con quien y cuando lo borro.
+   */
+  deleted: deletedMarkSchema.nullable().default(null),
   createdAt: z.string().datetime(),
 });
 export type OrderMessage = z.infer<typeof orderMessageSchema>;
@@ -69,7 +81,7 @@ export const editOrderMessageSchema = z.object({
 export type EditOrderMessageInput = z.infer<typeof editOrderMessageSchema>;
 
 /**
- * Historial de un mensaje editado (solo administradores), de la version
+ * Historial de un mensaje editado (solo el propietario), de la version
  * original a la actual. `at` = cuando se escribio ESA version.
  */
 export const orderMessageHistorySchema = z.object({

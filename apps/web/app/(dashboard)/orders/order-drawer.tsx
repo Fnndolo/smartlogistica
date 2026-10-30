@@ -59,7 +59,7 @@ import type {
 import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { Button } from '@/components/ui/button';
 import { ApiError, api } from '@/lib/api-client';
-import { canManageOrders, canModerateChat, canUseWhatsapp, isAdmin } from '@/lib/rbac';
+import { canManageOrders, canModerateChat, canSeeAudit, canUseWhatsapp, isAdmin } from '@/lib/rbac';
 import { cn, titleCaseName } from '@/lib/utils';
 
 import { setActiveChat } from './active-chat';
@@ -408,9 +408,9 @@ function DrawerContent({
           { id: 'guia', label: 'Guía', icon: Truck },
         ] as { id: Tab; label: string; icon: typeof Info }[])
       : []),
-    // Actividad para quien gestiona pedidos (admins y gestores) (en los facturados por fuera es la
-    // trazabilidad misma).
-    ...(canManage
+    // Actividad: es RASTRO, y el rastro solo lo ve el propietario (ni los
+    // admins ni los gestores). El API tambien lo niega.
+    ...(canSeeAudit(me?.role)
       ? ([{ id: 'actividad', label: 'Actividad', icon: Activity }] as {
           id: Tab;
           label: string;
@@ -1444,7 +1444,10 @@ function ConversacionTab({
 
         if (event.kind === 'chat.message') {
           const authorId = String(event.authorId ?? '');
-          if (authorId && authorId !== me?.id) {
+          // Un ADJUNTO no se puede pintar con lo que trae el evento (su URL va
+          // firmada): ese llega con el refetch de abajo.
+          const isText = (event.messageKind ?? 'text') === 'text';
+          if (authorId && authorId !== me?.id && isText) {
             const injected: OrderMessage = {
               id: String(event.messageId ?? `evt-${Date.now()}`),
               orderId,
@@ -1460,6 +1463,7 @@ function ConversacionTab({
               replyToId: typeof event.replyToId === 'string' ? event.replyToId : null,
               reactions: [],
               editedAt: null,
+              deleted: null,
               createdAt:
                 typeof event.createdAt === 'string' ? event.createdAt : new Date().toISOString(),
             };
@@ -1580,7 +1584,7 @@ function ConversacionTab({
       let count = 0;
       for (let i = messages.length - 1; i >= 0; i--) {
         const m = messages[i]!;
-        if (m.authorId !== me.id && m.kind !== 'system') {
+        if (m.authorId !== me.id && m.kind !== 'system' && !m.deleted) {
           count += 1;
           if (count === unreadAtOpen) {
             boundary = m.id;
@@ -1673,7 +1677,9 @@ function ConversacionTab({
       scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
       return;
     }
-    const incoming = fresh.filter((m) => m.authorId !== me?.id && m.kind !== 'system');
+    const incoming = fresh.filter(
+      (m) => m.authorId !== me?.id && m.kind !== 'system' && !m.deleted,
+    );
     if (incoming.length === 0) return;
     setPendingCount((p) => p + incoming.length);
     setShowJump(true);
@@ -1719,6 +1725,7 @@ function ConversacionTab({
         replyToId: replyToId ?? null,
         reactions: [],
         editedAt: null,
+        deleted: null,
         createdAt: new Date().toISOString(),
       };
       qc.setQueryData<OrderMessage[]>(['order-messages', orderId], (old = []) => [...old, temp]);
@@ -1750,8 +1757,17 @@ function ConversacionTab({
     if (staged.length > 0) {
       const toSend = staged;
       setStaged([]);
+      // El texto (y con el sus menciones y la cita) va en el ULTIMO adjunto.
+      const extras = body
+        ? {
+            mentions: mentionsInText(body, members),
+            mentionAll: /(^|\s)@todos(?=\s|$|[.,!?])/i.test(body),
+            replyToId: replyTo?.id,
+          }
+        : { replyToId: replyTo?.id };
       toSend.forEach((sf, i) => {
-        void sendAttachment(sf, i === toSend.length - 1 && body ? body : undefined);
+        const last = i === toSend.length - 1;
+        void sendAttachment(sf, last && body ? body : undefined, last ? extras : {});
       });
       setText('');
       setMention(null);
@@ -1928,7 +1944,7 @@ function ConversacionTab({
       toast.error(err instanceof ApiError ? err.message : 'No se pudo editar el mensaje');
     },
   });
-  // Historial de versiones abierto (solo admins).
+  // Historial de versiones abierto (solo el propietario).
   const [historyFor, setHistoryFor] = useState<string | null>(null);
   const closeHistory = useCallback(() => setHistoryFor(null), []);
 
@@ -2080,11 +2096,20 @@ function ConversacionTab({
     replyToId: null,
     reactions: [] as OrderMessage['reactions'],
     editedAt: null,
+    deleted: null,
     createdAt: new Date().toISOString(),
   });
 
-  /** Adjunto normal: burbuja optimista + subida con progreso en la burbuja. */
-  const sendAttachment = async (sf: StagedFile, caption?: string) => {
+  /**
+   * Adjunto normal: burbuja optimista + subida con progreso en la burbuja. El
+   * pie de foto es texto de chat como cualquier otro: sus @menciones, el
+   * @todos y la cita viajan con la foto (antes se perdian y nadie se enteraba).
+   */
+  const sendAttachment = async (
+    sf: StagedFile,
+    caption?: string,
+    extras: { mentions?: string[]; mentionAll?: boolean; replyToId?: string } = {},
+  ) => {
     const tempId = `temp-${sf.id}`;
     // Vista previa LIVIANA si la pre-compresion ya termino (decode al instante).
     const previewUrl = sf.compactUrl ?? sf.url;
@@ -2094,6 +2119,8 @@ function ConversacionTab({
       kind: 'file',
       body: sf.file.name,
       caption: caption ?? null,
+      mentions: extras.mentions ?? [],
+      replyToId: extras.replyToId ?? null,
       attachmentUrl: previewUrl,
       attachmentMime: sf.file.type || 'application/octet-stream',
       progress: 0,
@@ -2105,6 +2132,9 @@ function ConversacionTab({
       const fd = new FormData();
       fd.append('file', compact, compact.name);
       if (caption) fd.append('caption', caption);
+      if (extras.mentions?.length) fd.append('mentions', JSON.stringify(extras.mentions));
+      if (extras.mentionAll) fd.append('mentionAll', 'true');
+      if (extras.replyToId) fd.append('replyToId', extras.replyToId);
       const msg = await api.uploadWithProgress<OrderMessage>(
         `/v1/orders/${orderId}/attachment`,
         fd,
@@ -2274,6 +2304,9 @@ function ConversacionTab({
             const isUnreadBoundary = m.id === unreadBoundaryId;
             // Burbuja optimista (subiendo): sin acciones hasta confirmarse.
             const isTemp = m.id.startsWith('temp-');
+            // Eliminado (solo lo ve el propietario): se muestra, pero ya no se
+            // responde, ni se reacciona, ni se edita, ni se vuelve a borrar.
+            const inert = isTemp || m.deleted !== null;
             // El separador "No leidos" rompe el conjunto: ese mensaje muestra
             // su cabecera (nombre/hora) aunque viniera agrupado.
             const grouped = !isUnreadBoundary && joins(allMessages[i - 1], m);
@@ -2300,20 +2333,20 @@ function ConversacionTab({
                   matchByCode={matchByCode}
                   members={members}
                   canDelete={
-                    !isTemp && m.kind !== 'system' && (m.authorId === me?.id || canModerate)
+                    !inert && m.kind !== 'system' && (m.authorId === me?.id || canModerate)
                   }
                   onDelete={() => setConfirmDelete([m.id])}
                   onEdit={
-                    !isTemp && m.kind === 'text' && m.authorId === me?.id
+                    !inert && m.kind === 'text' && m.authorId === me?.id
                       ? (body) => editMsg.mutate({ messageId: m.id, body })
                       : undefined
                   }
                   onEditStart={closeActions}
                   onShowHistory={
-                    isAdmin(me?.role) && m.editedAt ? () => setHistoryFor(m.id) : undefined
+                    canSeeAudit(me?.role) && m.editedAt ? () => setHistoryFor(m.id) : undefined
                   }
                   onReply={
-                    !isTemp && m.kind !== 'system'
+                    !inert && m.kind !== 'system'
                       ? () => {
                           setReplyTo(m);
                           closeActions();
@@ -2321,7 +2354,7 @@ function ConversacionTab({
                       : undefined
                   }
                   onReact={
-                    !isTemp && m.kind !== 'system'
+                    !inert && m.kind !== 'system'
                       ? (e) => setPickerFor({ messageId: m.id, x: e.clientX, y: e.clientY })
                       : undefined
                   }
@@ -2330,13 +2363,13 @@ function ConversacionTab({
                     closeActions();
                   }}
                   onLongPress={
-                    !isTemp && m.kind !== 'system' ? () => onBubbleLongPress(m) : undefined
+                    !inert && m.kind !== 'system' ? () => onBubbleLongPress(m) : undefined
                   }
                   actionsOpen={mobileActionsFor === m.id}
                   hoverActions={hoverCapable}
                   flash={flashId === m.id}
                   onDoubleTap={
-                    !isTemp && m.kind === 'text'
+                    !inert && m.kind === 'text'
                       ? () => react.mutate({ messageId: m.id, emoji: '👍' })
                       : undefined
                   }
@@ -2948,7 +2981,7 @@ function MessageBubble({
   onEdit?: (body: string) => void;
   /** Al abrir el editor: suelta las acciones ancladas por long-press. */
   onEditStart?: () => void;
-  /** Abre el historial de versiones (solo admins, solo si se edito). */
+  /** Abre el historial de versiones (solo el propietario, solo si se edito). */
   onShowHistory?: () => void;
   onReact?: (e: { clientX: number; clientY: number }) => void;
   onToggleReaction?: (emoji: string) => void;
@@ -2968,6 +3001,9 @@ function MessageBubble({
   const isPhoto = message.kind === 'imei_photo' || message.kind === 'serial_photo';
   const isDoc = message.kind === 'document';
   const isFile = message.kind === 'file';
+  // Borrado por alguien del equipo: solo le llega al propietario, que lo ve en
+  // su sitio pero en ROJO, con quien y cuando lo borro.
+  const deleted = message.deleted;
 
   // Edicion EN LA BURBUJA (no en el composer: asi no se pisa lo que el usuario
   // tenga a medio escribir abajo).
@@ -3191,14 +3227,18 @@ function MessageBubble({
         'px-3.5 py-2 text-[16px] leading-[1.4] md:text-[13.5px] md:leading-[1.45]',
         radius,
         // Mios en AZUL cobalto (pedido del user: nada de negro); otros en gris
-        // que resalta sobre el fondo blanco del drawer.
-        mine ? 'bg-accent text-accent-foreground' : 'bg-muted text-foreground',
+        // que resalta sobre el fondo blanco del drawer. Eliminado: rojo.
+        deleted
+          ? 'border border-dashed border-destructive/50 bg-destructive/[0.08] text-destructive'
+          : mine
+            ? 'bg-accent text-accent-foreground'
+            : 'bg-muted text-foreground',
       )}
     >
       {quote}
       <p className="whitespace-pre-wrap break-words">
-        <MentionText text={message.body ?? ''} mine={mine} members={members} />
-        {/* Todos ven que se edito; solo un admin puede abrir lo que decia. */}
+        <MentionText text={message.body ?? ''} mine={mine && !deleted} members={members} />
+        {/* Todos ven que se edito; solo el propietario abre lo que decia. */}
         {message.editedAt ? (
           onShowHistory ? (
             <button
@@ -3259,7 +3299,15 @@ function MessageBubble({
           los mensajes se estrechaban en cascada hasta cortarse.
           El tope duro (640px) evita que con el drawer arrastrado a pantalla
           completa una burbuja de texto cruce 1500px de ancho. */}
-      <div className="relative max-w-[min(85%,640px)]">
+      <div
+        className={cn(
+          'relative max-w-[min(85%,640px)]',
+          // Fotos y archivos eliminados: el marco rojo los distingue de los vivos.
+          deleted &&
+            (isPhoto || isDoc || isFile) &&
+            'rounded-2xl opacity-80 ring-2 ring-destructive/60 ring-offset-2 ring-offset-card',
+        )}
+      >
         {bubble}
 
         {!editing && (onReply || onReact || onEdit || (canDelete && onDelete)) ? (
@@ -3364,6 +3412,14 @@ function MessageBubble({
             </button>
           ))}
         </div>
+      ) : null}
+
+      {deleted ? (
+        <span className="mt-1 inline-flex items-center gap-1 px-1 text-[12px] font-semibold text-destructive md:text-[10.5px]">
+          <Trash2 className="h-3 w-3 shrink-0" />
+          Eliminado por {deleted.byName} ·{' '}
+          {format(new Date(deleted.at), 'd MMM, HH:mm', { locale: es })}
+        </span>
       ) : null}
     </div>
   );

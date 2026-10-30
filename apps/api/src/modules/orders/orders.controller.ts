@@ -100,6 +100,19 @@ interface UploadedFile {
   originalname?: string;
 }
 
+/** `["id1","id2"]` (campo de un multipart) -> lista de ids; basura -> vacia. */
+function parseIdList(raw: string | undefined): string[] {
+  if (typeof raw !== 'string' || !raw) return [];
+  try {
+    const v: unknown = JSON.parse(raw);
+    return Array.isArray(v)
+      ? v.filter((x): x is string => typeof x === 'string' && x.length <= 60).slice(0, 20)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Tope de subida para adjuntos normales (videos incluidos). */
 const ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
 
@@ -431,7 +444,7 @@ export class OrdersController {
     return this.orders.editMessage(id, messageId, body, user);
   }
 
-  /** Versiones anteriores de un mensaje editado. Solo administradores. */
+  /** Versiones anteriores de un mensaje editado. Solo el propietario. */
   @Get(':id/messages/:messageId/history')
   async messageHistory(
     @Param('id') id: string,
@@ -496,6 +509,9 @@ export class OrdersController {
     @Param('id') id: string,
     @UploadedFile() file: UploadedFile | undefined,
     @Body('caption') caption: string | undefined,
+    @Body('mentions') mentions: string | undefined,
+    @Body('mentionAll') mentionAll: string | undefined,
+    @Body('replyToId') replyToId: string | undefined,
     @CurrentUser() user: AuthContext,
   ): Promise<OrderMessage> {
     if (!file) throw new BadRequestException('No se recibio ningun archivo');
@@ -504,6 +520,12 @@ export class OrdersController {
       file,
       user,
       typeof caption === 'string' ? caption : undefined,
+      {
+        // Multipart solo trae texto: las menciones viajan como JSON.
+        mentions: parseIdList(mentions),
+        mentionAll: mentionAll === 'true',
+        replyToId: typeof replyToId === 'string' && replyToId ? replyToId.slice(0, 60) : undefined,
+      },
     );
   }
 

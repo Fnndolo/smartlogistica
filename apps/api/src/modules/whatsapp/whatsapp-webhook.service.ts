@@ -5,6 +5,7 @@ import type { Prisma, PrismaClient } from '.prisma/tenant-client';
 
 import { RealtimeService } from '../../infrastructure/realtime/realtime.service';
 import { StorageService } from '../../infrastructure/storage/storage.service';
+import { AuditService } from '../audit/audit.service';
 import { Dialog360Client } from './dialog360-client.service';
 import { WaConnectionService } from './wa-connection.service';
 import { WaFlowService } from './wa-flow.service';
@@ -54,7 +55,35 @@ export class WhatsappWebhookService {
     private readonly flows: WaFlowService,
     private readonly publisher: WaPublisherService,
     private readonly upsell: WaUpsellService,
+    private readonly audit: AuditService,
   ) {}
+
+  /**
+   * Bitacora: un mensaje de WhatsApp se EDITO desde un celular (el del cliente
+   * o el del negocio, en coexistencia). Sin esta fila el texto de antes se
+   * perdia: la burbuja solo dice "Editado".
+   */
+  private async logPhoneEdit(
+    prisma: PrismaClient,
+    phone: string,
+    target: { id: string; body: string | null; direction: string },
+    after: string,
+  ): Promise<void> {
+    await this.audit.log(
+      null,
+      {
+        action: 'wa.message_edited',
+        resource: `wa:${phone}`,
+        summary:
+          target.direction === 'out'
+            ? `Se editó desde el celular del negocio un mensaje enviado a ${phone}`
+            : `El cliente ${phone} editó un mensaje de WhatsApp`,
+        detail: `Antes: ${target.body ?? '(vacío)'}\nAhora: ${after}`,
+        data: { phone, messageId: target.id, before: target.body, after },
+      },
+      prisma,
+    );
+  }
 
   /**
    * Webhook de la CLOUD API (360dialog): mensajes entrantes, medios y — con
@@ -676,13 +705,14 @@ export class WhatsappWebhookService {
           for (const wid of [...new Set(candidates)]) {
             const target = await prisma.waMessage.findUnique({
               where: { externalId: wid },
-              select: { id: true },
+              select: { id: true, body: true, direction: true },
             });
             if (target) {
               await prisma.waMessage.update({
                 where: { id: target.id },
                 data: { body: String(newBody), edited: true },
               });
+              await this.logPhoneEdit(prisma, phone, target, String(newBody));
               // Edicion INSTANTANEA en el panel: DTO completo, sin refetch.
               if (opts.instant !== false) {
                 await this.publishRow(tenantId, prisma, target.id);
@@ -725,6 +755,7 @@ export class WhatsappWebhookService {
               where: { id: dup.id },
               data: { body: newBody, edited: true },
             });
+            await this.logPhoneEdit(prisma, phone, { ...dup, direction }, newBody);
             if (opts.instant !== false) {
               await this.publishRow(tenantId, prisma, dup.id);
               return null;

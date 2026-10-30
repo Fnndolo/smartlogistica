@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useState, type CSSProperties } from 'react';
-import { Download, Star } from 'lucide-react';
+import { Download, Star, Trash2 } from 'lucide-react';
 import type { WaMessage } from '@smartlogistica/shared';
 
 import { cn } from '@/lib/utils';
@@ -46,6 +46,9 @@ export function WaBubble({
   const sameAuthor = (prev?.authorName ?? '') === (m.authorName ?? '');
   const grouped = !newDay && prev && prev.direction === m.direction && sameAuthor;
   const hasReactions = m.reactions.length > 0;
+  // Borrado de la plataforma: solo le llega al propietario, que lo ve en su
+  // sitio y en ROJO. Se mira, pero ya no se responde, reenvia ni reacciona.
+  const inert = m.deleted !== null;
 
   // Solo UN emoji va suelto y gigante; de dos en adelante van EN burbuja
   // (mas grandes que el texto), calcado a WhatsApp.
@@ -87,6 +90,7 @@ export function WaBubble({
         }}
         onDoubleClick={(e) => {
           const t = e.target as Node;
+          if (inert) return;
           if (bubbleRef.current?.contains(t) || bareRef.current?.contains(t)) return;
           setFlash(true);
           actions.reply(m);
@@ -99,6 +103,7 @@ export function WaBubble({
             mine={mine}
             pending={pending}
             sticker={sticker}
+            inert={inert}
             actions={actions}
             menuOpen={menuOpen}
             onMenuChange={setMenuOpen}
@@ -108,21 +113,31 @@ export function WaBubble({
           <div
             ref={bubbleRef}
             onContextMenu={(e) => {
+              if (inert) return;
               e.preventDefault();
               setMenuOpen(anchorAtPoint(e, bubbleRef.current));
             }}
             className={cn('group relative max-w-[85%] md:max-w-[65%]', pending && 'opacity-90')}
           >
-            {!grouped ? <Tail mine={mine} /> : null}
-            <MsgMenu
-              m={m}
-              mine={mine}
-              actions={actions}
-              open={menuOpen}
-              onOpenChange={setMenuOpen}
-            />
-            <HoverActions m={m} mine={mine} actions={actions} onReact={() => setReactOpen(true)} />
-            {reactOpen ? (
+            {!grouped && !inert ? <Tail mine={mine} /> : null}
+            {!inert ? (
+              <>
+                <MsgMenu
+                  m={m}
+                  mine={mine}
+                  actions={actions}
+                  open={menuOpen}
+                  onOpenChange={setMenuOpen}
+                />
+                <HoverActions
+                  m={m}
+                  mine={mine}
+                  actions={actions}
+                  onReact={() => setReactOpen(true)}
+                />
+              </>
+            ) : null}
+            {reactOpen && !inert ? (
               <AnchoredReactionBar
                 m={m}
                 mine={mine}
@@ -133,10 +148,12 @@ export function WaBubble({
             <div
               className={cn(
                 'relative overflow-hidden text-[14.2px] leading-[19px] shadow-[0_1px_0.5px_rgba(11,20,26,0.13)]',
-                mine
-                  ? 'bg-[#d9fdd3] text-[#111b21] dark:bg-[#005c4b] dark:text-[#e9edef]'
-                  : 'bg-white text-[#111b21] dark:bg-[#202c33] dark:text-[#e9edef]',
-                grouped
+                inert
+                  ? 'border border-dashed border-red-400/70 bg-[#fdecec] text-[#7f1d1d] dark:border-red-400/50 dark:bg-[#3a1d20] dark:text-[#ffd7d7]'
+                  : mine
+                    ? 'bg-[#d9fdd3] text-[#111b21] dark:bg-[#005c4b] dark:text-[#e9edef]'
+                    : 'bg-white text-[#111b21] dark:bg-[#202c33] dark:text-[#e9edef]',
+                grouped || inert
                   ? 'rounded-[7.5px]'
                   : mine
                     ? 'rounded-[7.5px] rounded-tr-none'
@@ -152,11 +169,28 @@ export function WaBubble({
                 onOpenImage={() => actions.openImage(m)}
               />
             </div>
-            <ReactionChips message={m} mine={mine} actions={actions} />
+            <ReactionChips message={m} mine={mine} actions={inert ? undefined : actions} />
+            <DeletedTag message={m} mine={mine} />
           </div>
         )}
       </div>
     </>
+  );
+}
+
+/** "Eliminado por X · hora" bajo un mensaje borrado (solo lo ve el propietario). */
+function DeletedTag({ message: m, mine }: { message: WaMessage; mine: boolean }) {
+  if (!m.deleted) return null;
+  return (
+    <span
+      className={cn(
+        'mt-1 flex items-center gap-1 text-[11.5px] font-semibold text-red-600 dark:text-red-400',
+        mine ? 'justify-end' : 'justify-start',
+      )}
+    >
+      <Trash2 className="h-3 w-3 shrink-0" />
+      Eliminado por {m.deleted.byName} · {dayLabel(m.deleted.at)} {timeOf(m.deleted.at)}
+    </span>
   );
 }
 
@@ -212,6 +246,7 @@ function BareMessage({
   mine,
   pending,
   sticker,
+  inert,
   actions,
   menuOpen,
   onMenuChange,
@@ -221,6 +256,8 @@ function BareMessage({
   mine: boolean;
   pending: boolean;
   sticker: boolean;
+  /** Eliminado (solo lo ve el propietario): sin menu ni acciones. */
+  inert: boolean;
   actions: BubbleActions;
   menuOpen: MsgMenuAnchor | null;
   onMenuChange: (a: MsgMenuAnchor | null) => void;
@@ -231,17 +268,29 @@ function BareMessage({
     <div
       ref={containerRef}
       onContextMenu={(e) => {
+        if (inert) return;
         e.preventDefault();
         onMenuChange(anchorAtPoint(e, containerRef.current));
       }}
       className={cn(
         'group relative flex max-w-[85%] flex-col md:max-w-[65%]',
         mine ? 'items-end' : 'items-start',
+        inert && 'rounded-xl p-1 ring-2 ring-red-400/60',
       )}
     >
-      <MsgMenu m={m} mine={mine} actions={actions} open={menuOpen} onOpenChange={onMenuChange} />
-      <HoverActions m={m} mine={mine} actions={actions} onReact={() => setReactOpen(true)} />
-      {reactOpen ? (
+      {!inert ? (
+        <>
+          <MsgMenu
+            m={m}
+            mine={mine}
+            actions={actions}
+            open={menuOpen}
+            onOpenChange={onMenuChange}
+          />
+          <HoverActions m={m} mine={mine} actions={actions} onReact={() => setReactOpen(true)} />
+        </>
+      ) : null}
+      {reactOpen && !inert ? (
         <AnchoredReactionBar
           m={m}
           mine={mine}
@@ -276,7 +325,8 @@ function BareMessage({
         {timeOf(m.createdAt)}
         {mine ? <Ticks status={m.status} pending={pending} failText={failText(m)} /> : null}
       </span>
-      <ReactionChips message={m} mine={mine} bare actions={actions} />
+      <ReactionChips message={m} mine={mine} bare actions={inert ? undefined : actions} />
+      <DeletedTag message={m} mine={mine} />
     </div>
   );
 }

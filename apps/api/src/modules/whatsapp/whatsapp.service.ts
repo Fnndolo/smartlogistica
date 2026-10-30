@@ -31,13 +31,14 @@ import type {
 import { Prisma } from '.prisma/tenant-client';
 import type { PrismaClient } from '.prisma/tenant-client';
 
-import { canUseWhatsapp, isAdmin } from '../../common/rbac';
+import { canSeeAudit, canUseWhatsapp, isAdmin } from '../../common/rbac';
 import type { AuthContext } from '../../common/types/authenticated-request';
 import { EnvelopeService } from '../../infrastructure/crypto/envelope.service';
 import { ControlPlaneService } from '../../infrastructure/prisma/control-plane.service';
 import { RealtimeService } from '../../infrastructure/realtime/realtime.service';
 import { StorageService } from '../../infrastructure/storage/storage.service';
 import { getTenantContext } from '../../infrastructure/tenant-context';
+import { actorOf, AuditService } from '../audit/audit.service';
 import { Dialog360Client } from './dialog360-client.service';
 import type { WaClient, WaTemplateLite } from './wa-client.port';
 import { WaConnectionService } from './wa-connection.service';
@@ -126,6 +127,9 @@ const tplBody = (nombre: string, productos: string, direccion: string): string =
 /** Archivo entrante/saliente: tope 50MB (igual que los adjuntos del chat). */
 export const WA_FILE_MAX_BYTES = 50 * 1024 * 1024;
 
+/** Copia de un mensaje borrado de la plataforma, tal como queda en la bitacora. */
+type WaDeletedSnapshot = Omit<WaMessageRow, 'createdAt'> & { createdAt: string };
+
 interface UploadedWaFile {
   buffer: Buffer;
   mimetype: string;
@@ -157,6 +161,7 @@ export class WhatsappService {
     private readonly publisher: WaPublisherService,
     private readonly webhook: WhatsappWebhookService,
     private readonly upsell: WaUpsellService,
+    private readonly audit: AuditService,
   ) {}
 
   /** Al arrancar: verificar que el BINARIO de ffmpeg existe (notas de voz).
@@ -358,16 +363,17 @@ export class WhatsappService {
       select: { customerPhone: true },
     });
     if (!order) throw new NotFoundException('Pedido no encontrado');
-    return this.threadOf(order.customerPhone ? tenDigits(order.customerPhone) : '', auth.userId);
+    return this.threadOf(order.customerPhone ? tenDigits(order.customerPhone) : '', auth);
   }
 
   /** Hilo por TELEFONO (un chat de la bandeja). */
   async threadByPhone(rawPhone: string, auth: AuthContext): Promise<WaThread> {
     this.assertWhatsappAccess(auth);
-    return this.threadOf(tenDigits(rawPhone), auth.userId);
+    return this.threadOf(tenDigits(rawPhone), auth);
   }
 
-  private async threadOf(phone: string, userId: string): Promise<WaThread> {
+  private async threadOf(phone: string, auth: AuthContext): Promise<WaThread> {
+    const userId = auth.userId;
     const { prisma } = getTenantContext();
     const conn = await prisma.waLine.findFirst({ select: { id: true } });
     if (!phone) {
@@ -419,14 +425,75 @@ export class WhatsappService {
     }
 
     const byId = new Map(rows.map((r) => [r.id, r] as const));
+    const messages = await Promise.all(rows.map((r) => this.publisher.toDto(r, byId)));
+    // El PROPIETARIO sigue viendo lo que se borro de la plataforma, en rojo.
+    const deleted = canSeeAudit(auth) ? await this.deletedMessages(phone, byId) : [];
     return {
       phone,
       connected: Boolean(conn),
       contactName: vtexName ?? contact?.name ?? null,
       firstUnreadId,
       unreadCount,
-      messages: await Promise.all(rows.map((r) => this.publisher.toDto(r, byId))),
+      messages:
+        deleted.length === 0
+          ? messages
+          : [...messages, ...deleted].sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
     };
+  }
+
+  /**
+   * Mensajes de un chat BORRADOS de la plataforma (uno a uno, o al vaciar o
+   * eliminar el chat), tal como quedaron copiados en la bitacora.
+   */
+  private async deletedMessages(
+    phone: string,
+    byId: Map<string, WaMessageRow>,
+  ): Promise<WaMessageDto[]> {
+    const gone = await this.audit.forResource(
+      ['wa.message_deleted', 'wa.chat_cleared', 'wa.chat_deleted'],
+      `wa:${phone}`,
+    );
+    const out: WaMessageDto[] = [];
+    for (const g of gone) {
+      const snaps = (
+        Array.isArray(g.meta.messages) ? g.meta.messages : g.meta.message ? [g.meta.message] : []
+      ) as WaDeletedSnapshot[];
+      for (const snap of snaps) {
+        if (!snap?.id || !snap.createdAt) continue;
+        const dto = await this.publisher
+          .toDto({ ...snap, createdAt: new Date(snap.createdAt) }, byId)
+          .catch(() => null);
+        if (!dto) continue;
+        out.push({
+          ...dto,
+          deleted: { at: g.createdAt.toISOString(), byName: g.actorName ?? 'Alguien' },
+        });
+      }
+    }
+    return out;
+  }
+
+  /** Copia de los mensajes que se van a borrar, para la bitacora. */
+  private async snapshotMessages(where: Prisma.WaMessageWhereInput): Promise<WaDeletedSnapshot[]> {
+    const { prisma } = getTenantContext();
+    const rows = await prisma.waMessage.findMany({ where, orderBy: { createdAt: 'asc' } });
+    return rows.map((r) => ({
+      id: r.id,
+      direction: r.direction,
+      kind: r.kind,
+      body: r.body,
+      attachmentKey: r.attachmentKey,
+      mediaUrl: r.mediaUrl,
+      authorName: r.authorName,
+      buttons: r.buttons,
+      replyToId: r.replyToId,
+      reactions: r.reactions,
+      status: r.status,
+      error: r.error,
+      edited: r.edited,
+      starred: r.starred,
+      createdAt: r.createdAt.toISOString(),
+    }));
   }
 
   /** Envia TEXTO al cliente del pedido y lo guarda en el historial. */
@@ -842,8 +909,17 @@ export class WhatsappService {
     this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
+    const gone = await this.snapshotMessages({ phone });
     await prisma.waMessage.deleteMany({ where: { phone } });
     await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    if (gone.length > 0) {
+      await this.audit.log(actorOf(auth), {
+        action: 'wa.chat_cleared',
+        resource: `wa:${phone}`,
+        summary: `Vació el chat de WhatsApp de ${phone} (${gone.length} mensajes)`,
+        data: { phone, count: gone.length, messages: gone },
+      });
+    }
     return { ok: true };
   }
 
@@ -852,7 +928,14 @@ export class WhatsappService {
     this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
+    const gone = await this.snapshotMessages({ phone });
     await prisma.waMessage.deleteMany({ where: { phone } });
+    await this.audit.log(actorOf(auth), {
+      action: 'wa.chat_deleted',
+      resource: `wa:${phone}`,
+      summary: `Eliminó el chat de WhatsApp de ${phone}${gone.length ? ` (${gone.length} mensajes)` : ''}`,
+      data: { phone, count: gone.length, messages: gone },
+    });
     await prisma.waChatRead.deleteMany({ where: { phone } });
     await prisma.waContact.deleteMany({ where: { phone } });
     await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
@@ -989,9 +1072,19 @@ export class WhatsappService {
     this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
     const phone = tenDigits(rawPhone);
+    const [snap] = await this.snapshotMessages({ id: messageId, phone });
     const res = await prisma.waMessage.deleteMany({ where: { id: messageId, phone } });
     if (res.count === 0) throw new NotFoundException('Mensaje no encontrado');
     await this.realtime.publish(tenantId, { kind: 'wa.message', phone });
+    if (snap) {
+      await this.audit.log(actorOf(auth), {
+        action: 'wa.message_deleted',
+        resource: `wa:${phone}`,
+        summary: `Eliminó de la plataforma un mensaje del chat de WhatsApp de ${phone}`,
+        detail: snap.body ?? `(${snap.kind})`,
+        data: { phone, message: snap },
+      });
+    }
     return { ok: true };
   }
 

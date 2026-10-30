@@ -10,6 +10,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   ChevronsUpDown,
   Hand,
   Loader2,
@@ -42,6 +43,7 @@ import { cn, titleCaseName } from '@/lib/utils';
 
 import { ClaimChip, ClaimSlot, initialsOf } from './claim-chip';
 import { EmojiPicker } from './emoji-picker';
+import { orderDrag, useOrderDrag } from './order-drag';
 import { prefetchOrder } from './order-queries';
 import { PlatformBadge, usePlatforms } from './platform-badge';
 import { useOrderActions } from './use-order-actions';
@@ -68,6 +70,16 @@ interface OrdersTableProps {
   showPlatform?: boolean;
   /** Facturados: la columna de fecha pasa a ser la de FACTURACION. */
   showInvoicedDate?: boolean;
+  /**
+   * Orden FIJO (sede · Por preparar: del mas antiguo al mas reciente). Los
+   * encabezados dejan de ser botones: no hay nada que elegir.
+   */
+  sortLocked?: boolean;
+  /**
+   * Arrastrar la fila a una sede del rail. Se llama al pasar el umbral del
+   * arrastre; el que llama decide que pedidos van (la fila o la seleccion).
+   */
+  onDragOrder?: (order: OrderSummary, at: { x: number; y: number }) => void;
 }
 
 /**
@@ -105,8 +117,34 @@ export function OrdersTable({
   showAddress = false,
   showPlatform = false,
   showInvoicedDate = false,
+  sortLocked = false,
+  onDragOrder,
 }: OrdersTableProps) {
   const qc = useQueryClient();
+  // Los pedidos que van en el arrastre se atenuan en su fila: "los levante".
+  const drag = useOrderDrag();
+  const lifted = drag ? new Set(drag.payload.orderIds) : null;
+
+  // ARRASTRAR: boton principal del mouse y pasado un umbral de 6px (menos que
+  // eso es un clic y abre el pedido). En tactil no: ahi el dedo hace scroll, y
+  // la seleccion con su barra sigue siendo la via. Los controles de la fila
+  // (casilla, botones, enlaces) no arrastran.
+  const pressRow = (order: OrderSummary) => (e: React.PointerEvent) => {
+    if (!onDragOrder || e.button !== 0 || e.pointerType === 'touch') return;
+    if ((e.target as HTMLElement).closest('button, a, input, label, [role="button"]')) return;
+    const start = { x: e.clientX, y: e.clientY };
+    const cleanup = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', cleanup);
+    };
+    const onMove = (ev: PointerEvent) => {
+      if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 6) return;
+      cleanup();
+      onDragOrder(order, { x: ev.clientX, y: ev.clientY });
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', cleanup);
+  };
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [menu, setMenu] = useState<RowMenu | null>(null);
   const actions = useOrderActions();
@@ -179,7 +217,14 @@ export function OrdersTable({
               <TableHead>Cliente</TableHead>
               {/* Ordenar por producto agrupa los pedidos del mismo articulo,
                   que es como se preparan: en tanda. */}
-              <SortHeader label="Producto" field="product" sort={sort} dir={dir} onSort={onSort} />
+              <SortHeader
+                label="Producto"
+                field="product"
+                sort={sort}
+                dir={dir}
+                onSort={onSort}
+                locked={sortLocked}
+              />
               <SortHeader
                 label="Cant."
                 field="quantity"
@@ -187,6 +232,7 @@ export function OrdersTable({
                 dir={dir}
                 onSort={onSort}
                 align="right"
+                locked={sortLocked}
               />
               {/* "Precio" a secas: reclama ancho para la columna Plataforma. */}
               <SortHeader
@@ -196,6 +242,7 @@ export function OrdersTable({
                 dir={dir}
                 onSort={onSort}
                 align="right"
+                locked={sortLocked}
               />
               {/* Fecha desc es el orden POR DEFECTO: no se pinta como filtro
                   aplicado. En Facturados la fecha que importa es la de
@@ -208,6 +255,7 @@ export function OrdersTable({
                 dir={dir}
                 onSort={onSort}
                 defaultDesc
+                locked={sortLocked}
               />
               {showPlatform ? <TableHead>Plataforma</TableHead> : null}
               <TableHead>Estado</TableHead>
@@ -224,20 +272,27 @@ export function OrdersTable({
                 <Fragment key={order.id}>
                   <TableRow
                     className={cn(
-                      'group/row relative transition-colors hover:bg-accent/[0.05]',
+                      'group/row relative transition-[background-color,opacity] duration-150 hover:bg-accent/[0.05]',
                       (onOpenOrder || multi) && 'cursor-pointer',
                       (isOpen || isSelected) && 'bg-accent/[0.08]',
+                      lifted?.has(order.id) && 'opacity-40',
                       // Con reacciones, la fila crece: los chips tienen su FRANJA
                       // propia abajo y nunca tapan contenido (igual que el mockup).
                       order.reactions.length > 0 && '[&>td]:pb-9',
                     )}
                     onClick={
                       onOpenOrder
-                        ? () => onOpenOrder(order)
+                        ? () => {
+                            // El clic que sigue a soltar un arrastre no abre el pedido.
+                            if (!orderDrag.justDragged()) onOpenOrder(order);
+                          }
                         : multi
                           ? () => toggle(order.id)
                           : undefined
                     }
+                    onPointerDown={onDragOrder ? pressRow(order) : undefined}
+                    // Sin el arrastre NATIVO de texto/imagen: el nuestro es el que manda.
+                    onDragStart={onDragOrder ? (e) => e.preventDefault() : undefined}
                     // Precarga la conversacion antes del clic: al abrir, el chat ya
                     // esta en cache y se pinta al instante (sin "cargando").
                     onMouseEnter={onOpenOrder ? () => prefetchOrder(qc, order.id) : undefined}
@@ -892,6 +947,7 @@ function SortHeader({
   onSort,
   align = 'left',
   defaultDesc = false,
+  locked = false,
 }: {
   label: string;
   field: OrderSortField;
@@ -901,7 +957,32 @@ function SortHeader({
   align?: 'left' | 'right';
   /** Este campo en desc ES el orden por defecto: no se marca como aplicado. */
   defaultDesc?: boolean;
+  /** Orden fijo: rotulo plano; la columna que ordena lleva su flecha quieta. */
+  locked?: boolean;
 }) {
+  if (locked) {
+    const fixed = sort === field;
+    return (
+      <TableHead className={cn('whitespace-nowrap', align === 'right' && 'text-right')}>
+        <span
+          className={cn(
+            'inline-flex items-center gap-1 text-[10.5px] font-semibold uppercase tracking-wider',
+            fixed ? 'text-foreground' : 'text-muted-foreground/70',
+          )}
+          title={fixed ? 'Siempre del más antiguo al más reciente' : undefined}
+        >
+          {label}
+          {fixed ? (
+            dir === 'asc' ? (
+              <ChevronUp className="h-3 w-3" />
+            ) : (
+              <ChevronDown className="h-3 w-3" />
+            )
+          ) : null}
+        </span>
+      </TableHead>
+    );
+  }
   const active = sort === field && !(defaultDesc && dir === 'desc');
   return (
     <TableHead className={cn('whitespace-nowrap', align === 'right' && 'text-right')}>

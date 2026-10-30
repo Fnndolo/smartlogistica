@@ -10,6 +10,7 @@ import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ApiError, api } from '@/lib/api-client';
+import { isAdmin } from '@/lib/rbac';
 import { cn } from '@/lib/utils';
 
 interface Props {
@@ -30,7 +31,7 @@ export function SkydropxSedeCard({ warehouseId, initial }: Props) {
   const qc = useQueryClient();
   const user = useCurrentUser();
   // Mismos roles que gestionan la conexion Skydropx del tenant.
-  const canManage = user?.role === 'OWNER' || user?.role === 'ADMIN';
+  const canManage = isAdmin(user?.role);
 
   const { data: config } = useQuery({
     queryKey: ['skydropx-sede-config', warehouseId],
