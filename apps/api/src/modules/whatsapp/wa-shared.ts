@@ -42,6 +42,8 @@ export interface WaMessageRow {
   error?: string | null;
   edited?: boolean;
   starred?: boolean;
+  /** Linea (numero) por la que entro/salio: la bandeja filtra por ella. */
+  lineId?: string | null;
   createdAt: Date;
 }
 

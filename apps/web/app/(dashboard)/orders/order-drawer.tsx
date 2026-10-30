@@ -1432,6 +1432,12 @@ function ConversacionTab({
         qc.setQueryData<MentionItem[]>(['mentions'], (old) =>
           old?.map((m) => (m.orderId === orderId ? { ...m, unread: false } : m)),
         );
+        // Si la lista se estaba recargando (por el mismo mensaje), su respuesta
+        // pudo leerse ANTES de marcar leido y volveria a pintar el badge: se
+        // repite con la lectura ya guardada. Solo en esa carrera.
+        if (qc.isFetching({ queryKey: ['orders'] }) > 0) {
+          void qc.invalidateQueries({ queryKey: ['orders'] });
+        }
       })
       .catch(() => {});
   }, [orderId, messages.length, qc, active]);
@@ -3807,6 +3813,7 @@ function ActividadTab({ orderId }: { orderId: string }) {
   const { data: events = [], isLoading } = useQuery({
     queryKey: ['order-events', orderId],
     queryFn: () => api.get<OrderEvent[]>(`/v1/orders/${orderId}/events`),
+    refetchOnMount: 'always',
   });
 
   // Mismo cargando que Facturar/Guía (spinner de 20px en tinte --hint).

@@ -1526,16 +1526,24 @@ export class OrdersService implements OnModuleInit {
     const orderId = order.id;
     // Alertas de SUPER MENCION: una fila por destinatario. Persisten hasta que
     // cada quien la cierre — el que no esta en la plataforma la ve al volver.
+    // Va ANTES del aviso en vivo (el "ya lo vi" del receptor no puede llegar
+    // antes que la fila) y es best-effort: el mensaje ya se guardo.
     if (mentionAll && superRecipients.length > 0) {
-      await prisma.superMentionAlert.createMany({
-        data: superRecipients.map((userId) => ({
-          orderId,
-          messageId: msg.id,
-          userId,
-          authorName: displayName(auth),
-          preview: opts.preview.slice(0, 140),
-        })),
-      });
+      try {
+        await prisma.superMentionAlert.createMany({
+          data: superRecipients.map((userId) => ({
+            orderId,
+            messageId: msg.id,
+            userId,
+            authorName: displayName(auth),
+            preview: opts.preview.slice(0, 140),
+          })),
+        });
+      } catch (err) {
+        this.logger.warn(
+          `Alertas de super mencion de ${msg.id} no guardadas: ${err instanceof Error ? err.message : err}`,
+        );
+      }
     }
 
     // AL PESTAÑEO: chat.message se publica PRIMERO (es lo que pinta el mensaje
@@ -2835,6 +2843,7 @@ export class OrdersService implements OnModuleInit {
               imeis: [],
             },
           });
+          await this.dropFeedsForOrder(orderId);
           await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
           return;
         }
@@ -2856,6 +2865,7 @@ export class OrdersService implements OnModuleInit {
             imeis: [],
           },
         });
+        await this.dropFeedsForOrder(orderId);
         await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
       } catch {
         // best-effort: la facturacion nunca se bloquea por el adjunto
@@ -2879,6 +2889,7 @@ export class OrdersService implements OnModuleInit {
     // Pedido montado a mano: si la guia ya existia, con la factura queda COMPLETO
     // (pasa a Facturados). Best-effort: la factura ya quedo emitida igual.
     if (manual) await this.finalizeManual(order, auth).catch(() => null);
+    await this.dropFeedsForOrder(orderId);
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
     return result;
   }
@@ -2965,6 +2976,7 @@ export class OrdersService implements OnModuleInit {
           `Revisa el emisor en los Ajustes de la sede. Detalle: ${(err as Error).message}`,
       );
     }
+    await this.dropFeedsForOrder(orderId);
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
   }
 
@@ -3143,6 +3155,7 @@ export class OrdersService implements OnModuleInit {
         if (
           await this.backfillSkydropxLabel(tenantId, prisma, o.id, o.skydropxShipmentId as string)
         ) {
+          await this.dropFeedsForOrder(o.id);
           updated++;
         }
       }
@@ -3150,6 +3163,7 @@ export class OrdersService implements OnModuleInit {
       // rescatados antes de que existiera (o cuya generacion fallo) ya no
       // entran por la rama de arriba y se quedarian sin ella.
       if (await this.ensureDispatchRelation(prisma, o.id, o.skydropxShipmentId as string)) {
+        await this.dropFeedsForOrder(o.id);
         updated++;
       }
       const t = await this.skydropx.tracking(o.skydropxShipmentId as string);
@@ -3582,6 +3596,7 @@ export class OrdersService implements OnModuleInit {
     // recolector). Solo va al chat interno: es un documento operativo, no del
     // cliente. Best-effort, nunca tumba la guia.
     await this.attachDispatchRelation(orderId, order, ship.shipmentId, carrier, auth);
+    await this.dropFeedsForOrder(orderId);
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
     return {
       id: ship.shipmentId || ship.trackingNumber,
@@ -3723,6 +3738,7 @@ export class OrdersService implements OnModuleInit {
         : this.finalizeVtex({ ...order, shippingProvider: 'domicilio' }, auth).catch(() => null),
     ]);
 
+    await this.dropFeedsForOrder(orderId);
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
     return { id: number, number, url: null, createdAt: new Date().toISOString(), via: 'domicilio' };
   }
@@ -3982,6 +3998,7 @@ export class OrdersService implements OnModuleInit {
         .catch(() => null);
     }
 
+    await this.dropFeedsForOrder(orderId);
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
 
     return {
@@ -4339,6 +4356,7 @@ export class OrdersService implements OnModuleInit {
         // no bloquear por un fallo al adjuntar el MKT
       }
     }
+    await this.dropFeedsForOrder(order.id);
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
   }
 

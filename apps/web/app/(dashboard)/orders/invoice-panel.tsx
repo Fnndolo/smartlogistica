@@ -97,6 +97,9 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
     queryKey: ['invoice-preview', orderId],
     queryFn: () => api.get<InvoicePreview>(`/v1/orders/${orderId}/invoice-preview`),
     retry: false,
+    // Al abrir el pedido, lo de AHORA (otro pudo facturar o subir la foto IMEI);
+    // sin repetirlo con cada regreso a la pestaña (Alegra/IA cuestan).
+    refetchOnMount: 'always',
   });
 
   // Codigos que el usuario QUITO a mano: no se re-agregan al reconciliar.

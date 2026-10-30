@@ -37,6 +37,8 @@ export class WaPublisherService {
       await this.realtime.publish(tenantId, {
         kind: 'wa.message',
         phone: row.phone,
+        // La bandeja con una linea elegida no mete chats de la otra.
+        lineId: row.lineId ?? null,
         message: message as unknown as Record<string, unknown>,
       });
     } catch {

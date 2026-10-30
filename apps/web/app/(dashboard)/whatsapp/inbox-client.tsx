@@ -353,6 +353,19 @@ export function WhatsappInbox() {
         }
         clearTyping(phone);
         const isOpen = selectedRef.current === phone;
+        // Con una LINEA elegida, un mensaje de OTRA linea no entra a esta vista
+        // (el filtro del server mira la linea del ultimo mensaje). Si el chat
+        // estaba aqui, se paso a la otra linea: se recarga solo esta vista.
+        const viewLine = inboxKeyRef.current[1];
+        const evLine = typeof event.lineId === 'string' ? event.lineId : null;
+        if (viewLine && evLine && evLine !== viewLine) {
+          if (isOpen && msg.direction === 'in') markRead.mutate(phone);
+          const inView = qc
+            .getQueryData<WaInbox>(inboxKeyRef.current)
+            ?.chats.some((c) => c.phone === phone);
+          if (inView) void qc.invalidateQueries({ queryKey: inboxKeyRef.current, exact: true });
+          return;
+        }
         // Con BUSQUEDA activa la lista no se mueve sola (ver refetchInterval):
         // ni se inyecta ni se recarga.
         const searching = Boolean(inboxKeyRef.current[2]);

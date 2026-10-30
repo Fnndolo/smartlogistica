@@ -154,6 +154,9 @@ export function WhatsappPanel({
     // Solo con la pestaña AL FRENTE: en el drawer el panel vive montado aunque
     // se este en otra pestaña, y abrir cualquier pedido traia su hilo de WhatsApp.
     enabled: active,
+    // SIEMPRE fresco al abrir: con el staleTime global de 30 s, reabrir un chat
+    // mostraba el hilo de la cache sin lo ultimo del cliente (y lo marcaba leido).
+    staleTime: 0,
     // Respaldo por si el SSE se cae; el canal primario es wa.message.
     refetchInterval: active ? 30_000 : false,
     retry: false,

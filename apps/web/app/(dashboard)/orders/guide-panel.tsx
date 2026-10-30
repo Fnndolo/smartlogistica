@@ -228,6 +228,8 @@ export function GuidePanel({
     queryKey: ['guide-preview', orderId],
     queryFn: () => api.get<GuidePreview>(`/v1/orders/${orderId}/guide-preview`),
     retry: false,
+    // Al abrir el pedido, lo de AHORA (otro pudo generar la guia).
+    refetchOnMount: 'always',
   });
 
   // Catalogo de EMBALAJES de Skydropx (Caja de carton 4G, Saco bolsa 5H4...).
