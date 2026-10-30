@@ -9,7 +9,11 @@ export function QueryProvider({ children }: { children: React.ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            staleTime: 1000, // 1s — para que los polls realmente refresquen
+            // 30 s: lo que importa llega por SSE (invalidaciones) y los polls
+            // usan refetchInterval, que no depende de esto. Con 1 s, CADA
+            // regreso a la pestaña recargaba ~25-30 consultas aunque nada
+            // hubiera cambiado.
+            staleTime: 30_000,
             refetchOnWindowFocus: true,
             retry: 1,
           },

@@ -222,26 +222,32 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   // Un refresh COMPLETO pendiente no se pierde si detras, dentro del debounce,
   // llega uno de solo chat (antes el ultimo evento pisaba al anterior).
   const fullPendingRef = useRef(false);
-  // Pedidos de la pagina a la vista (lo usa el filtro de mensajes de chat).
+  // Pedidos de la pagina a la vista (lo usa el filtro de mensajes de chat) y si
+  // lo que se ve es todavia la pagina ANTERIOR mientras carga la nueva.
   const visibleIdsRef = useRef<Set<string>>(new Set());
+  const placeholderRef = useRef(false);
   const handleStreamEvent = useCallback(
     (event?: { kind: string; orderId?: unknown }) => {
-      // "esta escribiendo" es efimero, las reacciones a mensajes no tocan la
-      // lista y los mensajes de WHATSAPP viven en su propia pestaña: cero
-      // refetch de la tabla por ellos.
-      if (
-        event?.kind === 'chat.typing' ||
-        event?.kind === 'chat.reaction' ||
-        event?.kind === 'chat.edit' ||
-        event?.kind === 'wa.message'
-      )
-        return;
-      const chatOnly = event?.kind === 'chat.message';
+      // LISTA BLANCA: solo lo que cambia PEDIDOS recarga la tabla. Con la lista
+      // negra de antes, el "escribiendo..." de WhatsApp (cada 3 s mientras
+      // alguien escribe) se colaba como refresh completo y recargaba lista +
+      // conteos + pulso en todas las pestañas.
+      const kind = event?.kind;
+      const full =
+        kind === 'orders.refresh' || kind === 'order.upserted' || kind === 'order.removed';
+      const chatOnly = kind === 'chat.message';
+      if (!full && !chatOnly) return;
       // Un mensaje de chat solo cambia el badge de no leidos de SU fila: si ese
       // pedido no esta en la pagina no hay nada que recargar. Antes cada
       // mensaje de cualquiera recargaba la tabla en TODAS las pestañas abiertas.
-      if (chatOnly && !visibleIdsRef.current.has(String(event?.orderId ?? ''))) return;
-      if (!chatOnly) fullPendingRef.current = true;
+      // (Mientras carga otra pagina no se filtra: sus ids aun no se conocen.)
+      if (
+        chatOnly &&
+        !placeholderRef.current &&
+        !visibleIdsRef.current.has(String(event?.orderId ?? ''))
+      )
+        return;
+      if (full) fullPendingRef.current = true;
       const run = () => {
         lastRefetchRef.current = Date.now();
         // chat.message solo afecta el badge de no leidos -> solo la lista.
@@ -278,7 +284,8 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const totalPages = data?.totalPages ?? 1;
   useEffect(() => {
     visibleIdsRef.current = new Set((data?.items ?? []).map((o) => o.id));
-  }, [data]);
+    placeholderRef.current = isPlaceholderData;
+  }, [data, isPlaceholderData]);
   // La seleccion existe SOLO para mover pedidos entre sedes, y eso lo hace
   // unicamente un administrador (el gestor trabaja el pedido donde esta). Sin
   // ese permiso no se pintan ni las casillas: no habria nada que hacer con ellas.

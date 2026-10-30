@@ -17,7 +17,7 @@ import {
   Settings,
   Users,
 } from 'lucide-react';
-import type { OrdersDashboard, WarehouseSummary } from '@smartlogistica/shared';
+import type { WarehouseSummary } from '@smartlogistica/shared';
 
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api-client';
@@ -164,20 +164,19 @@ export function Sidebar() {
     queryFn: () => api.get<WarehouseSummary[]>('/v1/warehouses'),
     staleTime: 30_000,
   });
-  // Contador de "Pedidos" (generales), gemelo del de las sedes. El numero es el
-  // MISMO del Resumen: `unassigned` = espejo de VTEX esperando sede, que es
-  // exactamente lo que lista /orders. El rail vive en el layout y no se
-  // desmonta al navegar, asi que esto es UNA consulta por sesion (como
-  // /v1/warehouses), no una por pagina; y solo para quien ve el item — el API
-  // niega el resumen a los demas.
+  // Contador de "Pedidos" (generales), gemelo del de las sedes: espejo de VTEX
+  // esperando sede (sin sede + ready-for-handling), que es exactamente lo que
+  // lista /orders y el `unassigned` del Resumen. Sale de /stats (3 conteos que
+  // el API comparte entre pestañas) y no del Resumen entero (~10 consultas por
+  // un numero); la tabla lo invalida en vivo con cada cambio de pedidos.
   const seesOrders = canManageOrders(user?.role);
-  const { data: dashboard } = useQuery({
-    queryKey: ['orders-dashboard'],
-    queryFn: () => api.get<OrdersDashboard>('/v1/orders/dashboard'),
+  const { data: stats } = useQuery({
+    queryKey: ['order-stats'],
+    queryFn: () => api.get<{ readyForHandling: number }>('/v1/orders/stats'),
     enabled: seesOrders,
-    staleTime: 30_000,
+    staleTime: 60_000,
   });
-  const generalCount = dashboard?.unassigned ?? 0;
+  const generalCount = stats?.readyForHandling ?? 0;
   // Pedidos en vuelo (arrastre desde la tabla): las sedes se vuelven destinos.
   const drag = useOrderDrag();
 
@@ -206,7 +205,7 @@ export function Sidebar() {
     >
       <Link
         href="/dashboard"
-        prefetch
+        prefetch={false}
         className="flex min-w-0 items-center gap-2.5 px-1.5 pb-0.5 pt-1"
       >
         <span className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[9px] bg-gradient-to-br from-accent to-accent-deep text-white shadow-[0_4px_14px_-4px_hsl(var(--ring))]">
@@ -259,7 +258,7 @@ export function Sidebar() {
             <Fragment key={item.href}>
               <Link
                 href={item.href}
-                prefetch
+                prefetch={false}
                 // El estado activo se comunicaba SOLO por color: sin esto un
                 // lector de pantalla no sabe en que pagina estas.
                 aria-current={isActive ? 'page' : undefined}
@@ -301,7 +300,7 @@ export function Sidebar() {
                       <Link
                         key={s.href}
                         href={s.href}
-                        prefetch
+                        prefetch={false}
                         className={cn(SUB_BASE, on ? ITEM_ACTIVE : ITEM_IDLE)}
                       >
                         <span className="truncate">{s.label}</span>
@@ -321,7 +320,7 @@ export function Sidebar() {
                       <Link
                         key={s.href}
                         href={s.href}
-                        prefetch
+                        prefetch={false}
                         className={cn(SUB_BASE, on ? ITEM_ACTIVE : ITEM_IDLE)}
                       >
                         <span className="truncate">{s.label}</span>
@@ -350,7 +349,7 @@ export function Sidebar() {
           {isAdminUser ? (
             <Link
               href="/warehouses"
-              prefetch
+              prefetch={false}
               className="ml-auto grid h-[18px] w-[18px] place-items-center rounded-[5px] text-rail-ink-2 transition-colors [transition-duration:140ms] hover:bg-white/[0.08] hover:text-rail-ink"
               aria-label="Gestionar sedes"
               title="Gestionar sedes"
@@ -361,7 +360,7 @@ export function Sidebar() {
         </div>
 
         {warehouses.length === 0 ? (
-          <Link href="/warehouses" prefetch className={cn(SUB_BASE, ITEM_IDLE, 'px-2.5')}>
+          <Link href="/warehouses" prefetch={false} className={cn(SUB_BASE, ITEM_IDLE, 'px-2.5')}>
             Crear primera sede
           </Link>
         ) : (
@@ -380,7 +379,7 @@ export function Sidebar() {
                 <DropPulse target={w.id} />
                 <Link
                   href={base}
-                  prefetch
+                  prefetch={false}
                   className={cn(
                     ITEM_BASE,
                     active ? ITEM_ACTIVE : ITEM_IDLE,
@@ -405,7 +404,7 @@ export function Sidebar() {
                         <Link
                           key={s.href}
                           href={s.href}
-                          prefetch
+                          prefetch={false}
                           className={cn(SUB_BASE, on ? ITEM_ACTIVE : ITEM_IDLE)}
                         >
                           <span className="truncate">{s.label}</span>

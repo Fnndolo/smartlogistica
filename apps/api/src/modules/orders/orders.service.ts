@@ -1541,23 +1541,32 @@ export class OrdersService implements OnModuleInit {
     // AL PESTAÑEO: chat.message se publica PRIMERO (es lo que pinta el mensaje
     // en el chat abierto del receptor); lo secundario (marcar leido, push) va
     // despues y no puede retrasarlo.
-    const [authors, mentionRows] = await Promise.all([
-      prisma.orderMessage.findMany({
-        where: { orderId, kind: { not: 'system' } },
-        select: { authorId: true },
-        distinct: ['authorId'],
-      }),
-      prisma.orderMessage.findMany({
-        where: { orderId, NOT: { mentions: { isEmpty: true } } },
-        select: { mentions: true },
-      }),
-    ]);
-    const participants = authors.map((p) => p.authorId);
-    if (!participants.includes(auth.userId)) participants.push(auth.userId);
-    // Bandejas (Chats / Menciones) que cambian con este mensaje: las de quien
-    // escribio alguna vez en el pedido y las de quien fue mencionado en el,
-    // aunque nunca escribiera. Las de los demas siguen valiendo.
-    const feedUserIds = [...new Set([...participants, ...mentionRows.flatMap((r) => r.mentions)])];
+    // Participantes (avisos y push: quien ESCRIBIO en el pedido) y bandejas que
+    // cambian con este mensaje (Chats / Menciones: cualquiera que figure como
+    // autor —tambien de un mensaje de sistema— o mencionado). Una sola consulta
+    // y best-effort: el mensaje YA se guardo, y un fallo aqui (base saturada)
+    // no puede convertir el envio en un error que invite a reenviarlo.
+    let participants: string[] = [auth.userId];
+    let feedUserIds: string[] = [auth.userId, ...mentions];
+    try {
+      const thread = await prisma.orderMessage.findMany({
+        where: { orderId },
+        select: { authorId: true, kind: true, mentions: true },
+      });
+      participants = [
+        ...new Set([
+          ...thread.filter((m) => m.kind !== 'system').map((m) => m.authorId),
+          auth.userId,
+        ]),
+      ];
+      feedUserIds = [
+        ...new Set([...thread.flatMap((m) => [m.authorId, ...m.mentions]), auth.userId]),
+      ];
+    } catch (err) {
+      this.logger.warn(
+        `Participantes del pedido ${orderId} no disponibles: ${err instanceof Error ? err.message : err}`,
+      );
+    }
     await this.realtime.publish(tenantId, {
       kind: 'chat.message',
       orderId,
@@ -1585,7 +1594,8 @@ export class OrdersService implements OnModuleInit {
     // SIN orders.refresh: chat.message ya refresca la lista (no leidos) y las
     // bandejas. Con el refresh, CADA pestaña abierta recargaba lista + conteos
     // + pulso con cada mensaje que alguien escribia, y eso tumbaba la base.
-    await this.touchRead(orderId, auth.userId);
+    // Best-effort, igual que lo de abajo: el mensaje ya se guardo y se anuncio.
+    await this.touchRead(orderId, auth.userId).catch(() => undefined);
 
     // WEB PUSH (app CERRADA): mencionados con titulo especial; respondido y
     // demas participantes con el generico. Nunca al propio autor. El titulo
@@ -1596,10 +1606,9 @@ export class OrdersService implements OnModuleInit {
     const preview = opts.preview.slice(0, 120);
     const sede = order.warehouseId
       ? ((
-          await prisma.warehouse.findUnique({
-            where: { id: order.warehouseId },
-            select: { name: true },
-          })
+          await prisma.warehouse
+            .findUnique({ where: { id: order.warehouseId }, select: { name: true } })
+            .catch(() => null)
         )?.name ?? 'PEDIDOS GENERALES')
       : 'PEDIDOS GENERALES';
     const mentioned = new Set(mentions.filter((id) => id !== auth.userId));
@@ -1727,7 +1736,10 @@ export class OrdersService implements OnModuleInit {
       }
     }
 
-    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+    // SIN orders.refresh: chat.reaction ya actualiza los chats abiertos, y una
+    // reaccion a un mensaje no cambia la lista (sus chips son las del pedido,
+    // toggleOrderReaction) ni el pulso. Con el refresh, cada 👍 recargaba
+    // lista + conteos + pulso en TODAS las pestañas.
     const fresh = await prisma.orderMessage.findUniqueOrThrow({
       where: { id: messageId },
       include: { reactions: true },
@@ -2305,6 +2317,7 @@ export class OrdersService implements OnModuleInit {
         imeis: codes,
       },
     });
+    await this.dropFeedsForOrder(orderId);
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
 
     // 4. Buscar cada codigo en el catalogo de compras (best-effort).
@@ -4111,21 +4124,25 @@ export class OrdersService implements OnModuleInit {
     if (!order) return false;
     const rel = await this.skydropx.shipmentRelation(shipmentId).catch(() => null);
     if (!rel?.carrier) return false;
-    await this.attachDispatchRelation(
+    // Solo Inter Rapidisimo la usa. Con otra transportadora no hay nada que
+    // adjuntar y NO es un cambio: antes devolvia true y el rastreo publicaba un
+    // orders.refresh cada 2 min por sede, que recargaba todas las pestañas.
+    if (!/inter\s*rapid/i.test(rel.carrier)) return false;
+    return this.attachDispatchRelation(
       orderId,
       order,
       shipmentId,
       rel.carrier,
       await this.guideActor(prisma, orderId),
     );
-    return true;
   }
 
   /**
    * RELACION DE DESPACHO al chat interno. Solo Inter Rapidisimo la exige (es el
    * comprobante que firma el recolector); las demas transportadoras no la usan.
    * El PDF lo generamos nosotros calcado del que emite el panel de Skydropx,
-   * porque su API no lo expone. Best-effort: nunca tumba la guia.
+   * porque su API no lo expone. Best-effort: nunca tumba la guia. Devuelve si
+   * la adjunto (el rastreo solo avisa un cambio cuando de verdad lo hubo).
    */
   private async attachDispatchRelation(
     orderId: string,
@@ -4133,12 +4150,12 @@ export class OrdersService implements OnModuleInit {
     shipmentId: string,
     carrier: string,
     auth: AuthContext,
-  ): Promise<void> {
-    if (!/inter\s*rapid/i.test(carrier) || !shipmentId) return;
-    if (!this.storage.isConfigured()) return;
+  ): Promise<boolean> {
+    if (!/inter\s*rapid/i.test(carrier) || !shipmentId) return false;
+    if (!this.storage.isConfigured()) return false;
     try {
       const rel = await this.skydropx.shipmentRelation(shipmentId);
-      if (!rel?.trackingNumber || !rel.from || !rel.to || !rel.parcel) return;
+      if (!rel?.trackingNumber || !rel.from || !rel.to || !rel.parcel) return false;
       const pdf = await this.dispatchRelation.build({
         // Skydropx numera las suyas SKD-xxxx; la nuestra se identifica con la guia.
         relationNumber: `SKD-${rel.trackingNumber}`,
@@ -4168,8 +4185,10 @@ export class OrdersService implements OnModuleInit {
           imeis: [],
         },
       });
+      return true;
     } catch {
       // Documento operativo: si falla, la guia y el rotulo siguen su curso.
+      return false;
     }
   }
 
@@ -4375,6 +4394,22 @@ export class OrdersService implements OnModuleInit {
         imeis: [],
       },
     });
+    await this.dropFeedsForOrder(orderId);
+  }
+
+  /**
+   * Un mensaje que NO viaja como chat.message (sistema, foto IMEI) tambien
+   * cambia el ultimo mensaje en las bandejas de quienes participan en el
+   * pedido: se descartan las suyas. Best-effort.
+   */
+  private async dropFeedsForOrder(orderId: string): Promise<void> {
+    const { tenantId, prisma } = getTenantContext();
+    const thread = await prisma.orderMessage
+      .findMany({ where: { orderId }, select: { authorId: true, mentions: true } })
+      .catch(() => [] as Array<{ authorId: string; mentions: string[] }>);
+    for (const userId of new Set(thread.flatMap((m) => [m.authorId, ...m.mentions]))) {
+      this.dropFeedsOf(tenantId, userId);
+    }
   }
 
   /**

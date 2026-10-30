@@ -71,6 +71,18 @@ export function useOrdersStream(onChange: (event?: RealtimeEvent) => void): bool
         setConnected(true);
         armWatchdog();
       });
+      // "Escribiendo..." (WhatsApp y chat interno) llega como evento CON NOMBRE
+      // para que los clientes viejos no lo tomen por un cambio de pedidos (ver
+      // el endpoint). Aqui se entrega igual que los demas: cada caller filtra.
+      es.addEventListener('typing', (ev) => {
+        setConnected(true);
+        armWatchdog();
+        try {
+          onChangeRef.current(JSON.parse((ev as MessageEvent).data as string) as RealtimeEvent);
+        } catch {
+          /* payload ilegible: se ignora */
+        }
+      });
       es.onerror = () => {
         // EventSource reintenta solo; el watchdog cubre los stalls silenciosos.
         setConnected(false);

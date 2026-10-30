@@ -25,7 +25,7 @@ export function OrdersTabs() {
           <Link
             key={t.href}
             href={t.href}
-            prefetch
+            prefetch={false}
             className={cn(
               'flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-[13px] font-medium transition-colors',
               on

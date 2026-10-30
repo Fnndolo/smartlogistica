@@ -231,6 +231,12 @@ export function WhatsappInbox() {
     // vaciaba la lista y parpadeaba.
     placeholderData: (prev: WaInbox | undefined) => prev,
   });
+  // Clave EXACTA de la bandeja a la vista. Los parches locales (SSE, leidos,
+  // menu) tienen que escribir en la misma que lee useQuery: antes escribian en
+  // ['wa-inbox', line] (sin la busqueda), no pegaban nunca, y cada mensaje
+  // terminaba en un refetch de la bandeja entera en cada pestaña.
+  const inboxKeyRef = useRef<readonly unknown[]>(['wa-inbox', line, qServidor]);
+  inboxKeyRef.current = ['wa-inbox', line, qServidor];
 
   // Marcar LEIDO (apaga el contador verde de este usuario).
   const markRead = useMutation({
@@ -238,7 +244,7 @@ export function WhatsappInbox() {
   });
   const clearUnread = useCallback(
     (phone: string) => {
-      qc.setQueryData<WaInbox>(['wa-inbox', line], (old) =>
+      qc.setQueryData<WaInbox>(inboxKeyRef.current, (old) =>
         old
           ? { ...old, chats: old.chats.map((c) => (c.phone === phone ? { ...c, unread: 0 } : c)) }
           : old,
@@ -347,8 +353,11 @@ export function WhatsappInbox() {
         }
         clearTyping(phone);
         const isOpen = selectedRef.current === phone;
-        qc.setQueryData<WaInbox>(['wa-inbox', line], (old) => {
-          if (!old) return old;
+        // Con BUSQUEDA activa la lista no se mueve sola (ver refetchInterval):
+        // ni se inyecta ni se recarga.
+        const searching = Boolean(inboxKeyRef.current[2]);
+        qc.setQueryData<WaInbox>(inboxKeyRef.current, (old) => {
+          if (!old || searching) return old;
           const existing = old.chats.find((c) => c.phone === phone);
           // Un UPDATE de un mensaje VIEJO (chulito en cascada, reaccion,
           // editado) NO es "el ultimo mensaje": no reescribe la fila.
@@ -388,7 +397,10 @@ export function WhatsappInbox() {
           return { ...old, chats: next };
         });
         if (isOpen && msg.direction === 'in') markRead.mutate(phone);
-        if (!existingName(qc, phone)) void qc.invalidateQueries({ queryKey: ['wa-inbox'] });
+        // Solo un chat NUEVO (sin nombre conocido) necesita traer la bandeja.
+        if (!searching && !existingName(qc, phone)) {
+          void qc.invalidateQueries({ queryKey: inboxKeyRef.current, exact: true });
+        }
       },
       // eslint-disable-next-line react-hooks/exhaustive-deps
       [qc, me?.id, noteTyping, clearTyping],
@@ -398,7 +410,7 @@ export function WhatsappInbox() {
   // ===== Operaciones del menu contextual =====
   const patchChat = useCallback(
     (phone: string, patch: Partial<WaInboxItem>) => {
-      qc.setQueryData<WaInbox>(['wa-inbox', line], (old) =>
+      qc.setQueryData<WaInbox>(inboxKeyRef.current, (old) =>
         old
           ? {
               ...old,
@@ -778,8 +790,12 @@ export function WhatsappInbox() {
 
 /** ¿Ya conocemos el nombre del chat? (si no, un refetch lo trae del contacto). */
 function existingName(qc: ReturnType<typeof useQueryClient>, phone: string): boolean {
-  const inbox = qc.getQueryData<WaInbox>(['wa-inbox']);
-  return Boolean(inbox?.chats.find((c) => c.phone === phone)?.name);
+  // Por PREFIJO: la clave real lleva linea y busqueda (['wa-inbox', line, q]).
+  // Con la clave exacta ['wa-inbox'] nunca encontraba nada y CADA mensaje
+  // recargaba la bandeja entera.
+  return qc
+    .getQueriesData<WaInbox>({ queryKey: ['wa-inbox'] })
+    .some(([, inbox]) => Boolean(inbox?.chats.find((c) => c.phone === phone)?.name));
 }
 
 /** Menu contextual del chat: arranca en el punto exacto; arriba si no hay espacio. */

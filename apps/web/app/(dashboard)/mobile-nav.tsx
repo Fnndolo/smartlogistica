@@ -121,7 +121,7 @@ export function MobileBottomNav() {
           <Link
             key={tab.href}
             href={tab.href}
-            prefetch
+            prefetch={false}
             aria-current={active ? 'page' : undefined}
             className={cn(
               'relative flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] transition-colors [transition-duration:140ms]',

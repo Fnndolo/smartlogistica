@@ -151,6 +151,9 @@ export function WhatsappPanel({
   } = useQuery({
     queryKey: ['wa-thread', base],
     queryFn: () => api.get<WaThread>(base),
+    // Solo con la pestaña AL FRENTE: en el drawer el panel vive montado aunque
+    // se este en otra pestaña, y abrir cualquier pedido traia su hilo de WhatsApp.
+    enabled: active,
     // Respaldo por si el SSE se cae; el canal primario es wa.message.
     refetchInterval: active ? 30_000 : false,
     retry: false,
@@ -473,10 +476,11 @@ export function WhatsappPanel({
     if (!active || !opPhone || count === 0) return;
     const t = setTimeout(() => {
       void api.post(orderId ? `${base}/read` : `${opBase}/read`, {}).catch(() => null);
-      qc.setQueryData<{
+      // Por PREFIJO: la bandeja vive en ['wa-inbox', linea, busqueda].
+      qc.setQueriesData<{
         chats: Array<{ phone: string; unread: number } & Record<string, unknown>>;
         labels: string[];
-      }>(['wa-inbox'], (old) =>
+      }>({ queryKey: ['wa-inbox'] }, (old) =>
         old
           ? { ...old, chats: old.chats.map((c) => (c.phone === opPhone ? { ...c, unread: 0 } : c)) }
           : old,

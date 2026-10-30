@@ -44,11 +44,13 @@ import { toast } from 'sonner';
 import { DEFAULT_VTEX_FEES, vtexNetValue, type VtexFees } from '@smartlogistica/shared';
 import type {
   CatalogMatch,
+  ChatInboxItem,
   DevicePhotoKind,
   DevicePhotoResponse,
   Inbox,
   ListOrdersResponse,
   MemberSummary,
+  MentionItem,
   OrderDetail,
   OrderEvent,
   OrderMessage,
@@ -634,7 +636,9 @@ function DrawerContent({
             </TabPane>
           </>
         ) : null}
-        {canManage ? (
+        {/* Mismo permiso que el boton: montado para quien no la ve, pedia
+            /events en cada drawer y recibia 403 (con reintento y al enfocar). */}
+        {canSeeAudit(me?.role) ? (
           <TabPane tab="actividad" active={tab === 'actividad'} scroll>
             <ActividadTab orderId={order.id} />
           </TabPane>
@@ -1390,7 +1394,9 @@ function ConversacionTab({
 
   const { data: messages = [], isLoading } = useQuery({
     ...orderMessagesQuery(orderId),
-    refetchInterval: 15_000, // respaldo; la inmediatez la da el SSE
+    // Respaldo; la inmediatez la da el SSE. Solo con la conversacion AL FRENTE
+    // (el drawer deja todas sus pestañas montadas).
+    refetchInterval: active ? 15_000 : false,
     placeholderData: keepPreviousData,
   });
 
@@ -1408,8 +1414,24 @@ function ConversacionTab({
     api
       .post(`/v1/orders/${orderId}/read`)
       .then(() => {
-        qc.invalidateQueries({ queryKey: ['orders'] });
-        qc.invalidateQueries({ queryKey: ['inbox'] });
+        // Parche LOCAL, sin ir a la red: el badge de esta fila y las bandejas
+        // (Chats / Menciones del menu) bajan al instante. Antes se recargaba la
+        // lista ENTERA de la sede por un badge, con cada mensaje, y las bandejas
+        // ni se enteraban (seguian marcando no leido).
+        qc.setQueriesData<ListOrdersResponse>({ queryKey: ['orders'] }, (d) =>
+          d && Array.isArray(d.items)
+            ? {
+                ...d,
+                items: d.items.map((o) => (o.id === orderId ? { ...o, unreadCount: 0 } : o)),
+              }
+            : d,
+        );
+        qc.setQueryData<ChatInboxItem[]>(['chats-inbox'], (old) =>
+          old?.map((c) => (c.orderId === orderId ? { ...c, unreadCount: 0, mentioned: false } : c)),
+        );
+        qc.setQueryData<MentionItem[]>(['mentions'], (old) =>
+          old?.map((m) => (m.orderId === orderId ? { ...m, unread: false } : m)),
+        );
       })
       .catch(() => {});
   }, [orderId, messages.length, qc, active]);

@@ -35,7 +35,7 @@ export function SedeTabs({ warehouseId }: { warehouseId: string }) {
           <Link
             key={t.href}
             href={t.href}
-            prefetch
+            prefetch={false}
             className={cn(
               'flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
               active

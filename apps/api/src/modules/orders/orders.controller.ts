@@ -330,7 +330,13 @@ export class OrdersController {
 
       const unsubscribe = this.realtime.subscribe(tenantId, (event) => {
         try {
-          subscriber.next({ data: event });
+          // "Escribiendo..." (WhatsApp y chat interno) va como evento CON NOMBRE:
+          // llega cada 3 s mientras alguien escribe, y los clientes viejos lo
+          // tomaban como "cambiaron los pedidos" y recargaban lista + conteos +
+          // pulso en todas las pestañas. Ellos no escuchan 'typing' (lo ignoran);
+          // los nuevos lo escuchan aparte (use-orders-stream).
+          const typing = event.kind === 'wa.typing' || event.kind === 'chat.typing';
+          subscriber.next(typing ? { type: 'typing', data: event } : { data: event });
         } catch {
           /* subscriber cerrado; la teardown limpia abajo */
         }

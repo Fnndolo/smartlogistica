@@ -176,6 +176,8 @@ interface InboxState {
   /** Forzar el recorrido completo en la proxima peticion. */
   full: boolean;
   pending: Promise<InboxBase> | null;
+  /** Vuelta extra por marcas que llegaron con un calculo ya en curso. */
+  followUp: Promise<InboxBase> | null;
 }
 
 /** Red de seguridad: el recorrido completo se rehace, como mucho, una vez por minuto. */
@@ -844,14 +846,8 @@ export class WhatsappService {
     // sin ella, se devuelven los mas recientes y ya.
     const phones = q ? await this.searchPhones(prisma, q) : null;
 
-    const [base, unreadRows, labelRows] = await Promise.all([
+    const [base, labelRows] = await Promise.all([
       this.inboxBaseFor(tenantId, prisma),
-      prisma.$queryRaw<Array<{ phone: string; unread: bigint }>>`
-        SELECT m.phone, COUNT(*)::bigint AS unread
-        FROM "WaMessage" m
-        LEFT JOIN "WaChatRead" r ON r.phone = m.phone AND r."userId" = ${auth.userId}
-        WHERE m.direction = 'in' AND (r."lastReadAt" IS NULL OR m."createdAt" > r."lastReadAt")
-        GROUP BY m.phone`,
       prisma.waLabel.findMany({ orderBy: { name: 'asc' } }),
     ]);
 
@@ -862,7 +858,6 @@ export class WhatsappService {
     );
     const byPhone = base.contacts;
     const orderInfo = base.orders;
-    const unread = new Map(unreadRows.map((r) => [r.phone, Number(r.unread)] as const));
     const colorOf = new Map(labelRows.map((l) => [l.name, l.color] as const));
 
     // Se mapea TODO y se ordena antes de recortar. Al reves — recortar y luego
@@ -889,9 +884,8 @@ export class WhatsappService {
               : null,
           shippingState: ord?.shippingState ?? null,
           shippingStatus: ord?.shippingStatus ?? null,
-          // Si el ULTIMO mensaje es NUESTRO (bot del flujo o un admin), el chat
-          // ya quedo respondido: NO cuenta como no leido.
-          unread: m.direction === 'out' ? 0 : (unread.get(m.phone) ?? 0),
+          // Se llena abajo, solo para los chats que se pintan.
+          unread: 0,
           archived: Boolean(c?.archived),
           muted: Boolean(c?.muted),
           pinned: Boolean(c?.pinned),
@@ -907,6 +901,25 @@ export class WhatsappService {
       // llega aqui acotado. Sin busqueda son los mas recientes, que es lo que
       // se espera de una bandeja.
       .slice(0, 400);
+
+    // NO LEIDOS (de este usuario): solo cuentan los chats cuyo ULTIMO mensaje
+    // es del cliente —si es NUESTRO (bot o un admin), ya quedo respondido— y
+    // solo los que se pintan. Por indice (phone, createdAt): antes se contaba
+    // la tabla ENTERA por usuario en cada peticion.
+    const inPhones = chats.filter((c) => c.lastDirection === 'in').map((c) => c.phone);
+    if (inPhones.length > 0) {
+      const unreadRows = await prisma.$queryRaw<Array<{ phone: string; unread: bigint }>>`
+        SELECT m.phone, COUNT(*)::bigint AS unread
+        FROM "WaMessage" m
+        LEFT JOIN "WaChatRead" r ON r.phone = m.phone AND r."userId" = ${auth.userId}
+        WHERE m.phone = ANY(${inPhones}) AND m.direction = 'in'
+          AND (r."lastReadAt" IS NULL OR m."createdAt" > r."lastReadAt")
+        GROUP BY m.phone`;
+      const unread = new Map(unreadRows.map((r) => [r.phone, Number(r.unread)] as const));
+      for (const c of chats) {
+        if (c.lastDirection === 'in') c.unread = unread.get(c.phone) ?? 0;
+      }
+    }
 
     const usedNames = new Set(chats.flatMap((c) => c.labels));
     const labels = [...new Set([...labelRows.map((l) => l.name), ...usedNames])]
@@ -928,11 +941,25 @@ export class WhatsappService {
         ordersDirty: false,
         full: false,
         pending: null,
+        followUp: null,
       };
       this.inboxState.set(tenantId, state);
     }
     const s = state;
-    if (s.pending) return s.pending;
+    if (s.pending) {
+      // Cada calculo limpia las marcas al EMPEZAR: si hay marcas ahora, llegaron
+      // despues de que arranco el que esta en curso, y quien pide justo por ese
+      // evento no puede recibir el calculo viejo. Una sola continuacion
+      // compartida: espera el actual y aplica lo que falto.
+      if (s.dirtyPhones.size === 0 && !s.full) return s.pending;
+      s.followUp ??= s.pending
+        .catch(() => undefined)
+        .then(() => {
+          s.followUp = null;
+          return this.inboxBaseFor(tenantId, prisma);
+        });
+      return s.followUp;
+    }
     const base = s.base;
     const usable = base && !s.full && Date.now() - base.at < INBOX_FULL_EVERY_MS;
     if (usable && s.dirtyPhones.size === 0 && !s.ordersDirty) return Promise.resolve(base);
