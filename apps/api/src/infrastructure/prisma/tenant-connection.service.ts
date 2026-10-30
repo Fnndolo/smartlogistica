@@ -149,9 +149,11 @@ export class TenantConnectionService implements OnModuleDestroy {
       ? 'disable'
       : (this.config.get<string>('TENANT_DB_SSLMODE') ?? 'require');
     const encodedPwd = encodeURIComponent(password);
-    // connection_limit=10: con 10-20 usuarios simultaneos del MISMO tenant, 5
-    // conexiones hacian cola en picos (facturar + listas + chat a la vez).
-    return `postgresql://${tenant.dbRole}:${encodedPwd}@${hostPort}/${tenant.dbName}?sslmode=${sslmode}&connection_limit=10&pool_timeout=10`;
+    // connection_limit=30: con 10-20 usuarios simultaneos del MISMO tenant, 5
+    // conexiones hacian cola en picos (facturar + listas + chat a la vez), y
+    // con 10 las consultas lentas (bandejas) ocupaban todas y lo rapido —abrir
+    // un chat, facturar, recibir un mensaje— esperaba en fila hasta fallar.
+    return `postgresql://${tenant.dbRole}:${encodedPwd}@${hostPort}/${tenant.dbName}?sslmode=${sslmode}&connection_limit=30&pool_timeout=10`;
   }
 
   /** Cierra y elimina el cliente cacheado de un tenant (uso: tras suspender o eliminar). */

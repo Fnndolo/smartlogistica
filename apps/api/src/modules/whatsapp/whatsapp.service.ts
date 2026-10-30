@@ -130,6 +130,57 @@ export const WA_FILE_MAX_BYTES = 50 * 1024 * 1024;
 /** Copia de un mensaje borrado de la plataforma, tal como queda en la bitacora. */
 type WaDeletedSnapshot = Omit<WaMessageRow, 'createdAt'> & { createdAt: string };
 
+/** Ultimo mensaje de un chat, tal como lo pinta la bandeja. */
+interface InboxLastRow {
+  phone: string;
+  kind: string;
+  body: string | null;
+  direction: string;
+  status: string | null;
+  createdAt: Date;
+  lineId: string | null;
+}
+
+interface InboxContact {
+  phone: string;
+  name: string | null;
+  labels: Prisma.JsonValue;
+  archived: boolean;
+  muted: boolean;
+  pinned: boolean;
+}
+
+type InboxOrders = Map<
+  string,
+  {
+    name: string | null;
+    shippingState: string | null;
+    shippingStatus: string | null;
+    hasGuide: boolean;
+  }
+>;
+
+/** Lo que la bandeja tiene IGUAL para todos los usuarios de un tenant. */
+interface InboxBase {
+  at: number;
+  last: Map<string, InboxLastRow>;
+  contacts: Map<string, InboxContact>;
+  orders: InboxOrders;
+}
+
+interface InboxState {
+  base: InboxBase | null;
+  /** Telefonos con algo nuevo desde el ultimo calculo (llegan por SSE). */
+  dirtyPhones: Set<string>;
+  ordersDirty: boolean;
+  /** Forzar el recorrido completo en la proxima peticion. */
+  full: boolean;
+  pending: Promise<InboxBase> | null;
+}
+
+/** Red de seguridad: el recorrido completo se rehace, como mucho, una vez por minuto. */
+const INBOX_FULL_EVERY_MS = 60_000;
+
 interface UploadedWaFile {
   buffer: Buffer;
   mimetype: string;
@@ -149,6 +200,15 @@ interface UploadedWaFile {
 @Injectable()
 export class WhatsappService {
   private readonly logger = new Logger(WhatsappService.name);
+  /**
+   * Bandeja compartida por tenant. Calcular el ultimo mensaje de cada chat
+   * recorre los ~180 mil mensajes (1-5 s con la base cargada), y cada pestaña
+   * abierta lo pedia cada 30 s: ocupaba las conexiones de la base y TODO lo
+   * demas (chat, facturar, guia, recibir mensajes) hacia fila. Ahora se
+   * calcula una vez para todos; un evento de WhatsApp solo recalcula SU
+   * telefono (por indice, milisegundos).
+   */
+  private readonly inboxState = new Map<string, InboxState>();
 
   constructor(
     private readonly dialog360: Dialog360Client,
@@ -169,6 +229,20 @@ export class WhatsappService {
    * con error claro al enviar (y ensure-ffmpeg.mjs del startCommand intenta
    * descargarlo antes de llegar aqui). */
   async onModuleInit(): Promise<void> {
+    this.realtime.subscribeAll((tenantId, event) => {
+      const state = this.inboxState.get(tenantId);
+      if (!state) return;
+      if (event.kind === 'wa.message') {
+        if (typeof event.phone === 'string' && event.phone) state.dirtyPhones.add(event.phone);
+        else state.full = true;
+      } else if (
+        event.kind === 'orders.refresh' ||
+        event.kind === 'order.upserted' ||
+        event.kind === 'order.removed'
+      ) {
+        state.ordersDirty = true;
+      }
+    });
     try {
       const p = (await import('ffmpeg-static')).default as unknown as string | null;
       const fsp = await import('node:fs/promises');
@@ -762,55 +836,32 @@ export class WhatsappService {
    */
   async inbox(auth: AuthContext, lineId?: string | null, search?: string | null): Promise<WaInbox> {
     this.assertWhatsappAccess(auth);
-    const { prisma } = getTenantContext();
+    const { tenantId, prisma } = getTenantContext();
     const line = lineId?.trim() || null;
     const q = search?.trim() || null;
 
     // Con busqueda, primero se acota a los telefonos que casan EN TODA la base;
     // sin ella, se devuelven los mas recientes y ya.
     const phones = q ? await this.searchPhones(prisma, q) : null;
-    const conds: Prisma.Sql[] = [];
-    if (line) conds.push(Prisma.sql`t."lineId" = ${line}`);
-    if (phones) conds.push(Prisma.sql`t.phone = ANY(${phones})`);
-    const filtro = conds.length ? Prisma.sql`WHERE ${Prisma.join(conds, ' AND ')}` : Prisma.empty;
 
-    const [last, unreadRows, contacts] = await Promise.all([
-      prisma.$queryRaw<
-        Array<{
-          phone: string;
-          kind: string;
-          body: string | null;
-          direction: string;
-          status: string | null;
-          createdAt: Date;
-        }>
-      >`SELECT * FROM (
-          SELECT DISTINCT ON (phone) phone, kind, body, direction, status, "createdAt", "lineId"
-          FROM "WaMessage" ORDER BY phone, "createdAt" DESC
-        ) t ${filtro}`,
+    const [base, unreadRows, labelRows] = await Promise.all([
+      this.inboxBaseFor(tenantId, prisma),
       prisma.$queryRaw<Array<{ phone: string; unread: bigint }>>`
         SELECT m.phone, COUNT(*)::bigint AS unread
         FROM "WaMessage" m
         LEFT JOIN "WaChatRead" r ON r.phone = m.phone AND r."userId" = ${auth.userId}
         WHERE m.direction = 'in' AND (r."lastReadAt" IS NULL OR m."createdAt" > r."lastReadAt")
         GROUP BY m.phone`,
-      prisma.waContact.findMany({
-        select: {
-          phone: true,
-          name: true,
-          labels: true,
-          archived: true,
-          muted: true,
-          pinned: true,
-        },
-      }),
-    ]);
-    const [labelRows, orderInfo] = await Promise.all([
       prisma.waLabel.findMany({ orderBy: { name: 'asc' } }),
-      this.ordersByPhone(prisma),
     ]);
 
-    const byPhone = new Map(contacts.map((c) => [c.phone, c] as const));
+    // El filtro de linea mira el ULTIMO mensaje del chat (ver arriba).
+    const wanted = phones ? new Set(phones) : null;
+    const last = [...base.last.values()].filter(
+      (m) => (!line || m.lineId === line) && (!wanted || wanted.has(m.phone)),
+    );
+    const byPhone = base.contacts;
+    const orderInfo = base.orders;
     const unread = new Map(unreadRows.map((r) => [r.phone, Number(r.unread)] as const));
     const colorOf = new Map(labelRows.map((l) => [l.name, l.color] as const));
 
@@ -862,6 +913,112 @@ export class WhatsappService {
       .sort((a, b) => a.localeCompare(b))
       .map((name) => ({ name, color: colorOf.get(name) ?? '#00a884' }));
     return { chats, labels };
+  }
+
+  /**
+   * La parte compartida de la bandeja. Las peticiones simultaneas esperan el
+   * MISMO calculo; con telefonos marcados solo se recalculan esos.
+   */
+  private inboxBaseFor(tenantId: string, prisma: PrismaClient): Promise<InboxBase> {
+    let state = this.inboxState.get(tenantId);
+    if (!state) {
+      state = {
+        base: null,
+        dirtyPhones: new Set(),
+        ordersDirty: false,
+        full: false,
+        pending: null,
+      };
+      this.inboxState.set(tenantId, state);
+    }
+    const s = state;
+    if (s.pending) return s.pending;
+    const base = s.base;
+    const usable = base && !s.full && Date.now() - base.at < INBOX_FULL_EVERY_MS;
+    if (usable && s.dirtyPhones.size === 0 && !s.ordersDirty) return Promise.resolve(base);
+    const run = (
+      usable ? this.patchInboxBase(s, base, prisma) : this.loadInboxBase(s, prisma)
+    ).finally(() => {
+      if (s.pending === run) s.pending = null;
+    });
+    s.pending = run;
+    return run;
+  }
+
+  private async loadInboxBase(s: InboxState, prisma: PrismaClient): Promise<InboxBase> {
+    const at = Date.now();
+    // Lo que llegue MIENTRAS se calcula queda marcado para la siguiente vuelta.
+    s.dirtyPhones.clear();
+    s.ordersDirty = false;
+    s.full = false;
+    try {
+      const [rows, contacts, orders] = await Promise.all([
+        this.lastMessages(prisma, null),
+        this.inboxContacts(prisma, null),
+        this.ordersByPhone(prisma),
+      ]);
+      s.base = {
+        at,
+        last: new Map(rows.map((r) => [r.phone, r])),
+        contacts: new Map(contacts.map((c) => [c.phone, c])),
+        orders,
+      };
+      return s.base;
+    } catch (err) {
+      s.full = true;
+      throw err;
+    }
+  }
+
+  private async patchInboxBase(
+    s: InboxState,
+    base: InboxBase,
+    prisma: PrismaClient,
+  ): Promise<InboxBase> {
+    const phones = [...s.dirtyPhones];
+    const orders = s.ordersDirty;
+    s.dirtyPhones.clear();
+    s.ordersDirty = false;
+    try {
+      const [rows, contacts, orderInfo] = await Promise.all([
+        phones.length ? this.lastMessages(prisma, phones) : Promise.resolve([]),
+        phones.length ? this.inboxContacts(prisma, phones) : Promise.resolve([]),
+        orders ? this.ordersByPhone(prisma) : Promise.resolve(null),
+      ]);
+      // Un chat vaciado o eliminado ya no trae filas: sale de la bandeja.
+      for (const p of phones) {
+        base.last.delete(p);
+        base.contacts.delete(p);
+      }
+      for (const r of rows) base.last.set(r.phone, r);
+      for (const c of contacts) base.contacts.set(c.phone, c);
+      if (orderInfo) base.orders = orderInfo;
+      return base;
+    } catch (err) {
+      for (const p of phones) s.dirtyPhones.add(p);
+      if (orders) s.ordersDirty = true;
+      throw err;
+    }
+  }
+
+  /**
+   * Ultimo mensaje por telefono. Primero la fecha maxima por telefono (solo
+   * columnas del indice) y luego la fila: el DISTINCT ON de antes ordenaba los
+   * 180 mil mensajes completos y se derramaba a disco.
+   */
+  private lastMessages(prisma: PrismaClient, phones: string[] | null): Promise<InboxLastRow[]> {
+    const only = phones ? Prisma.sql`WHERE phone = ANY(${phones})` : Prisma.empty;
+    return prisma.$queryRaw<InboxLastRow[]>`
+      SELECT w.phone, w.kind, w.body, w.direction, w.status, w."createdAt", w."lineId"
+      FROM (SELECT phone, max("createdAt") AS at FROM "WaMessage" ${only} GROUP BY phone) l
+      JOIN "WaMessage" w ON w.phone = l.phone AND w."createdAt" = l.at`;
+  }
+
+  private inboxContacts(prisma: PrismaClient, phones: string[] | null): Promise<InboxContact[]> {
+    return prisma.waContact.findMany({
+      ...(phones ? { where: { phone: { in: phones } } } : {}),
+      select: { phone: true, name: true, labels: true, archived: true, muted: true, pinned: true },
+    });
   }
 
   /** Operaciones del menu contextual: archivar / silenciar / fijar. */
