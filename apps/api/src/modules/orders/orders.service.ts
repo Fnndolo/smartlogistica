@@ -1125,10 +1125,17 @@ export class OrdersService implements OnModuleInit {
       },
     } as Prisma.InputJsonValue;
 
-    // Nº propio y legible: MP-0001, MP-0002... (reintenta si dos personas montan
-    // a la vez y chocan en el unique provider+externalId).
+    // Nº propio y legible: MP-0001, MP-0002... a partir del MAYOR que exista, no
+    // del conteo: con pedidos montados eliminados el conteo se quedaba atras y,
+    // con 5 borrados, los 5 reintentos chocaban todos con numeros ya usados
+    // ("Internal server error" al montar). Reintenta si dos personas montan a
+    // la vez y chocan en el unique provider+externalId.
     let order: OrderWithItems | null = null;
-    const base = await prisma.order.count({ where: { provider: 'manual' } });
+    const [{ max }] = await prisma.$queryRaw<Array<{ max: number | null }>>`
+      SELECT max(substring("externalId" from 4)::int) AS max
+      FROM "Order"
+      WHERE provider = 'manual' AND "externalId" ~ '^MP-[0-9]+$'`;
+    const base = max ?? 0;
     for (let attempt = 0; attempt < 5 && !order; attempt++) {
       const externalId = `MP-${String(base + 1 + attempt).padStart(4, '0')}`;
       try {
