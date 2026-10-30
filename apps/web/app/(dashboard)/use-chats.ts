@@ -9,6 +9,18 @@ import { api } from '@/lib/api-client';
 import { useOrdersStream } from './orders/use-orders-stream';
 
 /**
+ * Eventos que SI cambian las bandejas de Chats y Menciones. Los de WhatsApp
+ * (cada "entregado"/"leido"), VTEX, reacciones y "escribiendo" no: recargar con
+ * ellos, desde cada pestaña abierta, saturaba la base.
+ */
+export const CHAT_FEED_EVENTS = new Set([
+  'chat.message',
+  'chat.edit',
+  'orders.refresh',
+  'order.removed',
+]);
+
+/**
  * La BANDEJA del chat interno + refresco en vivo (SSE).
  *
  * A diferencia de `useMentions`, esta NO lanza avisos: de una mencion avisan ya
@@ -27,9 +39,7 @@ export function useChats(): { items: ChatInboxItem[]; unread: number; loading: b
   useOrdersStream(
     useCallback(
       (event?: { kind: string }) => {
-        // "Escribiendo..." es efimero y llega constantemente: recargar la
-        // bandeja con cada pulsacion de teclado de cualquiera seria absurdo.
-        if (event?.kind === 'chat.typing') return;
+        if (!event || !CHAT_FEED_EVENTS.has(event.kind)) return;
         qc.invalidateQueries({ queryKey: ['chats-inbox'] });
       },
       [qc],

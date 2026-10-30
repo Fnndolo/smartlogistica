@@ -8,6 +8,7 @@ import type { MentionItem } from '@smartlogistica/shared';
 import { api } from '@/lib/api-client';
 
 import { useOrdersStream } from './orders/use-orders-stream';
+import { CHAT_FEED_EVENTS } from './use-chats';
 
 // Dedupe de toasts a nivel de MODULO: el hook se monta en varios sitios
 // (sidebar + top bar movil) y cada mencion debe avisar UNA sola vez.
@@ -29,7 +30,7 @@ export function useMentions(): { items: MentionItem[]; unread: number; loading: 
   useOrdersStream(
     useCallback(
       (event?: { kind: string }) => {
-        if (event?.kind === 'chat.typing') return; // efimero, no toca la lista
+        if (!event || !CHAT_FEED_EVENTS.has(event.kind)) return;
         qc.invalidateQueries({ queryKey: ['mentions'] });
       },
       [qc],

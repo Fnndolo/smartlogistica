@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  type OnModuleInit,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { isAxiosError } from 'axios';
@@ -103,6 +104,14 @@ const IMAGE_EXT: Record<ImageMime, string> = {
  */
 const FINALIZED_EVENTS = ['vtex_invoiced', 'manual_completed'];
 
+/**
+ * Eventos que SI cambian las bandejas de Chats y Menciones. Los de WhatsApp,
+ * VTEX, reacciones y "escribiendo" no las tocan.
+ */
+const CHAT_FEED_EVENTS = new Set(['chat.message', 'chat.edit', 'orders.refresh', 'order.removed']);
+/** Tope de vida de una bandeja guardada aunque no llegue ningun evento. */
+const CHAT_FEED_TTL_MS = 15_000;
+
 type OrderWithItems = Prisma.OrderGetPayload<{ include: { items: true } }>;
 type OrderMessageRow = Prisma.OrderMessageGetPayload<Record<string, never>>;
 type OrderEventRow = Prisma.OrderEventGetPayload<Record<string, never>>;
@@ -177,7 +186,7 @@ interface UnreadInfo {
 }
 
 @Injectable()
-export class OrdersService {
+export class OrdersService implements OnModuleInit {
   private readonly logger = new Logger(OrdersService.name);
 
   /**
@@ -192,6 +201,51 @@ export class OrdersService {
     string,
     { expected: string; found: string; note: string } | null
   >();
+  /**
+   * Bandejas de Chats y Menciones por usuario. Las pide CADA pestaña abierta
+   * (el numerito del menu) con cada evento en vivo, y cada una recorre el chat
+   * entero (~0,4 s): una rafaga de eventos de WhatsApp por todas las pestañas
+   * saturo la base y freno la plataforma entera. Las pestañas del mismo usuario
+   * comparten la consulta, y el resultado vale hasta que el chat cambia de
+   * verdad (CHAT_FEED_EVENTS sube la generacion del tenant) o el usuario lee.
+   */
+  private readonly feedCache = new Map<
+    string,
+    { gen: number; at: number; value: Promise<unknown> }
+  >();
+  private readonly feedGen = new Map<string, number>();
+
+  onModuleInit(): void {
+    this.realtime.subscribeAll((tenantId, event) => {
+      if (CHAT_FEED_EVENTS.has(event.kind)) {
+        this.feedGen.set(tenantId, (this.feedGen.get(tenantId) ?? 0) + 1);
+      }
+    });
+  }
+
+  private cachedFeed<T>(name: string, auth: AuthContext, load: () => Promise<T>): Promise<T> {
+    const { tenantId } = getTenantContext();
+    const key = `${tenantId}:${auth.userId}:${name}`;
+    const gen = this.feedGen.get(tenantId) ?? 0;
+    const hit = this.feedCache.get(key);
+    if (hit && hit.gen === gen && Date.now() - hit.at < CHAT_FEED_TTL_MS) {
+      return hit.value as Promise<T>;
+    }
+    const value = load();
+    this.feedCache.set(key, { gen, at: Date.now(), value });
+    // Un fallo no se queda guardado: la siguiente peticion reintenta.
+    value.catch(() => {
+      if (this.feedCache.get(key)?.value === value) this.feedCache.delete(key);
+    });
+    return value;
+  }
+
+  /** Leer un hilo cambia los no leidos de ESE usuario: sus bandejas se recalculan. */
+  private dropFeeds(userId: string): void {
+    const { tenantId } = getTenantContext();
+    this.feedCache.delete(`${tenantId}:${userId}:chats`);
+    this.feedCache.delete(`${tenantId}:${userId}:mentions`);
+  }
 
   private acquireLock(key: string, busyMessage: string): void {
     if (this.opLocks.has(key)) throw new ConflictException(busyMessage);
@@ -1688,6 +1742,7 @@ export class OrdersService {
       create: { orderId, userId, lastReadAt: new Date() },
       update: { lastReadAt: new Date() },
     });
+    this.dropFeeds(userId);
   }
 
   /**
@@ -1816,7 +1871,11 @@ export class OrdersService {
    * Menciones a mi (pagina "Menciones", tipo Google Chat): cada mensaje donde me
    * mencionaron, mas reciente primero, con el pedido y si sigue sin leer.
    */
-  async mentionsFeed(auth: AuthContext): Promise<MentionItem[]> {
+  mentionsFeed(auth: AuthContext): Promise<MentionItem[]> {
+    return this.cachedFeed('mentions', auth, () => this.loadMentionsFeed(auth));
+  }
+
+  private async loadMentionsFeed(auth: AuthContext): Promise<MentionItem[]> {
     const { prisma } = getTenantContext();
     const scope = await this.warehouses.accessibleWarehouseIds(auth);
 
@@ -2268,7 +2327,11 @@ export class OrdersService {
    * sale del hilo entero y no de cuando me nombraron: una bandeja que ordenara
    * por "cuando me hablaron" enterraria la respuesta que llego despues.
    */
-  async chatsFeed(auth: AuthContext): Promise<ChatInboxItem[]> {
+  chatsFeed(auth: AuthContext): Promise<ChatInboxItem[]> {
+    return this.cachedFeed('chats', auth, () => this.loadChatsFeed(auth));
+  }
+
+  private async loadChatsFeed(auth: AuthContext): Promise<ChatInboxItem[]> {
     const { prisma } = getTenantContext();
     const scope = await this.warehouses.accessibleWarehouseIds(auth);
     // Sin sedes asignadas no hay nada que pueda ver: cortar aqui evita ademas

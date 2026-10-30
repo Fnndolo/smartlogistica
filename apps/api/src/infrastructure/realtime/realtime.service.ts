@@ -29,6 +29,8 @@ export interface OrderRealtimeEvent {
 const CHANNEL_PREFIX = 'rt:tenant:';
 const CHANNEL_SUFFIX = ':orders';
 const CHANNEL_PATTERN = `${CHANNEL_PREFIX}*${CHANNEL_SUFFIX}`;
+/** Canal local que recibe los eventos de TODOS los tenants (caches del server). */
+const ALL_TENANTS = Symbol('all-tenants');
 
 /**
  * Bus de tiempo real basado en Redis Pub/Sub + un EventEmitter local.
@@ -69,6 +71,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       try {
         const event = JSON.parse(message) as OrderRealtimeEvent;
         this.emitter.emit(tenantId, event);
+        this.emitter.emit(ALL_TENANTS, tenantId, event);
       } catch (err) {
         this.logger.warn({ err, channel }, 'Malformed realtime message');
       }
@@ -92,6 +95,15 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
   subscribe(tenantId: string, handler: (event: OrderRealtimeEvent) => void): () => void {
     this.emitter.on(tenantId, handler);
     return () => this.emitter.off(tenantId, handler);
+  }
+
+  /**
+   * Eventos de todos los tenants (para caches en memoria del server). Llega por
+   * Redis, asi que cada replica del API se entera aunque publique otra.
+   */
+  subscribeAll(handler: (tenantId: string, event: OrderRealtimeEvent) => void): () => void {
+    this.emitter.on(ALL_TENANTS, handler);
+    return () => this.emitter.off(ALL_TENANTS, handler);
   }
 
   private channel(tenantId: string): string {
