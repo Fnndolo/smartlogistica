@@ -219,8 +219,13 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   // debounce. Antes TODO esperaba el debounce y la transferencia se sentia lenta.
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastRefetchRef = useRef(0);
+  // Un refresh COMPLETO pendiente no se pierde si detras, dentro del debounce,
+  // llega uno de solo chat (antes el ultimo evento pisaba al anterior).
+  const fullPendingRef = useRef(false);
+  // Pedidos de la pagina a la vista (lo usa el filtro de mensajes de chat).
+  const visibleIdsRef = useRef<Set<string>>(new Set());
   const handleStreamEvent = useCallback(
-    (event?: { kind: string }) => {
+    (event?: { kind: string; orderId?: unknown }) => {
       // "esta escribiendo" es efimero, las reacciones a mensajes no tocan la
       // lista y los mensajes de WHATSAPP viven en su propia pestaña: cero
       // refetch de la tabla por ellos.
@@ -232,11 +237,17 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       )
         return;
       const chatOnly = event?.kind === 'chat.message';
+      // Un mensaje de chat solo cambia el badge de no leidos de SU fila: si ese
+      // pedido no esta en la pagina no hay nada que recargar. Antes cada
+      // mensaje de cualquiera recargaba la tabla en TODAS las pestañas abiertas.
+      if (chatOnly && !visibleIdsRef.current.has(String(event?.orderId ?? ''))) return;
+      if (!chatOnly) fullPendingRef.current = true;
       const run = () => {
         lastRefetchRef.current = Date.now();
         // chat.message solo afecta el badge de no leidos -> solo la lista.
         queryClient.invalidateQueries({ queryKey: ['orders'] });
-        if (!chatOnly) {
+        if (fullPendingRef.current) {
+          fullPendingRef.current = false;
           queryClient.invalidateQueries({ queryKey: ['order-stats'] });
           queryClient.invalidateQueries({ queryKey: ['orders-pulse'] });
         }
@@ -265,6 +276,9 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
   const totalPages = data?.totalPages ?? 1;
+  useEffect(() => {
+    visibleIdsRef.current = new Set((data?.items ?? []).map((o) => o.id));
+  }, [data]);
   // La seleccion existe SOLO para mover pedidos entre sedes, y eso lo hace
   // unicamente un administrador (el gestor trabaja el pedido donde esta). Sin
   // ese permiso no se pintan ni las casillas: no habria nada que hacer con ellas.

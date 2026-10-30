@@ -105,12 +105,11 @@ const IMAGE_EXT: Record<ImageMime, string> = {
 const FINALIZED_EVENTS = ['vtex_invoiced', 'manual_completed'];
 
 /**
- * Eventos que SI cambian las bandejas de Chats y Menciones. Los de WhatsApp,
- * VTEX, reacciones y "escribiendo" no las tocan.
+ * Tope de vida de una bandeja guardada (Chats / Menciones). Un mensaje nuevo
+ * la descarta al instante para quienes participan en ese pedido; lo que no
+ * avisa (pedido movido de sede o cerrado) se ve, como mucho, a este plazo.
  */
-const CHAT_FEED_EVENTS = new Set(['chat.message', 'chat.edit', 'orders.refresh', 'order.removed']);
-/** Tope de vida de una bandeja guardada aunque no llegue ningun evento. */
-const CHAT_FEED_TTL_MS = 15_000;
+const CHAT_FEED_TTL_MS = 30_000;
 
 type OrderWithItems = Prisma.OrderGetPayload<{ include: { items: true } }>;
 type OrderMessageRow = Prisma.OrderMessageGetPayload<Record<string, never>>;
@@ -207,7 +206,12 @@ export class OrdersService implements OnModuleInit {
    * entero (~0,4 s): una rafaga de eventos de WhatsApp por todas las pestañas
    * saturo la base y freno la plataforma entera. Las pestañas del mismo usuario
    * comparten la consulta, y el resultado vale hasta que el chat cambia de
-   * verdad (CHAT_FEED_EVENTS sube la generacion del tenant) o el usuario lee.
+   * verdad o el usuario lee.
+   *
+   * Un mensaje nuevo solo descarta las bandejas de los que participan en ESE
+   * pedido (el evento trae `feedUserIds`): descartarlas todas hacia que cada
+   * usuario conectado la recalculara a la vez con cada mensaje. Una edicion o
+   * un borrado, que son raros, suben la generacion del tenant (todas).
    */
   private readonly feedCache = new Map<
     string,
@@ -217,10 +221,21 @@ export class OrdersService implements OnModuleInit {
 
   onModuleInit(): void {
     this.realtime.subscribeAll((tenantId, event) => {
-      if (CHAT_FEED_EVENTS.has(event.kind)) {
-        this.feedGen.set(tenantId, (this.feedGen.get(tenantId) ?? 0) + 1);
+      if (event.kind === 'chat.message' && Array.isArray(event.feedUserIds)) {
+        for (const userId of event.feedUserIds) this.dropFeedsOf(tenantId, String(userId));
+      } else if (event.kind === 'chat.message' || event.kind === 'chat.edit') {
+        this.bumpFeeds(tenantId);
       }
     });
+  }
+
+  private bumpFeeds(tenantId: string): void {
+    this.feedGen.set(tenantId, (this.feedGen.get(tenantId) ?? 0) + 1);
+  }
+
+  private dropFeedsOf(tenantId: string, userId: string): void {
+    this.feedCache.delete(`${tenantId}:${userId}:chats`);
+    this.feedCache.delete(`${tenantId}:${userId}:mentions`);
   }
 
   private cachedFeed<T>(name: string, auth: AuthContext, load: () => Promise<T>): Promise<T> {
@@ -242,9 +257,7 @@ export class OrdersService implements OnModuleInit {
 
   /** Leer un hilo cambia los no leidos de ESE usuario: sus bandejas se recalculan. */
   private dropFeeds(userId: string): void {
-    const { tenantId } = getTenantContext();
-    this.feedCache.delete(`${tenantId}:${userId}:chats`);
-    this.feedCache.delete(`${tenantId}:${userId}:mentions`);
+    this.dropFeedsOf(getTenantContext().tenantId, userId);
   }
 
   private acquireLock(key: string, busyMessage: string): void {
@@ -1484,16 +1497,25 @@ export class OrdersService implements OnModuleInit {
     }
 
     // AL PESTAÑEO: chat.message se publica PRIMERO (es lo que pinta el mensaje
-    // en el chat abierto del receptor); lo secundario (marcar leido, refresh de
-    // listas) va despues y no puede retrasarlo.
-    const participants = (
-      await prisma.orderMessage.findMany({
+    // en el chat abierto del receptor); lo secundario (marcar leido, push) va
+    // despues y no puede retrasarlo.
+    const [authors, mentionRows] = await Promise.all([
+      prisma.orderMessage.findMany({
         where: { orderId, kind: { not: 'system' } },
         select: { authorId: true },
         distinct: ['authorId'],
-      })
-    ).map((p) => p.authorId);
+      }),
+      prisma.orderMessage.findMany({
+        where: { orderId, NOT: { mentions: { isEmpty: true } } },
+        select: { mentions: true },
+      }),
+    ]);
+    const participants = authors.map((p) => p.authorId);
     if (!participants.includes(auth.userId)) participants.push(auth.userId);
+    // Bandejas (Chats / Menciones) que cambian con este mensaje: las de quien
+    // escribio alguna vez en el pedido y las de quien fue mencionado en el,
+    // aunque nunca escribiera. Las de los demas siguen valiendo.
+    const feedUserIds = [...new Set([...participants, ...mentionRows.flatMap((r) => r.mentions)])];
     await this.realtime.publish(tenantId, {
       kind: 'chat.message',
       orderId,
@@ -1513,12 +1535,15 @@ export class OrdersService implements OnModuleInit {
       replyToId: replyTo?.id ?? null,
       replyToAuthorId: replyTo?.authorId ?? null,
       participantIds: participants,
+      feedUserIds,
       superMention: mentionAll,
       createdAt: msg.createdAt.toISOString(),
     });
     // Quien escribe obviamente ya "leyo" el hilo -> marcar leido para no contarse a si mismo.
+    // SIN orders.refresh: chat.message ya refresca la lista (no leidos) y las
+    // bandejas. Con el refresh, CADA pestaña abierta recargaba lista + conteos
+    // + pulso con cada mensaje que alguien escribia, y eso tumbaba la base.
     await this.touchRead(orderId, auth.userId);
-    await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
 
     // WEB PUSH (app CERRADA): mencionados con titulo especial; respondido y
     // demas participantes con el generico. Nunca al propio autor. El titulo
@@ -2131,6 +2156,8 @@ export class OrdersService implements OnModuleInit {
 
     await prisma.orderMessage.delete({ where: { id: messageId } });
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
+    // El borrado no viaja como evento de chat: las bandejas se recalculan aqui.
+    this.bumpFeeds(tenantId);
 
     const order = await prisma.order
       .findUnique({ where: { id: orderId }, select: { externalId: true, customerName: true } })
