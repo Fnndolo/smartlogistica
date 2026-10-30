@@ -12,6 +12,7 @@ import {
   ChevronRight,
   ChevronUp,
   ChevronsUpDown,
+  GripVertical,
   Hand,
   Loader2,
   MoreHorizontal,
@@ -203,14 +204,19 @@ export function OrdersTable({
           <TableHeader>
             <TableRow>
               {selectable ? (
-                <TableHead className="w-10">
-                  <input
-                    type="checkbox"
-                    className="block h-[15px] w-[15px] cursor-pointer rounded-[4px] border-input accent-accent"
-                    checked={allSelected}
-                    onChange={() => onToggleSelectAll?.()}
-                    aria-label="Seleccionar todos"
-                  />
+                <TableHead className={onDragOrder ? 'w-[52px]' : 'w-10'}>
+                  {/* Con arrastre, la casilla de "todos" se corre lo que ocupa
+                      el agarradero de las filas: las casillas quedan en columna. */}
+                  <span className="flex items-center gap-1">
+                    {onDragOrder ? <span aria-hidden className="-ml-1.5 w-4 shrink-0" /> : null}
+                    <input
+                      type="checkbox"
+                      className="block h-[15px] w-[15px] cursor-pointer rounded-[4px] border-input accent-accent"
+                      checked={allSelected}
+                      onChange={() => onToggleSelectAll?.()}
+                      aria-label="Seleccionar todos"
+                    />
+                  </span>
                 </TableHead>
               ) : null}
               <TableHead>N&ordm; Pedido</TableHead>
@@ -299,15 +305,29 @@ export function OrdersTable({
                     onFocus={onOpenOrder ? () => prefetchOrder(qc, order.id) : undefined}
                   >
                     {selectable ? (
-                      <TableCell className="relative w-10" onClick={(e) => e.stopPropagation()}>
+                      <TableCell
+                        className={cn('relative', onDragOrder ? 'w-[52px]' : 'w-10')}
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <RowRail />
-                        <input
-                          type="checkbox"
-                          className="block h-[15px] w-[15px] cursor-pointer rounded-[4px] border-input accent-accent"
-                          checked={isSelected}
-                          onChange={() => onToggleSelect!(order.id)}
-                          aria-label={`Seleccionar ${order.externalId}`}
-                        />
+                        <span className="flex items-center gap-1">
+                          {/* Agarradero (⋮⋮): SIEMPRE a la vista, para que se sepa
+                              que la fila se arrastra. Se arrastra desde cualquier
+                              parte de la fila; aqui ademas el cursor lo anuncia. */}
+                          {onDragOrder ? (
+                            <GripVertical
+                              aria-hidden
+                              className="-ml-1.5 h-4 w-4 shrink-0 cursor-grab text-muted-foreground/40 transition-colors duration-150 group-hover/row:text-muted-foreground active:cursor-grabbing"
+                            />
+                          ) : null}
+                          <input
+                            type="checkbox"
+                            className="block h-[15px] w-[15px] cursor-pointer rounded-[4px] border-input accent-accent"
+                            checked={isSelected}
+                            onChange={() => onToggleSelect!(order.id)}
+                            aria-label={`Seleccionar ${order.externalId}`}
+                          />
+                        </span>
                       </TableCell>
                     ) : null}
                     <TableCell className="relative whitespace-nowrap font-mono text-[11.5px] text-muted-foreground">
