@@ -61,6 +61,7 @@ import type { PrismaClient } from '.prisma/tenant-client';
 
 import { canManageOrders, canSeeAudit, canTransferOrders, isAdmin } from '../../common/rbac';
 import type { AuthContext } from '../../common/types/authenticated-request';
+import { SharedQueries } from '../../common/shared-queries';
 import { getTenantContext } from '../../infrastructure/tenant-context';
 import { ControlPlaneService } from '../../infrastructure/prisma/control-plane.service';
 import { PushService } from '../../infrastructure/push/push.service';
@@ -110,6 +111,11 @@ const FINALIZED_EVENTS = ['vtex_invoiced', 'manual_completed'];
  * avisa (pedido movido de sede o cerrado) se ve, como mucho, a este plazo.
  */
 const CHAT_FEED_TTL_MS = 30_000;
+
+/** Eventos que cambian pedidos: invalidan las lecturas compartidas (lista, conteos, pulso). */
+const ORDER_CHANGE_EVENTS = new Set(['orders.refresh', 'order.upserted', 'order.removed']);
+/** Vida de una lectura compartida aunque no llegue ningun evento. */
+const SHARED_READ_TTL_MS = 5_000;
 
 type OrderWithItems = Prisma.OrderGetPayload<{ include: { items: true } }>;
 type OrderMessageRow = Prisma.OrderMessageGetPayload<Record<string, never>>;
@@ -218,9 +224,12 @@ export class OrdersService implements OnModuleInit {
     { gen: number; at: number; value: Promise<unknown> }
   >();
   private readonly feedGen = new Map<string, number>();
+  /** Lista, conteo, pulso y estadisticas: iguales para todas las pestañas que piden lo mismo. */
+  private readonly sharedReads = new SharedQueries(SHARED_READ_TTL_MS);
 
   onModuleInit(): void {
     this.realtime.subscribeAll((tenantId, event) => {
+      if (ORDER_CHANGE_EVENTS.has(event.kind)) this.sharedReads.bump(tenantId);
       if (event.kind === 'chat.message' && Array.isArray(event.feedUserIds)) {
         for (const userId of event.feedUserIds) this.dropFeedsOf(tenantId, String(userId));
       } else if (event.kind === 'chat.message' || event.kind === 'chat.edit') {
@@ -288,7 +297,7 @@ export class OrdersService implements OnModuleInit {
   ) {}
 
   async list(query: ListOrdersQuery, auth: AuthContext): Promise<ListOrdersResponse> {
-    const { prisma } = getTenantContext();
+    const { tenantId, prisma } = getTenantContext();
 
     const where: Prisma.OrderWhereInput = {};
 
@@ -392,15 +401,24 @@ export class OrdersService implements OnModuleInit {
         : [this.buildOrderBy(query.sort, query.dir)];
     const skip = (query.page - 1) * query.limit;
 
+    // Pagina y total son iguales para todas las pestañas con la misma vista (el
+    // acceso ya se valido arriba): se comparten. Lo de cada usuario (no leidos,
+    // reacciones) se calcula abajo, por peticion.
+    const whereKey = JSON.stringify(where);
     const [rows, total] = await Promise.all([
-      prisma.order.findMany({
-        where,
-        orderBy,
-        skip,
-        take: query.limit,
-        include: { items: { orderBy: { name: 'asc' } } },
-      }),
-      prisma.order.count({ where }),
+      this.sharedReads.run(
+        tenantId,
+        `list:${whereKey}:${JSON.stringify(orderBy)}:${skip}:${query.limit}`,
+        () =>
+          prisma.order.findMany({
+            where,
+            orderBy,
+            skip,
+            take: query.limit,
+            include: { items: { orderBy: { name: 'asc' } } },
+          }),
+      ),
+      this.sharedReads.run(tenantId, `count:${whereKey}`, () => prisma.order.count({ where })),
     ]);
 
     // Que pedidos de esta pagina ya tienen foto IMEI/serial (indicador en la tabla)
@@ -792,12 +810,35 @@ export class OrdersService implements OnModuleInit {
     /** Pestaña de tienda activa en generales (null = todas). */
     account: string | null = null,
   ): Promise<OrdersPulse> {
-    const { prisma } = getTenantContext();
-
+    const { tenantId } = getTenantContext();
+    // El ACCESO se valida por peticion; los numeros son iguales para todos los
+    // que miran la misma vista y se comparten (ver SharedQueries).
     if (scope === 'general') {
       // Mismo scope que list()/loadAccessibleOrder: quien ve la tabla de
       // generales ve su pulso (si no, la tira de metricas daria 403).
       if (!canManageOrders(auth)) throw new ForbiddenException('Sin acceso a pedidos generales');
+    } else {
+      if (!warehouseId) throw new BadRequestException('Falta la sede');
+      const allowed = await this.warehouses.accessibleWarehouseIds(auth);
+      if (allowed && !allowed.includes(warehouseId)) {
+        throw new ForbiddenException('No tienes acceso a esta sede');
+      }
+    }
+    return this.sharedReads.run(
+      tenantId,
+      `pulse:${scope}:${warehouseId ?? ''}:${account ?? ''}`,
+      () => this.loadPulse(scope, warehouseId, account),
+    );
+  }
+
+  private async loadPulse(
+    scope: 'general' | 'pending' | 'invoiced',
+    warehouseId: string | null,
+    account: string | null,
+  ): Promise<OrdersPulse> {
+    const { prisma } = getTenantContext();
+
+    if (scope === 'general') {
       // "Hoy" en horario de Colombia (GMT-5, sin DST).
       const startToday = startOfTodayBogota();
       const startYesterday = new Date(startToday.getTime() - 24 * 3_600_000);
@@ -826,12 +867,6 @@ export class OrdersService implements OnModuleInit {
         d: unclaimed,
         deltaToday: today - yesterday,
       };
-    }
-
-    if (!warehouseId) throw new BadRequestException('Falta la sede');
-    const allowed = await this.warehouses.accessibleWarehouseIds(auth);
-    if (allowed && !allowed.includes(warehouseId)) {
-      throw new ForbiddenException('No tienes acceso a esta sede');
     }
 
     if (scope === 'pending') {
@@ -4367,13 +4402,15 @@ export class OrdersService implements OnModuleInit {
   }
 
   async stats(): Promise<{ readyForHandling: number; handling: number; connections: number }> {
-    const { prisma } = getTenantContext();
-    const [readyForHandling, handling, connections] = await Promise.all([
-      prisma.order.count({ where: { status: 'ready-for-handling', warehouseId: null } }),
-      prisma.order.count({ where: { status: 'handling' } }),
-      prisma.marketplaceConnection.count({ where: { status: 'connected' } }),
-    ]);
-    return { readyForHandling, handling, connections };
+    const { tenantId, prisma } = getTenantContext();
+    return this.sharedReads.run(tenantId, 'stats', async () => {
+      const [readyForHandling, handling, connections] = await Promise.all([
+        prisma.order.count({ where: { status: 'ready-for-handling', warehouseId: null } }),
+        prisma.order.count({ where: { status: 'handling' } }),
+        prisma.marketplaceConnection.count({ where: { status: 'connected' } }),
+      ]);
+      return { readyForHandling, handling, connections };
+    });
   }
 
   /**

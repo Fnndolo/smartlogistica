@@ -86,6 +86,10 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
   ): Promise<void> {
     if (!this.publisher) return;
     const payload = { ...event, at: Date.now() } as OrderRealtimeEvent;
+    // Las caches de ESTE proceso se enteran ya, sin esperar el eco de Redis:
+    // quien acaba de escribir y recarga enseguida no puede recibir lo de antes.
+    // (El eco llega despues y las vuelve a marcar; es idempotente.)
+    this.emitter.emit(ALL_TENANTS, tenantId, payload);
     await this.publisher
       .publish(this.channel(tenantId), JSON.stringify(payload))
       .catch((err) => this.logger.warn({ err, tenantId }, 'Failed to publish realtime event'));
