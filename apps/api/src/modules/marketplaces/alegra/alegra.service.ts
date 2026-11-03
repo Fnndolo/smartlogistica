@@ -34,8 +34,28 @@ import {
   AlegraClient,
   ALEGRA_MAX_LIMIT,
   type AlegraBankAccount,
+  type AlegraInvoiceResult,
+  type AlegraInvoiceSummary,
   type AlegraRawItem,
 } from './alegra-client.service';
+
+/**
+ * IMEI / seriales de una factura, sin repetidos y ordenados: la huella para
+ * reconocer la MISMA venta en Alegra. La descripcion de cada linea es solo el
+ * codigo (ver buildLines en el panel de facturar).
+ */
+function invoiceCodes(descriptions: Array<string | null | undefined>): string[] {
+  return [
+    ...new Set(
+      descriptions.flatMap((d) =>
+        String(d ?? '')
+          .split(/[\s,]+/)
+          .map((c) => c.trim())
+          .filter(Boolean),
+      ),
+    ),
+  ].sort();
+}
 
 export interface InvoiceClient {
   name: string;
@@ -1031,29 +1051,68 @@ export class AlegraService {
           }))
         : [{ date: today, account: { id: addi!.id }, amount: total, paymentMethod: 'transfer' }];
 
-      const created = await this.client.createInvoice(http, {
-        date: today,
-        dueDate: today,
-        client: { id: clientId },
-        // "Anotaciones": en marketplace siempre ADDI; montado a mano, la
-        // plataforma que se eligio al montarlo (sin plataforma, nada).
-        ...(manual
-          ? opts?.anotation
-            ? { anotation: opts.anotation }
-            : {}
-          : { anotation: 'ADDI' }),
-        ...(sellerPref ? { seller: Number(sellerPref.sellerId) || sellerPref.sellerId } : {}),
-        // La bodega va en la RAIZ de la factura: verificado con borradores,
-        // Alegra ignora la que viaja en cada item y rechaza igual (code 3095).
-        ...(bodega ? { warehouse: { id: Number(bodega.id) || bodega.id } } : {}),
-        items: priced.map((l) => ({
-          id: l.itemId,
-          price: l.price,
-          quantity: l.quantity,
-          ...(l.description ? { description: l.description } : {}),
-        })),
-        ...(payments.length > 0 ? { payments } : {}),
-      });
+      // IDEMPOTENCIA (2026-11-03). Si un intento anterior se corto —Alegra tardo
+      // mas que nuestro limite— pero Alegra SI la creo, reintentar emitia OTRA
+      // factura del mismo equipo (quedaron duplicados vigentes). La "gemela"
+      // —mismo cliente, mismo total, mismos IMEI/seriales, no anulada— se ADOPTA.
+      const twinQuery = {
+        clientId,
+        total,
+        codes: invoiceCodes(priced.map((l) => l.description)),
+      };
+      if (twinQuery.codes.length > 0) {
+        const twin = await this.findTwinInvoice(http, twinQuery).catch((err: unknown) => {
+          this.logger.warn(
+            `No se pudo buscar la factura gemela: ${err instanceof Error ? err.message : err}`,
+          );
+          return null;
+        });
+        if (twin) return this.adoptTwin(http, twin, 'antes de emitir');
+      }
+
+      let created: AlegraInvoiceResult;
+      try {
+        created = await this.client.createInvoice(http, {
+          date: today,
+          dueDate: today,
+          client: { id: clientId },
+          // "Anotaciones": en marketplace siempre ADDI; montado a mano, la
+          // plataforma que se eligio al montarlo (sin plataforma, nada).
+          ...(manual
+            ? opts?.anotation
+              ? { anotation: opts.anotation }
+              : {}
+            : { anotation: 'ADDI' }),
+          ...(sellerPref ? { seller: Number(sellerPref.sellerId) || sellerPref.sellerId } : {}),
+          // La bodega va en la RAIZ de la factura: verificado con borradores,
+          // Alegra ignora la que viaja en cada item y rechaza igual (code 3095).
+          ...(bodega ? { warehouse: { id: Number(bodega.id) || bodega.id } } : {}),
+          items: priced.map((l) => ({
+            id: l.itemId,
+            price: l.price,
+            quantity: l.quantity,
+            ...(l.description ? { description: l.description } : {}),
+          })),
+          ...(payments.length > 0 ? { payments } : {}),
+        });
+      } catch (err) {
+        // SIN respuesta (tiempo agotado / red) o 5xx: Alegra pudo crearla igual.
+        // Se busca la gemela unas veces antes de dar el error.
+        const ambiguous = isAxiosError(err) && (!err.response || err.response.status >= 500);
+        if (!ambiguous) throw err;
+        if (twinQuery.codes.length > 0) {
+          const twin = await this.awaitTwin(http, twinQuery);
+          if (twin) return this.adoptTwin(http, twin, 'tras un corte');
+          throw new BadRequestException(
+            'Alegra no respondió a tiempo y la factura no aparece creada. Intenta de nuevo en ' +
+              'un momento: si Alegra alcanzó a crearla, la plataforma la reconoce y no emite otra.',
+          );
+        }
+        throw new BadRequestException(
+          'Alegra no respondió a tiempo. Antes de reintentar, revisa en Alegra si la factura ' +
+            'quedó creada: este pedido no tiene IMEI ni serial para reconocerla.',
+        );
+      }
 
       // VERIFICACION del peso perdido: si Alegra registro un total distinto al
       // enviado, que quede LOGUEADO y visible (el caller lo anota en el chat).
@@ -1089,6 +1148,68 @@ export class AlegraService {
       }
       throw this.alegraError(err, 'No se pudo crear la factura en Alegra');
     }
+  }
+
+  /**
+   * La GEMELA entre las facturas mas recientes de la cuenta (~el ultimo dia):
+   * mismo cliente, mismo total, mismos IMEI/seriales y no anulada. Un IMEI es
+   * de un solo equipo, asi que no hay dos ventas legitimas con la misma huella.
+   */
+  private async findTwinInvoice(
+    http: AxiosInstance,
+    q: { clientId: number | string; total: number; codes: string[] },
+  ): Promise<AlegraInvoiceSummary | null> {
+    const want = q.codes.join('|');
+    const recent = await this.client.listRecentInvoices(http);
+    return (
+      recent.find(
+        (inv) =>
+          inv.status !== 'void' &&
+          String(inv.client?.id ?? '') === String(q.clientId) &&
+          Math.abs(Number(inv.total) - q.total) < 1 &&
+          invoiceCodes((inv.items ?? []).map((i) => i.description)).join('|') === want,
+      ) ?? null
+    );
+  }
+
+  /** Tras un corte, Alegra puede tardar en dejar visible la factura: se reintenta. */
+  private async awaitTwin(
+    http: AxiosInstance,
+    q: { clientId: number | string; total: number; codes: string[] },
+  ): Promise<AlegraInvoiceSummary | null> {
+    for (const waitMs of [2_000, 4_000, 8_000]) {
+      await new Promise((r) => setTimeout(r, waitMs));
+      const twin = await this.findTwinInvoice(http, q).catch(() => null);
+      if (twin) return twin;
+    }
+    return null;
+  }
+
+  /** La gemela, devuelta como si se acabara de emitir (con su forma y medio de pago). */
+  private async adoptTwin(
+    http: AxiosInstance,
+    twin: AlegraInvoiceSummary,
+    when: string,
+  ): Promise<{ result: InvoiceResult; payment: { formaPago: string; medioPago: string } }> {
+    const full = (await this.client.getInvoice(http, String(twin.id))) ?? twin;
+    const number = full.numberTemplate?.fullNumber ?? String(full.id);
+    this.logger.warn(
+      `Factura ${number} ADOPTADA (${when}): ya existia en Alegra con el mismo cliente, ` +
+        `total e IMEI; no se emitio otra.`,
+    );
+    return {
+      result: {
+        id: String(full.id),
+        number,
+        status: full.status ?? 'unknown',
+        total: full.total != null ? String(full.total) : '0',
+        balance: full.balance != null ? String(full.balance) : '0',
+      },
+      payment: {
+        formaPago: paymentFormLabel(full.paymentForm),
+        medioPago: paymentMethodLabel(full.paymentMethod),
+      },
+    };
   }
 
   /**

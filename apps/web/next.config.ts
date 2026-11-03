@@ -31,6 +31,12 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   typedRoutes: true,
+  experimental: {
+    // El proxy /v1 -> API corta a los 30 s por defecto. Facturar en Alegra en
+    // un dia lento tarda mas: el corte daba error en pantalla aunque el API
+    // siguiera y la factura saliera (y el reintento la duplicaba).
+    proxyTimeout: 120_000,
+  },
   transpilePackages: ['@smartlogistica/shared'],
   async headers() {
     return [

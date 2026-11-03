@@ -3,7 +3,11 @@ import axios, { type AxiosInstance } from 'axios';
 
 import { EnvelopeService } from '../../../infrastructure/crypto/envelope.service';
 import { TenantConnectionService } from '../../../infrastructure/prisma/tenant-connection.service';
-import { ALEGRA_BASE_URL, ALEGRA_REQUEST_TIMEOUT_MS } from './alegra.constants';
+import {
+  ALEGRA_BASE_URL,
+  ALEGRA_INVOICE_TIMEOUT_MS,
+  ALEGRA_REQUEST_TIMEOUT_MS,
+} from './alegra.constants';
 
 /**
  * Cuantos registros acepta Alegra por pagina, COMO MAXIMO. Pedir mas no trae
@@ -275,8 +279,31 @@ export class AlegraClient {
 
   /** Crea una factura de venta. `body` ya viene con client/items/date/payments. */
   async createInvoice(http: AxiosInstance, body: unknown): Promise<AlegraInvoiceResult> {
-    const res = await http.post<AlegraInvoiceResult>('/invoices', body);
+    const res = await http.post<AlegraInvoiceResult>('/invoices', body, {
+      timeout: ALEGRA_INVOICE_TIMEOUT_MS,
+    });
     return res.data;
+  }
+
+  /**
+   * Las facturas MAS RECIENTES (por id), completas (cliente, items, total,
+   * estado): de aqui sale la "gemela" que se busca antes y despues de crear.
+   */
+  async listRecentInvoices(http: AxiosInstance): Promise<AlegraInvoiceSummary[]> {
+    const res = await http.get('/invoices', {
+      params: { limit: ALEGRA_MAX_LIMIT, order_field: 'id', order_direction: 'DESC' },
+    });
+    return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
+  }
+
+  /** Una factura por id, con su forma y medio de pago. null si no se pudo leer. */
+  async getInvoice(http: AxiosInstance, id: string): Promise<AlegraInvoiceResult | null> {
+    try {
+      const res = await http.get<AlegraInvoiceResult>(`/invoices/${encodeURIComponent(id)}`);
+      return res.data;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -322,6 +349,13 @@ export interface AlegraInvoiceResult {
   // DEBIT_TRANSFER|CREDIT_TRANSFER|CASH|DEBIT_CARD|... (ver mapeo en alegra.service).
   paymentForm?: string;
   paymentMethod?: string;
+}
+
+/** Factura tal como viene en el LISTADO (lo que hace falta para reconocer una gemela). */
+export interface AlegraInvoiceSummary extends AlegraInvoiceResult {
+  date?: string;
+  client?: { id?: number | string; name?: string } | null;
+  items?: Array<{ id?: number | string; description?: string | null }> | null;
 }
 
 export interface AlegraContactPayload {
