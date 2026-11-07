@@ -159,7 +159,38 @@ export class AlegraClient {
     return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
   }
 
-  /** Vendedores guardados en Alegra (para elegir el vendedor de la factura). */
+  /**
+   * TODAS las filas de un listado de Alegra, pagina por pagina.
+   *
+   * Alegra entrega maximo 30 por pagina (pedir mas = 400 code 903) y sin
+   * `start` solo la primera. Asi se perdian cuentas: Pasto tiene 37 y SUMAS
+   * PAY quedaba por fuera. Tope de 20 paginas (600 filas) por si acaso.
+   *
+   * OJO: no todos los listados paginan. /sellers IGNORA start/limit y siempre
+   * trae todo (50 en Pasto): por eso se para en cuanto una pagina no trae
+   * ningun id nuevo, en vez de repetir la misma lista 20 veces.
+   */
+  private async listAll<T extends { id: number | string }>(
+    http: AxiosInstance,
+    path: string,
+  ): Promise<T[]> {
+    const byId = new Map<string, T>();
+    for (let page = 0; page < 20; page++) {
+      const res = await http.get(path, {
+        params: { start: page * ALEGRA_MAX_LIMIT, limit: ALEGRA_MAX_LIMIT },
+      });
+      const rows: T[] = Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
+      const before = byId.size;
+      for (const row of rows) byId.set(String(row.id), row);
+      if (rows.length < ALEGRA_MAX_LIMIT || byId.size === before) break;
+    }
+    return [...byId.values()];
+  }
+
+  /**
+   * Vendedores guardados en Alegra (para elegir el vendedor de la factura).
+   * /sellers no pagina: con esta llamada ya llegan TODOS (50 en Pasto).
+   */
   async listSellers(
     http: AxiosInstance,
   ): Promise<Array<{ id: number | string; name: string; status?: string }>> {
@@ -190,8 +221,7 @@ export class AlegraClient {
   async listBodegas(
     http: AxiosInstance,
   ): Promise<Array<{ id: number | string; name?: string; status?: string; isDefault?: boolean }>> {
-    const res = await http.get('/warehouses');
-    return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
+    return this.listAll(http, '/warehouses');
   }
 
   /** Lista facturas de venta, mas nuevas primero (para traer la ultima). */
@@ -271,10 +301,9 @@ export class AlegraClient {
     await http.put(`/contacts/${encodeURIComponent(String(id))}`, cleanContact(body));
   }
 
-  /** Cuentas bancarias (para resolver "MARKETPLACE ADDI"). */
+  /** Cuentas bancarias (pagos de los pedidos montados a mano y "MARKETPLACE ADDI"). */
   async listBankAccounts(http: AxiosInstance): Promise<AlegraBankAccount[]> {
-    const res = await http.get('/bank-accounts');
-    return Array.isArray(res.data) ? res.data : (res.data?.data ?? []);
+    return this.listAll(http, '/bank-accounts');
   }
 
   /** Crea una factura de venta. `body` ya viene con client/items/date/payments. */
