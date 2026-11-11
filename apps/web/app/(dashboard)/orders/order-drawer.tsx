@@ -65,6 +65,7 @@ import { canManageOrders, canModerateChat, canSeeAudit, canUseWhatsapp, isAdmin 
 import { cn, titleCaseName } from '@/lib/utils';
 
 import { setActiveChat } from './active-chat';
+import { AddiGuideSection } from './addi-guide-section';
 import { ClaimChip } from './claim-chip';
 import { GuidePanel } from './guide-panel';
 import { InvoicePanel } from './invoice-panel';
@@ -962,6 +963,9 @@ function DetalleTab({
         </div>
       </section>
 
+      {/* Guía que genera ADDI (pedidos de VTEX): número, estado y remitente. */}
+      {order.provider === 'vtex' && !external ? <AddiGuideSection order={order} /> : null}
+
       {/* Ruta del envío: el recorrido de 6 tramos del mockup (.route). Los
           facturados POR FUERA no tienen seguimiento — ahí no se pinta. */}
       {!external ? (
@@ -1248,7 +1252,11 @@ function DeleteOrderZone({ order, onDeleted }: { order: OrderSummary; onDeleted?
  */
 function PrintPackCard({ order, messages }: { order: OrderSummary; messages: OrderMessage[] }) {
   const qc = useQueryClient();
-  const docs = messages.filter((m) => m.attachmentMime === 'application/pdf').length;
+  // Mismo criterio que el servidor: de los rotulos de guia (GUIA-...) solo
+  // cuenta el ultimo — uno anterior es la misma guia con otro remitente.
+  const pdfs = messages.filter((m) => m.attachmentMime === 'application/pdf');
+  const guides = pdfs.filter((m) => (m.body ?? '').startsWith('GUIA-')).length;
+  const docs = pdfs.length - Math.max(0, guides - 1);
   const packed = Boolean(order.packedAt);
   if (docs === 0) return null;
 

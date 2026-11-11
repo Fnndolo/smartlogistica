@@ -393,6 +393,25 @@ model SkydropxConnection {
   updatedAt          DateTime @default(now()) @updatedAt
 }
 
+/// Guias de ADDI: cuenta del portal de aliados (de ahi sale el numero de guia
+/// de cada MKT) + cuenta de la suite de Coordinadora que Addi le da al comercio
+/// (ahi se edita el remitente y se imprime el rotulo). Una por tenant.
+model AddiLbaConnection {
+  id                      String    @id @default(cuid())
+  portalEmail             String
+  encryptedPortalPassword Bytes
+  suiteEmail              String
+  encryptedSuitePassword  Bytes
+  // Editar remitente + rotulo al chat al pasar un pedido a una sede.
+  autoSender              Boolean   @default(true)
+  status                  String    @default("connected")
+  lastError               String?
+  lastSyncAt              DateTime?
+  lastSyncCount           Int?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @default(now()) @updatedAt
+}
+
 model AiConnection {
   id              String   @id @default(cuid())
   provider        String // openai | gemini | anthropic
@@ -486,6 +505,20 @@ model Order {
   shippingProvider     String?
   // Id del shipment en Skydropx (para el rastreo por API).
   skydropxShipmentId   String?
+
+  // GUIA DE ADDI (Addi Logistics): Addi genera la guia de Coordinadora de los
+  // pedidos de su marketplace. Columnas PROPIAS a proposito, fuera de
+  // guideNumber: esa alimenta el rastreo con la cuenta de Coordinadora de cada
+  // sede y la pestaña Guia; esta guia vive en la cuenta de Addi.
+  addiGuide             String?
+  // {carrier, packageStatus, dispatchDeadline, syncedAt} tal cual el portal.
+  addiShipment          Json?
+  // Remitente: al pasar el pedido a una sede se pide editar la guia con el
+  // remitente de esa sede (pendingAt). Al lograrlo queda la sede aplicada.
+  addiSenderPendingAt   DateTime?
+  addiSenderWarehouseId String?
+  addiSenderAt          DateTime?
+  addiSenderError       String?
 
   // Confirmacion de direccion por WhatsApp: el cliente confirma o
   // modifica su direccion desde el mensaje de confirmacion del pedido.

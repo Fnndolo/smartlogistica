@@ -56,6 +56,8 @@ import { WhatsappModule } from './modules/whatsapp/whatsapp.module';
             '*.wrappedDek',
             '*.encryptedAppKey',
             '*.encryptedAppToken',
+            '*.portalPassword',
+            '*.suitePassword',
           ],
           censor: '[REDACTED]',
         },

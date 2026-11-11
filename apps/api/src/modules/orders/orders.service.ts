@@ -77,6 +77,7 @@ import { StorageService } from '../../infrastructure/storage/storage.service';
 import { AiConnectionService } from '../ai/ai-connection.service';
 import { actorOf, AuditService } from '../audit/audit.service';
 import { type ImageMime } from '../ai/ai-vision-client.service';
+import { AddiLbaService } from '../marketplaces/addi/addi-lba.service';
 import { AlegraService, type InvoiceClient } from '../marketplaces/alegra/alegra.service';
 import { ExternalCertificateService } from '../marketplaces/alegra/external-certificate.service';
 import { WarrantyService } from '../marketplaces/alegra/warranty.service';
@@ -327,6 +328,7 @@ export class OrdersService implements OnModuleInit {
     private readonly dispatchRelation: DispatchRelationService,
     private readonly deliverySupport: DeliverySupportService,
     private readonly audit: AuditService,
+    private readonly addiLba: AddiLbaService,
   ) {}
 
   async list(query: ListOrdersQuery, auth: AuthContext): Promise<ListOrdersResponse> {
@@ -706,11 +708,20 @@ export class OrdersService implements OnModuleInit {
     if (!this.storage.isConfigured()) {
       throw new BadRequestException('El almacenamiento de archivos no está configurado');
     }
-    const docs = await prisma.orderMessage.findMany({
+    const all = await prisma.orderMessage.findMany({
       where: { orderId, attachmentMime: 'application/pdf', attachmentKey: { not: null } },
       orderBy: { createdAt: 'asc' },
       select: { body: true, attachmentKey: true },
     });
+    // Un pedido tiene UNA guia vigente: si hay varios rotulos (la guia de Addi
+    // se re-emite con otro remitente al cambiar de sede), solo va el ultimo —
+    // el anterior lleva el remitente viejo del MISMO numero de guia.
+    const isGuide = (d: { body: string | null }) => (d.body ?? '').startsWith('GUIA-');
+    let lastGuide = -1;
+    all.forEach((d, i) => {
+      if (isGuide(d)) lastGuide = i;
+    });
+    const docs = all.filter((d, i) => !isGuide(d) || i === lastGuide);
     if (docs.length === 0) {
       throw new BadRequestException('Este pedido todavía no tiene documentos para imprimir');
     }
@@ -1126,6 +1137,14 @@ export class OrdersService implements OnModuleInit {
         } as Prisma.InputJsonValue,
       })),
     });
+
+    // Guias de ADDI: al llegar a una sede, la guia que genero Addi pasa al
+    // remitente de esa sede y el rotulo cae al chat. En segundo plano y sin
+    // esperar: el traslado ya quedo hecho (onAssigned nunca lanza).
+    void this.addiLba.onAssigned(
+      prior.filter((o) => o.provider === 'vtex').map((o) => o.id),
+      to,
+    );
 
     return { count: result.count };
   }

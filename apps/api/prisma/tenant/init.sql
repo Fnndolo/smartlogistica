@@ -6,7 +6,10 @@ CREATE TABLE "Warehouse" (
     "archived" BOOLEAN NOT NULL DEFAULT false,
     "invoicePrefix" TEXT,
     "certificateTemplate" JSONB,
+    "certificateMode" TEXT NOT NULL DEFAULT 'template',
     "packagePresets" JSONB,
+    "alegraFixedClient" JSONB,
+    "alegraBodega" JSONB,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
@@ -29,12 +32,28 @@ CREATE TABLE "CoordinadoraConnection" (
     "senderAddress" TEXT NOT NULL,
     "senderCityCode" TEXT NOT NULL,
     "senderCityName" TEXT,
+    "senderPostalCode" TEXT,
     "status" TEXT NOT NULL DEFAULT 'connected',
     "lastError" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "CoordinadoraConnection_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "ExternalCertificateConnection" (
+    "id" TEXT NOT NULL,
+    "warehouseId" TEXT NOT NULL,
+    "baseUrl" TEXT NOT NULL,
+    "encryptedApiKey" BYTEA NOT NULL,
+    "paymentMethod" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'connected',
+    "lastError" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "ExternalCertificateConnection_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -110,20 +129,6 @@ CREATE TABLE "WarehouseMember" (
 );
 
 -- CreateTable
-CREATE TABLE "WhapifyConnection" (
-    "id" TEXT NOT NULL,
-    "encryptedToken" BYTEA NOT NULL,
-    "accountName" TEXT,
-    "totalContacts" INTEGER,
-    "status" TEXT NOT NULL DEFAULT 'connected',
-    "lastError" TEXT,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL,
-
-    CONSTRAINT "WhapifyConnection_pkey" PRIMARY KEY ("id")
-);
-
--- CreateTable
 CREATE TABLE "WaMessage" (
     "id" TEXT NOT NULL,
     "phone" TEXT NOT NULL,
@@ -136,24 +141,55 @@ CREATE TABLE "WaMessage" (
     "authorName" TEXT,
     "contactId" TEXT,
     "buttons" JSONB,
+    "replyToId" TEXT,
+    "reactions" JSONB,
+    "status" TEXT,
+    "error" TEXT,
+    "edited" BOOLEAN NOT NULL DEFAULT false,
+    "starred" BOOLEAN NOT NULL DEFAULT false,
     "externalId" TEXT,
+    "lineId" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "WaMessage_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
-CREATE TABLE "Dialog360Connection" (
+CREATE TABLE "WaLine" (
     "id" TEXT NOT NULL,
+    "label" TEXT NOT NULL,
+    "provider" TEXT NOT NULL DEFAULT 'dialog360',
+    "phone" TEXT,
+    "countryCode" TEXT NOT NULL DEFAULT '57',
     "encryptedApiKey" BYTEA NOT NULL,
+    "encryptedAppSecret" BYTEA,
+    "phoneNumberId" TEXT,
+    "wabaId" TEXT,
+    "verifyToken" TEXT,
     "mode" TEXT NOT NULL DEFAULT 'production',
     "webhookUrl" TEXT,
+    "isDefault" BOOLEAN NOT NULL DEFAULT false,
     "status" TEXT NOT NULL DEFAULT 'connected',
     "lastError" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
-    CONSTRAINT "Dialog360Connection_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "WaLine_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "WaFlow" (
+    "id" TEXT NOT NULL,
+    "kind" TEXT NOT NULL,
+    "lineId" TEXT NOT NULL,
+    "enabled" BOOLEAN NOT NULL DEFAULT true,
+    "scope" JSONB NOT NULL DEFAULT '["*"]',
+    "config" JSONB NOT NULL DEFAULT '{}',
+    "priority" INTEGER NOT NULL DEFAULT 0,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "WaFlow_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -161,11 +197,85 @@ CREATE TABLE "WaContact" (
     "phone" TEXT NOT NULL,
     "contactId" TEXT NOT NULL,
     "name" TEXT,
+    "labels" JSONB,
+    "archived" BOOLEAN NOT NULL DEFAULT false,
+    "muted" BOOLEAN NOT NULL DEFAULT false,
+    "pinned" BOOLEAN NOT NULL DEFAULT false,
     "flowState" TEXT,
     "draftAddress" TEXT,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "WaContact_pkey" PRIMARY KEY ("phone")
+);
+
+-- CreateTable
+CREATE TABLE "WaLabel" (
+    "name" TEXT NOT NULL,
+    "color" TEXT NOT NULL DEFAULT '#00a884',
+
+    CONSTRAINT "WaLabel_pkey" PRIMARY KEY ("name")
+);
+
+-- CreateTable
+CREATE TABLE "WaStickerFav" (
+    "id" TEXT NOT NULL,
+    "attachmentKey" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "WaStickerFav_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "WaChatRead" (
+    "userId" TEXT NOT NULL,
+    "phone" TEXT NOT NULL,
+    "lastReadAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "WaChatRead_pkey" PRIMARY KEY ("userId","phone")
+);
+
+-- CreateTable
+CREATE TABLE "SkydropxSedeConfig" (
+    "warehouseId" TEXT NOT NULL,
+    "addressTemplateId" TEXT NOT NULL,
+    "alias" TEXT,
+    "city" TEXT,
+    "postalCode" TEXT,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "SkydropxSedeConfig_pkey" PRIMARY KEY ("warehouseId")
+);
+
+-- CreateTable
+CREATE TABLE "SkydropxConnection" (
+    "id" TEXT NOT NULL,
+    "encryptedApiKey" BYTEA NOT NULL,
+    "encryptedApiSecret" BYTEA NOT NULL,
+    "mode" TEXT NOT NULL DEFAULT 'sandbox',
+    "status" TEXT NOT NULL DEFAULT 'connected',
+    "lastError" TEXT,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "SkydropxConnection_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "AddiLbaConnection" (
+    "id" TEXT NOT NULL,
+    "portalEmail" TEXT NOT NULL,
+    "encryptedPortalPassword" BYTEA NOT NULL,
+    "suiteEmail" TEXT NOT NULL,
+    "encryptedSuitePassword" BYTEA NOT NULL,
+    "autoSender" BOOLEAN NOT NULL DEFAULT true,
+    "status" TEXT NOT NULL DEFAULT 'connected',
+    "lastError" TEXT,
+    "lastSyncAt" TIMESTAMP(3),
+    "lastSyncCount" INTEGER,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "AddiLbaConnection_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -204,6 +314,7 @@ CREATE TABLE "MarketplaceConnection" (
     "id" TEXT NOT NULL,
     "provider" TEXT NOT NULL,
     "accountName" TEXT NOT NULL,
+    "label" TEXT,
     "encryptedAppKey" BYTEA NOT NULL,
     "encryptedAppToken" BYTEA NOT NULL,
     "webhookSecret" TEXT NOT NULL,
@@ -230,18 +341,31 @@ CREATE TABLE "Order" (
     "totalValue" DECIMAL(14,2) NOT NULL,
     "currency" TEXT NOT NULL DEFAULT 'COP',
     "totalUnits" INTEGER NOT NULL DEFAULT 0,
+    "primaryProduct" TEXT,
     "warehouseId" TEXT,
     "assignedAt" TIMESTAMP(3),
     "guideNumber" TEXT,
     "shippingState" TEXT,
     "shippingStatus" TEXT,
     "shippingUpdatedAt" TIMESTAMP(3),
+    "shippingProvider" TEXT,
+    "skydropxShipmentId" TEXT,
+    "addiGuide" TEXT,
+    "addiShipment" JSONB,
+    "addiSenderPendingAt" TIMESTAMP(3),
+    "addiSenderWarehouseId" TEXT,
+    "addiSenderAt" TIMESTAMP(3),
+    "addiSenderError" TEXT,
     "addressStatus" TEXT,
     "confirmedAddress" TEXT,
     "addressConfirmedAt" TIMESTAMP(3),
     "claimedById" TEXT,
     "claimedByName" TEXT,
     "claimedAt" TIMESTAMP(3),
+    "invoicedAt" TIMESTAMP(3),
+    "packedAt" TIMESTAMP(3),
+    "packedById" TEXT,
+    "packedByName" TEXT,
     "marketplaceCreatedAt" TIMESTAMP(3) NOT NULL,
     "receivedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
@@ -277,9 +401,22 @@ CREATE TABLE "OrderMessage" (
     "imeis" TEXT[],
     "mentions" TEXT[],
     "replyToId" TEXT,
+    "editedAt" TIMESTAMP(3),
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "OrderMessage_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "OrderMessageEdit" (
+    "id" TEXT NOT NULL,
+    "messageId" TEXT NOT NULL,
+    "previousBody" TEXT,
+    "editedById" TEXT NOT NULL,
+    "editedByName" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "OrderMessageEdit_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -368,6 +505,9 @@ CREATE INDEX "Warehouse_archived_idx" ON "Warehouse"("archived");
 CREATE UNIQUE INDEX "CoordinadoraConnection_warehouseId_key" ON "CoordinadoraConnection"("warehouseId");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "ExternalCertificateConnection_warehouseId_key" ON "ExternalCertificateConnection"("warehouseId");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "AlegraConnection_warehouseId_key" ON "AlegraConnection"("warehouseId");
 
 -- CreateIndex
@@ -393,6 +533,21 @@ CREATE UNIQUE INDEX "WaMessage_externalId_key" ON "WaMessage"("externalId");
 
 -- CreateIndex
 CREATE INDEX "WaMessage_phone_createdAt_idx" ON "WaMessage"("phone", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "WaMessage_lineId_createdAt_idx" ON "WaMessage"("lineId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "WaLine_status_idx" ON "WaLine"("status");
+
+-- CreateIndex
+CREATE INDEX "WaFlow_kind_enabled_idx" ON "WaFlow"("kind", "enabled");
+
+-- CreateIndex
+CREATE INDEX "WaFlow_lineId_idx" ON "WaFlow"("lineId");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "WaStickerFav_attachmentKey_key" ON "WaStickerFav"("attachmentKey");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "AlegraImeiIndex_imei_key" ON "AlegraImeiIndex"("imei");
@@ -431,13 +586,22 @@ CREATE INDEX "Order_warehouseId_shippingState_idx" ON "Order"("warehouseId", "sh
 CREATE INDEX "Order_receivedAt_idx" ON "Order"("receivedAt" DESC);
 
 -- CreateIndex
-CREATE UNIQUE INDEX "Order_provider_externalId_key" ON "Order"("provider", "externalId");
+CREATE INDEX "Order_invoicedAt_idx" ON "Order"("invoicedAt" DESC);
+
+-- CreateIndex
+CREATE INDEX "Order_packedAt_idx" ON "Order"("packedAt");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Order_provider_accountName_externalId_key" ON "Order"("provider", "accountName", "externalId");
 
 -- CreateIndex
 CREATE INDEX "OrderItem_orderId_idx" ON "OrderItem"("orderId");
 
 -- CreateIndex
 CREATE INDEX "OrderMessage_orderId_createdAt_idx" ON "OrderMessage"("orderId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "OrderMessageEdit_messageId_createdAt_idx" ON "OrderMessageEdit"("messageId", "createdAt");
 
 -- CreateIndex
 CREATE INDEX "MessageReaction_messageId_idx" ON "MessageReaction"("messageId");
@@ -476,6 +640,9 @@ CREATE INDEX "AuditLog_action_createdAt_idx" ON "AuditLog"("action", "createdAt"
 ALTER TABLE "CoordinadoraConnection" ADD CONSTRAINT "CoordinadoraConnection_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "ExternalCertificateConnection" ADD CONSTRAINT "ExternalCertificateConnection_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "AlegraConnection" ADD CONSTRAINT "AlegraConnection_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -491,6 +658,9 @@ ALTER TABLE "AlegraSellerPref" ADD CONSTRAINT "AlegraSellerPref_warehouseId_fkey
 ALTER TABLE "WarehouseMember" ADD CONSTRAINT "WarehouseMember_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "WaFlow" ADD CONSTRAINT "WaFlow_lineId_fkey" FOREIGN KEY ("lineId") REFERENCES "WaLine"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "Order" ADD CONSTRAINT "Order_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -498,6 +668,9 @@ ALTER TABLE "OrderItem" ADD CONSTRAINT "OrderItem_orderId_fkey" FOREIGN KEY ("or
 
 -- AddForeignKey
 ALTER TABLE "OrderMessage" ADD CONSTRAINT "OrderMessage_orderId_fkey" FOREIGN KEY ("orderId") REFERENCES "Order"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "OrderMessageEdit" ADD CONSTRAINT "OrderMessageEdit_messageId_fkey" FOREIGN KEY ("messageId") REFERENCES "OrderMessage"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "MessageReaction" ADD CONSTRAINT "MessageReaction_messageId_fkey" FOREIGN KEY ("messageId") REFERENCES "OrderMessage"("id") ON DELETE CASCADE ON UPDATE CASCADE;

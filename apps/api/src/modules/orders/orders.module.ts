@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { AiModule } from '../ai/ai.module';
+import { AddiLbaModule } from '../marketplaces/addi/addi-lba.module';
 import { AlegraModule } from '../marketplaces/alegra/alegra.module';
 import { CoordinadoraModule } from '../marketplaces/coordinadora/coordinadora.module';
 import { SkydropxModule } from '../marketplaces/skydropx/skydropx.module';
@@ -25,6 +26,7 @@ import { VtexFeesController } from './vtex-fees.controller';
     VtexModule,
     WhatsappModule,
     SkydropxModule,
+    AddiLbaModule,
   ],
   controllers: [OrdersController, PlatformsController, VtexFeesController, GuideModuleController],
   providers: [

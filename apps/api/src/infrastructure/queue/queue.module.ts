@@ -8,6 +8,8 @@ export const QUEUE_VTEX_RECONCILE = 'vtex-reconcile';
 export const QUEUE_SHIPPING_REFRESH = 'shipping-refresh';
 /** Flujo de venta del RESPALDO por WhatsApp (toques diferidos +2min). */
 export const QUEUE_WA_UPSELL = 'wa-upsell';
+/** Guias de ADDI: sincronizar numeros de guia + cambiar remitente por sede. */
+export const QUEUE_ADDI_LBA = 'addi-lba';
 
 @Global()
 @Module({
@@ -42,6 +44,7 @@ export const QUEUE_WA_UPSELL = 'wa-upsell';
       { name: QUEUE_VTEX_RECONCILE },
       { name: QUEUE_SHIPPING_REFRESH },
       { name: QUEUE_WA_UPSELL },
+      { name: QUEUE_ADDI_LBA },
     ),
   ],
   exports: [BullModule],
