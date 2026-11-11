@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  type OnModuleInit,
 } from '@nestjs/common';
 import {
   ADDI_EDITABLE_STATUS,
@@ -14,7 +15,7 @@ import {
   type AddiLbaConnectionSummary,
   type AddiLbaSyncResult,
 } from '@smartlogistica/shared';
-import type { Prisma } from '.prisma/tenant-client';
+import type { Prisma, PrismaClient as TenantPrismaClient } from '.prisma/tenant-client';
 import { Queue } from 'bullmq';
 import { randomUUID } from 'node:crypto';
 
@@ -24,10 +25,16 @@ import { EnvelopeService } from '../../../infrastructure/crypto/envelope.service
 import { QUEUE_ADDI_LBA } from '../../../infrastructure/queue/queue.module';
 import { RealtimeService } from '../../../infrastructure/realtime/realtime.service';
 import { StorageService } from '../../../infrastructure/storage/storage.service';
-import { getTenantContext } from '../../../infrastructure/tenant-context';
+import { getTenantContext, tenantContext } from '../../../infrastructure/tenant-context';
 import { WarehousesService } from '../../warehouses/warehouses.service';
 import { buildSenderUpdate } from './addi-guide-edit';
-import { AddiPortalClient, type AddiCreds, type AddiShipment } from './addi-portal-client.service';
+import {
+  ADDI_PAGE_SIZE,
+  AddiAuthError,
+  AddiPortalClient,
+  type AddiCreds,
+  type AddiShipment,
+} from './addi-portal-client.service';
 import {
   CoordinadoraSuiteClient,
   SuiteHttpError,
@@ -41,10 +48,18 @@ interface Creds {
 }
 
 /** Lo que guardamos del portal en Order.addiShipment. */
-interface ShipmentSnapshot {
+export interface ShipmentSnapshot {
   carrier: string | null;
   packageStatus: string | null;
   dispatchDeadline: string | null;
+  /** Cuando se leyo de Addi (el estado del paquete cambia; el resto no). */
+  checkedAt: string;
+}
+
+/** Guia lista para guardar junto con el pedido al ingerirlo. */
+export interface AddiIngestGuide {
+  addiGuide: string;
+  addiShipment: Prisma.InputJsonValue;
 }
 
 /** Un fallo que no se arregla reintentando (se avisa en el chat y se deja). */
@@ -52,33 +67,84 @@ class PermanentFailure extends Error {}
 
 /** Quien firma en el chat lo que hace la automatizacion. */
 const BOT = { id: 'system', name: 'SmartLogística' } as const;
-/** Pedidos "recientes" que aun pueden recibir guia de Addi aunque no la tengamos. */
-const RECENT_MS = 3 * 24 * 60 * 60_000;
-/** Si en 48 h no se pudo, se deja de intentar (queda el error a la vista). */
-const GIVE_UP_MS = 48 * 60 * 60_000;
-/** La lista de Addi se reutiliza este tiempo entre pedidos de un mismo lote. */
-const SHIPMENTS_TTL_MS = 60_000;
-const BATCH = 25;
+/**
+ * Paginas de la lista de Addi que se revisan buscando UN pedido. La lista no
+ * va por fecha de creacion, pero lo recien creado sale arriba (pagina 0).
+ */
+const INGEST_PAGES = 4;
+const LOOKUP_PAGES = 8;
+/** Una pagina leida se reutiliza este tiempo (pedidos que llegan en lote). */
+const PAGE_TTL_MS = 30_000;
+/** Al llegar el pedido no se le espera a Addi mas que esto. */
+const INGEST_TIMEOUT_MS = 8_000;
+/** Si al llegar no estaba la guia (Addi caido/lento): reintentos SOLO de ese pedido. */
+const LOOKUP_RETRY_MS = [60_000, 3 * 60_000, 10 * 60_000, 30 * 60_000, 2 * 60 * 60_000];
+/** Cambio de remitente ante fallos pasajeros (red, sesion vencida...). */
+const APPLY_RETRY_MS = [2 * 60_000, 5 * 60_000, 15 * 60_000, 30 * 60_000, 60 * 60_000];
+/** Al abrir el Detalle, el estado del paquete se relee si tiene mas de esto. */
+const STATUS_STALE_MS = 10 * 60_000;
+const DETAIL_TIMEOUT_MS = 4_000;
+
+/**
+ * ¿El pedido de VTEX es de Addi Logistics (LBA)? Lo dice el propio pedido:
+ * su transportadora es "Transportadora estándar (LBA)". Desde que Addi usa esa
+ * marca (2026-11-11) TODOS los LBA tienen guia en Addi y los demas no.
+ */
+export function isLbaOrder(rawPayload: unknown): boolean {
+  const li = (rawPayload as { shippingData?: { logisticsInfo?: unknown[] } } | null)?.shippingData
+    ?.logisticsInfo;
+  if (!Array.isArray(li)) return false;
+  return li.some((l) =>
+    ((l as { deliveryIds?: Array<{ courierName?: string }> })?.deliveryIds ?? []).some((d) =>
+      /\(LBA\)/i.test(d?.courierName ?? ''),
+    ),
+  );
+}
+
+function snapshot(s: AddiShipment): ShipmentSnapshot {
+  return {
+    carrier: s.carrier,
+    packageStatus: s.packageStatus,
+    dispatchDeadline: s.dispatchDeadline,
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error('Addi no respondió a tiempo')), ms);
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
 
 /**
  * GUIAS DE ADDI (Addi Logistics). Ver addi-lba.schema.ts en shared.
  *
- *  - Sincroniza el numero de guia de cada pedido VTEX desde el portal de
- *    aliados de Addi (cruce por MKT), cada pocos minutos.
- *  - Al pasar un pedido a una sede (asignar / transferir) marca "pendiente"
- *    el cambio de remitente. Se aplica en cuanto haya guia: edita la guia en
- *    la suite de Coordinadora con el remitente de ESA sede, verifica y deja el
- *    rotulo en la conversacion del pedido.
- *
- * Solo se marcan pendientes los traslados que ocurren con la automatizacion
- * encendida: activarla NO reescribe en masa las guias de pedidos que ya
- * estaban en sedes (esos tienen el boton manual en el Detalle).
+ *  1. AL LLEGAR un pedido de VTEX (ready-for-handling), ANTES de guardarlo se
+ *     busca su guia en el portal de Addi (por MKT) y el pedido entra ya con
+ *     ella. VTEX suelta el pedido ~30 min despues de creado (ventana de
+ *     cancelacion) y Addi genera la guia en el primer minuto: ya esta. Nada
+ *     de consultas periodicas; si Addi no responde, se reintenta SOLO ese pedido.
+ *  2. En generales no pasa nada mas.
+ *  3. Al ASIGNAR / TRANSFERIR a una sede: se edita la guia en la suite de
+ *     Coordinadora con el remitente de esa sede, se verifica y el rotulo cae
+ *     a la conversacion del pedido.
  */
 @Injectable()
-export class AddiLbaService {
+export class AddiLbaService implements OnModuleInit {
   private readonly logger = new Logger(AddiLbaService.name);
   private readonly credsCache = new Map<string, { at: number; value: Creds | null }>();
-  private readonly shipmentsCache = new Map<string, { at: number; list: AddiShipment[] }>();
+  /** Paginas de Addi leidas hace poco, por tenant. */
+  private readonly pageCache = new Map<string, Map<number, { at: number; rows: AddiShipment[] }>>();
   /** Un cambio de remitente a la vez por pedido (`tenant:order`). */
   private readonly running = new Set<string>();
 
@@ -91,6 +157,16 @@ export class AddiLbaService {
     private readonly warehouses: WarehousesService,
     @InjectQueue(QUEUE_ADDI_LBA) private readonly queue: Queue,
   ) {}
+
+  /** La primera version consultaba Addi cada 5 min: se borra ese ciclo si quedo. */
+  async onModuleInit(): Promise<void> {
+    try {
+      const reps = await this.queue.getRepeatableJobs();
+      for (const r of reps) await this.queue.removeRepeatableByKey(r.key).catch(() => null);
+    } catch {
+      // sin Redis al arrancar: nada que limpiar
+    }
+  }
 
   // === Conexion ===
 
@@ -169,7 +245,7 @@ export class AddiLbaService {
       await prisma.addiLbaConnection.create({ data });
     }
     this.credsCache.delete(tenantId);
-    this.shipmentsCache.delete(tenantId);
+    this.pageCache.delete(tenantId);
     const out = await this.summary(auth);
     return out!;
   }
@@ -179,7 +255,7 @@ export class AddiLbaService {
     const { tenantId, prisma } = getTenantContext();
     await prisma.addiLbaConnection.deleteMany({});
     this.credsCache.delete(tenantId);
-    this.shipmentsCache.delete(tenantId);
+    this.pageCache.delete(tenantId);
   }
 
   /** Credenciales descifradas (cache 60 s). null = sin conexion. */
@@ -204,45 +280,183 @@ export class AddiLbaService {
     return value;
   }
 
-  private async shipments(creds: Creds, fresh: boolean): Promise<AddiShipment[]> {
+  /**
+   * Busca UN pedido en la lista de Addi, de la pagina 0 hacia atras. Las
+   * paginas leidas en los ultimos segundos se reutilizan; si con ellas no
+   * aparece, esa pagina se vuelve a leer (pudo crearse justo despues).
+   */
+  private async findShipment(
+    creds: Creds,
+    mkt: string,
+    maxPages: number,
+  ): Promise<AddiShipment | null> {
     const { tenantId } = getTenantContext();
-    const hit = this.shipmentsCache.get(tenantId);
-    if (!fresh && hit && Date.now() - hit.at < SHIPMENTS_TTL_MS) return hit.list;
-    const list = await this.portal.listShipments(creds.portal);
-    this.shipmentsCache.set(tenantId, { at: Date.now(), list });
-    return list;
+    let pages = this.pageCache.get(tenantId);
+    if (!pages) {
+      pages = new Map();
+      this.pageCache.set(tenantId, pages);
+    }
+    const read = async (p: number, fresh: boolean) => {
+      const hit = pages!.get(p);
+      if (!fresh && hit && Date.now() - hit.at < PAGE_TTL_MS)
+        return { rows: hit.rows, cached: true };
+      const rows = await this.portal.listPage(creds.portal, p);
+      pages!.set(p, { at: Date.now(), rows });
+      return { rows, cached: false };
+    };
+    for (let p = 0; p < maxPages; p++) {
+      let { rows, cached } = await read(p, false);
+      let found = rows.find((s) => s.orderId === mkt);
+      if (!found && cached) {
+        ({ rows, cached } = await read(p, true));
+        found = rows.find((s) => s.orderId === mkt);
+      }
+      if (found) return found;
+      if (rows.length < ADDI_PAGE_SIZE) break;
+    }
+    return null;
   }
 
-  // === Sincronizacion de guias ===
-
-  async syncNow(auth: AuthContext): Promise<AddiLbaSyncResult> {
-    this.assertAdmin(auth);
-    const creds = await this.credsOrNull();
-    if (!creds) throw new BadRequestException('Configura primero la conexión de guías de Addi');
-    try {
-      return await this.syncTenant();
-    } catch (err) {
-      throw new BadRequestException(err instanceof Error ? err.message : 'No se pudo sincronizar');
+  /** El estado de la conexion refleja si Addi esta aceptando la cuenta. */
+  private async noteHealth(err: unknown | null): Promise<void> {
+    const { prisma } = getTenantContext();
+    if (err === null) {
+      await prisma.addiLbaConnection
+        .updateMany({ where: { status: 'error' }, data: { status: 'connected', lastError: null } })
+        .catch(() => null);
+    } else if (err instanceof AddiAuthError) {
+      await prisma.addiLbaConnection
+        .updateMany({ data: { status: 'error', lastError: err.message.slice(0, 500) } })
+        .catch(() => null);
     }
   }
 
+  // === 1. Al llegar el pedido ===
+
   /**
-   * Trae TODOS los envios LBA de Addi y actualiza la guia de los pedidos que
-   * cruzan por MKT. Solo escribe los que cambiaron.
+   * Guia de Addi para un pedido que esta llegando de VTEX, ANTES de guardarlo
+   * (VtexOrderService.upsertFromDetail). Nunca lanza ni tarda mas de
+   * INGEST_TIMEOUT_MS: la ingesta no depende de Addi.
+   *   - guia     -> se guarda con el pedido
+   *   - null     -> no la encontro (o Addi fallo)
+   *   - 'off'    -> no hay conexion configurada
    */
-  async syncTenant(): Promise<AddiLbaSyncResult> {
+  async lookupAtIngest(
+    tenantId: string,
+    prisma: TenantPrismaClient,
+    externalId: string,
+  ): Promise<AddiIngestGuide | null | 'off'> {
+    return tenantContext.run({ tenantId, tenantSlug: '', prisma }, async () => {
+      const creds = await this.credsOrNull().catch(() => null);
+      if (!creds) return 'off';
+      try {
+        const ship = await withTimeout(
+          this.findShipment(creds, externalId.replace(/^MKT-/, ''), INGEST_PAGES),
+          INGEST_TIMEOUT_MS,
+        );
+        await this.noteHealth(null);
+        if (!ship?.trackingNumber) return null;
+        return {
+          addiGuide: ship.trackingNumber,
+          addiShipment: snapshot(ship) as unknown as Prisma.InputJsonValue,
+        };
+      } catch (err) {
+        await this.noteHealth(err);
+        this.logger.warn(
+          `Guia de Addi para ${externalId} no disponible al llegar: ${(err as Error).message}`,
+        );
+        return null;
+      }
+    });
+  }
+
+  /** Reintento de buscar la guia de UN pedido (no hay ciclo general). */
+  async scheduleLookup(tenantId: string, orderId: string, attempt: number): Promise<void> {
+    const delay = LOOKUP_RETRY_MS[attempt];
+    if (delay === undefined) return;
+    await this.queue
+      .add(
+        'lookup',
+        { tenantId, orderId, attempt },
+        {
+          delay,
+          jobId: `addi-lookup-${orderId}-${attempt}`,
+          attempts: 1,
+          removeOnComplete: true,
+          removeOnFail: true,
+        },
+      )
+      .catch((err) => this.logger.warn(`No se pudo programar la busqueda de guia: ${err.message}`));
+  }
+
+  /** Trabajo 'lookup': si aparecio la guia, se guarda (y si estaba pendiente el remitente, se aplica). */
+  async retryLookup(orderId: string, attempt: number): Promise<void> {
+    const { tenantId, prisma } = getTenantContext();
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        externalId: true,
+        provider: true,
+        addiGuide: true,
+        addiSenderPendingAt: true,
+      },
+    });
+    if (!order || order.provider !== 'vtex') return;
+    if (!order.addiGuide) {
+      const creds = await this.credsOrNull();
+      if (!creds) return;
+      let ship: AddiShipment | null = null;
+      try {
+        ship = await this.findShipment(creds, order.externalId.replace(/^MKT-/, ''), LOOKUP_PAGES);
+        await this.noteHealth(null);
+      } catch (err) {
+        await this.noteHealth(err);
+      }
+      if (!ship?.trackingNumber) {
+        if (attempt + 1 < LOOKUP_RETRY_MS.length) {
+          await this.scheduleLookup(tenantId, orderId, attempt + 1);
+        } else if (order.addiSenderPendingAt) {
+          await prisma.order.update({
+            where: { id: orderId },
+            data: {
+              addiSenderPendingAt: null,
+              addiSenderError: 'Addi no tiene guía para este pedido.',
+            },
+          });
+        }
+        return;
+      }
+      await prisma.order.update({
+        where: { id: orderId },
+        data: {
+          addiGuide: ship.trackingNumber,
+          addiShipment: snapshot(ship) as unknown as Prisma.InputJsonValue,
+        },
+      });
+    }
+    if (order.addiSenderPendingAt) await this.applySender(orderId).catch(() => false);
+  }
+
+  /**
+   * "Buscar guías faltantes" (Ajustes): recorre TODA la lista de Addi y llena
+   * los pedidos que no tengan guia o cuyo estado cambio. Manual, por si algo
+   * entro mientras Addi estaba caido.
+   */
+  async syncNow(auth: AuthContext): Promise<AddiLbaSyncResult> {
+    this.assertAdmin(auth);
     const { prisma } = getTenantContext();
     const creds = await this.credsOrNull();
-    if (!creds) return { shipments: 0, matched: 0, updated: 0 };
+    if (!creds) throw new BadRequestException('Configura primero la conexión de guías de Addi');
     let list: AddiShipment[];
     try {
-      list = await this.shipments(creds, true);
+      list = await this.portal.listShipments(creds.portal);
+      await this.noteHealth(null);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'error desconocido';
-      await prisma.addiLbaConnection.updateMany({
-        data: { status: 'error', lastError: msg.slice(0, 500) },
-      });
-      throw err;
+      await this.noteHealth(err);
+      throw new BadRequestException(
+        err instanceof Error ? err.message : 'No se pudo consultar Addi',
+      );
     }
     const byMkt = new Map(list.filter((s) => s.trackingNumber).map((s) => [`MKT-${s.orderId}`, s]));
     let matched = 0;
@@ -256,45 +470,29 @@ export class AddiLbaService {
       matched += orders.length;
       for (const o of orders) {
         const s = byMkt.get(o.externalId)!;
-        const next: ShipmentSnapshot = {
-          carrier: s.carrier,
-          packageStatus: s.packageStatus,
-          dispatchDeadline: s.dispatchDeadline,
-        };
         const prev = (o.addiShipment ?? null) as ShipmentSnapshot | null;
-        const same =
-          o.addiGuide === s.trackingNumber &&
-          prev?.carrier === next.carrier &&
-          prev?.packageStatus === next.packageStatus &&
-          prev?.dispatchDeadline === next.dispatchDeadline;
-        if (same) continue;
+        if (o.addiGuide === s.trackingNumber && prev?.packageStatus === s.packageStatus) continue;
         await prisma.order.update({
           where: { id: o.id },
           data: {
             addiGuide: s.trackingNumber,
-            addiShipment: next as unknown as Prisma.InputJsonValue,
+            addiShipment: snapshot(s) as unknown as Prisma.InputJsonValue,
           },
         });
         updated++;
       }
     }
     await prisma.addiLbaConnection.updateMany({
-      data: {
-        status: 'connected',
-        lastError: null,
-        lastSyncAt: new Date(),
-        lastSyncCount: matched,
-      },
+      data: { lastSyncAt: new Date(), lastSyncCount: matched },
     });
     return { shipments: list.length, matched, updated };
   }
 
-  // === Cambio de remitente ===
+  // === 3. Al pasar a una sede ===
 
   /**
    * Llamado al ASIGNAR / TRANSFERIR pedidos (OrdersService.assign). Marca
-   * pendiente el cambio de remitente y lo dispara ya; si Addi aun no genero la
-   * guia, el ciclo periodico lo aplica cuando aparezca. Devolver a generales
+   * pendiente el cambio de remitente y lo dispara ya. Devolver a generales
    * cancela lo pendiente. Nunca lanza: el traslado ya ocurrio.
    */
   async onAssigned(orderIds: string[], warehouseId: string | null): Promise<void> {
@@ -317,21 +515,23 @@ export class AddiLbaService {
         select: { senderAddress: true, senderCityCode: true },
       });
       if (!sender?.senderAddress?.trim() || !sender.senderCityCode) return;
-      const res = await prisma.order.updateMany({
-        where: {
-          id: { in: orderIds },
-          provider: 'vtex',
-          OR: [
-            { addiGuide: { not: null } },
-            { marketplaceCreatedAt: { gte: new Date(Date.now() - RECENT_MS) } },
-          ],
-        },
+      // Solo pedidos con guia de Addi o marcados LBA (los demas no tienen guia
+      // de Addi que editar).
+      const candidates = await prisma.order.findMany({
+        where: { id: { in: orderIds }, provider: 'vtex' },
+        select: { id: true, addiGuide: true, rawPayload: true },
+      });
+      const ids = candidates
+        .filter((o) => o.addiGuide || isLbaOrder(o.rawPayload))
+        .map((o) => o.id);
+      if (ids.length === 0) return;
+      await prisma.order.updateMany({
+        where: { id: { in: ids } },
         data: { addiSenderPendingAt: new Date(), addiSenderError: null },
       });
-      if (res.count === 0) return;
       await this.queue.add(
         'apply',
-        { tenantId, orderIds },
+        { tenantId, orderIds: ids, attempt: 0 },
         { delay: 1_500, attempts: 1, removeOnComplete: true, removeOnFail: true },
       );
     } catch (err) {
@@ -341,48 +541,36 @@ export class AddiLbaService {
     }
   }
 
-  /** Aplica los pendientes del tenant (ciclo periodico, tras sincronizar). */
-  async processPending(): Promise<{ applied: number }> {
-    const { prisma } = getTenantContext();
-    const creds = await this.credsOrNull();
-    if (!creds) return { applied: 0 };
-    const rows = await prisma.order.findMany({
-      where: { addiSenderPendingAt: { not: null } },
-      select: { id: true, addiGuide: true, addiSenderPendingAt: true, addiSenderError: true },
-      orderBy: { addiSenderPendingAt: 'asc' },
-      take: BATCH,
-    });
-    let applied = 0;
-    for (const r of rows) {
-      const age = Date.now() - r.addiSenderPendingAt!.getTime();
-      if (age > GIVE_UP_MS) {
-        await prisma.order.updateMany({
-          where: { id: r.id, addiSenderPendingAt: r.addiSenderPendingAt },
-          data: {
-            addiSenderPendingAt: null,
-            addiSenderError: r.addiGuide
-              ? `No se pudo cambiar el remitente en 48 h. Último error: ${r.addiSenderError ?? 'desconocido'}`.slice(
-                  0,
-                  500,
-                )
-              : 'Addi no generó guía para este pedido.',
-          },
-        });
-        continue;
-      }
-      if (!r.addiGuide) continue; // la sincronizacion la traera
-      if ((await this.applySender(r.id).catch(() => false)) === true) applied++;
-    }
-    return { applied };
+  private async scheduleApply(
+    tenantId: string,
+    orderId: string,
+    attempt: number,
+  ): Promise<boolean> {
+    const delay = APPLY_RETRY_MS[attempt - 1];
+    if (delay === undefined) return false;
+    await this.queue
+      .add(
+        'apply',
+        { tenantId, orderIds: [orderId], attempt },
+        {
+          delay,
+          jobId: `addi-apply-${orderId}-${attempt}`,
+          attempts: 1,
+          removeOnComplete: true,
+          removeOnFail: true,
+        },
+      )
+      .catch(() => null);
+    return true;
   }
 
   /**
    * Cambia el remitente de la guia de Addi del pedido al de SU sede actual y
    * deja el rotulo en la conversacion. `manual` = lo pidio alguien desde el
-   * Detalle (los errores le llegan como respuesta en vez de quedar en cola).
-   * Devuelve true si se aplico.
+   * Detalle (los errores le llegan como respuesta). `attempt` = reintento
+   * automatico numero N. Devuelve true si se aplico.
    */
-  async applySender(orderId: string, manual?: AuthContext): Promise<boolean> {
+  async applySender(orderId: string, manual?: AuthContext, attempt = 0): Promise<boolean> {
     const { tenantId, prisma } = getTenantContext();
     const lock = `${tenantId}:${orderId}`;
     if (this.running.has(lock)) {
@@ -414,36 +602,31 @@ export class AddiLbaService {
       if (!order.warehouseId) throw new PermanentFailure('El pedido no está en una sede.');
       const mkt = order.externalId.replace(/^MKT-/, '');
 
-      // 1. La guia y su estado en Addi (lista cacheada 60 s: un lote de
-      //    traslados no la pide una vez por pedido).
-      const ship = (await this.shipments(creds, false)).find((s) => s.orderId === mkt) ?? null;
+      // 1. La guia y su estado ACTUAL en Addi.
+      const ship = await this.findShipment(creds, mkt, LOOKUP_PAGES);
       const guide = ship?.trackingNumber ?? order.addiGuide;
-      if (ship?.trackingNumber && ship.trackingNumber !== order.addiGuide) {
+      if (ship?.trackingNumber) {
         await prisma.order.update({
           where: { id: orderId },
           data: {
             addiGuide: ship.trackingNumber,
-            addiShipment: {
-              carrier: ship.carrier,
-              packageStatus: ship.packageStatus,
-              dispatchDeadline: ship.dispatchDeadline,
-            } as Prisma.InputJsonValue,
+            addiShipment: snapshot(ship) as unknown as Prisma.InputJsonValue,
           },
         });
       }
       if (!guide) {
-        // No es un error: Addi genera la guia unos minutos despues del pedido.
-        // Queda pendiente y el ciclo periodico lo aplica cuando aparezca.
+        // Aun sin guia: queda pendiente y se busca de nuevo solo para este pedido.
         await prisma.order.update({
           where: { id: orderId },
           data: {
-            addiSenderError: 'Esperando a que Addi genere la guía.',
+            addiSenderError: 'Esperando a que Addi tenga la guía.',
             addiSenderPendingAt: order.addiSenderPendingAt ?? new Date(),
           },
         });
+        await this.scheduleLookup(tenantId, orderId, 0);
         if (manual) {
           throw new BadRequestException(
-            'Addi todavía no ha generado la guía de este pedido. El remitente se cambiará solo cuando aparezca.',
+            'Addi todavía no tiene la guía de este pedido. El remitente se cambiará solo cuando aparezca.',
           );
         }
         return false;
@@ -472,8 +655,9 @@ export class AddiLbaService {
         );
       }
 
-      // 3. La guia en la suite: que exista, que no este anulada y que SEA de
-      //    este pedido (esa cuenta ve las guias de todos los comercios de Addi).
+      // 3. La guia en la suite: que exista, que no este anulada ni recogida y
+      //    que SEA de este pedido (esa cuenta ve las guias de todos los
+      //    comercios de Addi).
       const row = await this.suite.findGuide(creds.suite, guide);
       if (!row)
         throw new PermanentFailure(
@@ -481,6 +665,11 @@ export class AddiLbaService {
         );
       if (/anulad/i.test(row.estado_guia ?? '')) {
         throw new PermanentFailure(`La guía ${guide} está anulada en Coordinadora.`);
+      }
+      if (row.estadoTracking && !/posesi[oó]n del remitente/i.test(row.estadoTracking)) {
+        throw new PermanentFailure(
+          `La guía ${guide} ya está «${row.estadoTracking}» en Coordinadora: no se le cambia el remitente.`,
+        );
       }
       const current = await this.suite.getGuide(creds.suite, guide);
       if ((current.referenciaGuia ?? '').trim() !== mkt) {
@@ -504,8 +693,8 @@ export class AddiLbaService {
       );
       await this.suite.updateGuide(creds.suite, payload);
       const after = await this.suite.getGuide(creds.suite, guide);
-      // Definitivo a proposito: reintentar cada pocos minutos seria volver a
-      // escribir sobre la guia sin saber por que no tomo el cambio.
+      // Definitivo a proposito: reintentar seria volver a escribir sobre la
+      // guia sin saber por que no tomo el cambio.
       if (after.ciudadRemitente !== conn.senderCityCode) {
         throw new PermanentFailure(
           `La suite de Coordinadora aceptó el cambio, pero la guía ${guide} sigue con otro remitente. Revísala en la suite.`,
@@ -542,6 +731,17 @@ export class AddiLbaService {
           ...(movedAgain ? {} : { addiSenderPendingAt: null }),
         },
       });
+      // Lo movieron otra vez mientras se editaba: el traslado nuevo choco con
+      // este candado, asi que se vuelve a aplicar ya con la sede nueva.
+      if (movedAgain && fresh?.warehouseId) {
+        await this.queue
+          .add(
+            'apply',
+            { tenantId, orderIds: [orderId], attempt: 0 },
+            { delay: 1_500, attempts: 1, removeOnComplete: true, removeOnFail: true },
+          )
+          .catch(() => null);
+      }
       await prisma.orderEvent.create({
         data: {
           orderId,
@@ -568,19 +768,31 @@ export class AddiLbaService {
       return true;
     } catch (err) {
       if (!order) throw err;
+      if (err instanceof BadRequestException && manual) throw err;
       const msg = err instanceof Error ? err.message : 'error desconocido';
-      const permanent =
+      let permanent =
         err instanceof PermanentFailure ||
         (err instanceof SuiteHttpError &&
           err.status >= 400 &&
           err.status < 500 &&
           ![401, 403, 408, 429].includes(err.status));
-      if (err instanceof BadRequestException && manual) throw err;
+      let finalMsg = msg;
+      // Pasajero (red, sesion, Addi/Coordinadora caidos): se reintenta SOLO
+      // este pedido, unas cuantas veces. Agotados, se avisa.
+      if (!permanent && !manual) {
+        const retried = await this.scheduleApply(tenantId, orderId, attempt + 1);
+        if (!retried) {
+          permanent = true;
+          finalMsg = `No se pudo cambiar el remitente de la guía de Addi tras varios intentos: ${msg} Hazlo desde el Detalle del pedido.`;
+        } else {
+          this.logger.warn(`Remitente de Addi (${order.externalId}) se reintentara: ${msg}`);
+        }
+      }
       await prisma.order
         .update({
           where: { id: orderId },
           data: {
-            addiSenderError: msg.slice(0, 500),
+            addiSenderError: finalMsg.slice(0, 500),
             ...(permanent ? { addiSenderPendingAt: null } : {}),
           },
         })
@@ -593,14 +805,12 @@ export class AddiLbaService {
               type: 'addi_sender_failed',
               actorId: manual?.userId ?? null,
               actorName: manual ? manual.name?.trim() || manual.email : BOT.name,
-              data: { error: msg.slice(0, 500) } as Prisma.InputJsonValue,
+              data: { error: finalMsg.slice(0, 500) } as Prisma.InputJsonValue,
             },
           })
           .catch(() => null);
         // En automatico el equipo se entera por el chat; en manual, por la respuesta.
-        if (!manual) await this.postToChat(order, `⚠️ ${msg}`, null).catch(() => null);
-      } else {
-        this.logger.warn(`Remitente de Addi (pedido ${order.externalId}) se reintentara: ${msg}`);
+        if (!manual) await this.postToChat(order, `⚠️ ${finalMsg}`, null).catch(() => null);
       }
       if (manual) throw new BadRequestException(msg);
       return false;
@@ -704,9 +914,11 @@ export class AddiLbaService {
       where: { id: orderId },
       select: {
         id: true,
+        externalId: true,
         provider: true,
         warehouseId: true,
         status: true,
+        rawPayload: true,
         addiGuide: true,
         addiShipment: true,
         addiSenderPendingAt: true,
@@ -718,11 +930,39 @@ export class AddiLbaService {
     if (!order) throw new NotFoundException('Pedido no encontrado');
     await this.assertOrderAccess(order.warehouseId, auth);
 
-    const conn = await prisma.addiLbaConnection.findFirst({
-      orderBy: { createdAt: 'desc' },
-      select: { lastSyncAt: true },
-    });
-    const ship = (order.addiShipment ?? null) as ShipmentSnapshot | null;
+    const lba = order.provider === 'vtex' && isLbaOrder(order.rawPayload);
+    let ship = (order.addiShipment ?? null) as ShipmentSnapshot | null;
+    let guide = order.addiGuide;
+    // Al abrir el Detalle (no hay consultas periodicas): si el estado del
+    // paquete es viejo, o es LBA y aun no tiene guia, se relee de Addi. Con
+    // tope de tiempo: si Addi tarda, se muestra lo que hay.
+    const stale =
+      (guide &&
+        ship?.packageStatus !== 'DELIVERED' &&
+        (!ship?.checkedAt || Date.now() - Date.parse(ship.checkedAt) > STATUS_STALE_MS)) ||
+      (!guide && lba);
+    let connected = false;
+    const creds = await this.credsOrNull().catch(() => null);
+    connected = Boolean(creds);
+    if (stale && creds) {
+      try {
+        const fresh = await withTimeout(
+          this.findShipment(creds, order.externalId.replace(/^MKT-/, ''), LOOKUP_PAGES),
+          DETAIL_TIMEOUT_MS,
+        );
+        if (fresh?.trackingNumber) {
+          ship = snapshot(fresh);
+          guide = fresh.trackingNumber;
+          await prisma.order.update({
+            where: { id: orderId },
+            data: { addiGuide: guide, addiShipment: ship as unknown as Prisma.InputJsonValue },
+          });
+        }
+      } catch {
+        // se muestra lo guardado
+      }
+    }
+
     const appliedName = order.addiSenderWarehouseId
       ? ((
           await prisma.warehouse.findUnique({
@@ -746,14 +986,15 @@ export class AddiLbaService {
           : 'none';
     const editable = !ship?.packageStatus || ship.packageStatus === ADDI_EDITABLE_STATUS;
     return {
-      connected: Boolean(conn),
-      guide: order.addiGuide,
+      connected,
+      lba,
+      guide,
       carrier: ship?.carrier ?? null,
       packageStatus: ship?.packageStatus ?? null,
       dispatchDeadline: ship?.dispatchDeadline
         ? new Date(ship.dispatchDeadline).toISOString()
         : null,
-      syncedAt: conn?.lastSyncAt?.toISOString() ?? null,
+      syncedAt: ship?.checkedAt ?? null,
       sender: {
         state,
         warehouseName: appliedName,
@@ -761,9 +1002,10 @@ export class AddiLbaService {
         error: order.addiSenderError,
       },
       canApply:
-        Boolean(conn) &&
+        connected &&
         canManageOrders(auth) &&
         order.provider === 'vtex' &&
+        Boolean(guide) &&
         Boolean(order.warehouseId) &&
         editable,
     };

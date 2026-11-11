@@ -103,7 +103,7 @@ export function AddiLbaCard() {
       void qc.invalidateQueries({ queryKey: KEY });
       void qc.invalidateQueries({ queryKey: ['addi-guide'] });
       toast.success(
-        `${r.shipments} guías en Addi · ${r.matched} de pedidos nuestros${r.updated ? ` · ${r.updated} actualizadas` : ''}`,
+        `${r.shipments} guías en Addi · ${r.matched} de pedidos nuestros · ${r.updated} completadas o actualizadas`,
       );
     },
     onError: (err) =>
@@ -158,7 +158,7 @@ export function AddiLbaCard() {
             )
           ) : null
         }
-        description="Addi genera la guía de cada pedido de VTEX con un solo remitente. Con sus dos cuentas, la plataforma trae el número de guía de cada pedido y, al pasarlo a una sede, le pone el remitente de esa sede en Coordinadora y deja el rótulo en la conversación."
+        description="Addi genera la guía de cada pedido de VTEX con un solo remitente. Con sus dos cuentas, cada pedido llega a la plataforma ya con su número de guía y, al pasarlo a una sede, la guía toma el remitente de esa sede en Coordinadora y el rótulo llega a la conversación."
       />
 
       {isLoading ? (
@@ -281,13 +281,13 @@ export function AddiLbaCard() {
                 ? 'Cambia el remitente y envía el rótulo al chat'
                 : 'Apagado: solo trae los números de guía'}
             </dd>
-            <dt className="font-semibold text-hint">Última sincronización</dt>
+            <dt className="font-semibold text-hint">Última búsqueda manual</dt>
             <dd className="min-w-0 font-semibold">
               {data.lastSyncAt
                 ? `${formatDistanceToNow(new Date(data.lastSyncAt), { addSuffix: true, locale: es })}${
-                    data.lastSyncCount != null ? ` · ${data.lastSyncCount} pedidos con guía` : ''
+                    data.lastSyncCount != null ? ` · ${data.lastSyncCount} pedidos encontrados` : ''
                   }`
-                : 'Todavía no'}
+                : 'Ninguna (las guías se traen solas al llegar cada pedido)'}
             </dd>
           </dl>
           {data.status === 'error' && data.lastError ? (
@@ -330,7 +330,7 @@ export function AddiLbaCard() {
                 className={cn(BTN_PRIMARY_CLS, BTN_SM_CLS)}
               >
                 <RefreshCw className="h-3.5 w-3.5" />
-                Sincronizar ahora
+                Buscar guías faltantes
               </Button>
               <Button
                 size="sm"

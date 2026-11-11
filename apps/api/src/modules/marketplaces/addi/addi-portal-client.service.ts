@@ -23,7 +23,8 @@ const LOGIN_APP = 'https://login.addi.com';
 const LBA_PAGE = 'https://aliados.addi.com/marketplace/lba-orders';
 const PORTAL_API = 'https://ally-portal.addi.com';
 /** El API ignora tamaños mayores: siempre devuelve 25. */
-const PAGE_SIZE = 25;
+export const ADDI_PAGE_SIZE = 25;
+const PAGE_SIZE = ADDI_PAGE_SIZE;
 /** Tope de paginas por consulta (25 x 120 = 3000 envios). */
 const MAX_PAGES = 120;
 /** La cookie `addiauth` vive 30 min; el token interno, lo mismo. */
@@ -58,6 +59,7 @@ export class AddiPortalClient {
   private readonly logger = new Logger(AddiPortalClient.name);
   /** Sesion por cuenta (correo). Se rehace al vencer o ante un 401/403. */
   private readonly sessions = new Map<string, Session>();
+  private readonly logins = new Map<string, Promise<Session>>();
 
   /** Valida las credenciales (login completo). Lanza con un mensaje claro si falla. */
   async validate(creds: AddiCreds): Promise<void> {
@@ -69,7 +71,7 @@ export class AddiPortalClient {
     const all: AddiShipment[] = [];
     const seen = new Set<string>();
     for (let page = 0; page < MAX_PAGES; page++) {
-      const rows = await this.page(creds, page);
+      const rows = await this.listPage(creds, page);
       if (rows.length === 0) break;
       let fresh = 0;
       for (const r of rows) {
@@ -87,7 +89,8 @@ export class AddiPortalClient {
     return all;
   }
 
-  private async page(creds: AddiCreds, page: number, retried = false): Promise<AddiShipment[]> {
+  /** UNA pagina (25) de la lista. La 0 trae lo recien creado o movido. */
+  async listPage(creds: AddiCreds, page: number, retried = false): Promise<AddiShipment[]> {
     const s = await this.session(creds);
     const url = `${PORTAL_API}/v1/marketplace/shipments?page=${page}&pageSize=${PAGE_SIZE}`;
     let res: Response;
@@ -105,7 +108,7 @@ export class AddiPortalClient {
     }
     if ((res.status === 401 || res.status === 403) && !retried) {
       this.sessions.delete(creds.email);
-      return this.page(creds, page, true);
+      return this.listPage(creds, page, true);
     }
     if (!res.ok) {
       throw new Error(`El portal de Addi respondió ${res.status} al listar las órdenes LBA`);
@@ -131,7 +134,13 @@ export class AddiPortalClient {
   private async session(creds: AddiCreds): Promise<Session> {
     const hit = this.sessions.get(creds.email);
     if (hit && Date.now() - hit.at < SESSION_TTL_MS) return hit;
-    const s = await this.login(creds);
+    // Varios pedidos llegando a la vez comparten UN inicio de sesion.
+    let pending = this.logins.get(creds.email);
+    if (!pending) {
+      pending = this.login(creds).finally(() => this.logins.delete(creds.email));
+      this.logins.set(creds.email, pending);
+    }
+    const s = await pending;
     this.sessions.set(creds.email, s);
     return s;
   }

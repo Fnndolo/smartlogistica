@@ -4,8 +4,9 @@ import { z } from 'zod';
  * GUIAS DE ADDI (Addi Logistics, "LBA"). Los pedidos de VTEX vienen del
  * marketplace de Addi y es ADDI quien genera su guia de Coordinadora, siempre
  * con UN solo remitente. La plataforma:
- *   1. trae el numero de guia de cada pedido desde el portal de aliados de
- *      Addi (se cruza por el MKT), y
+ *   1. AL LLEGAR cada pedido de VTEX (ready-for-handling), antes de mostrarlo,
+ *      trae su numero de guia del portal de aliados de Addi (por el MKT). En
+ *      generales no pasa nada mas. Sin consultas periodicas.
  *   2. al pasar el pedido a una sede, edita la guia en la suite de
  *      Coordinadora (la cuenta de Addi) con el remitente de esa sede y deja el
  *      rotulo en la conversacion del pedido.
@@ -40,14 +41,15 @@ export const addiLbaConnectionSummarySchema = z.object({
   autoSender: z.boolean(),
   status: z.enum(['connected', 'error']),
   lastError: z.string().nullable(),
+  /** Ultima vez que alguien uso "Buscar guías faltantes" (manual). */
   lastSyncAt: z.string().datetime().nullable(),
-  /** Guias de Addi que cruzaron con pedidos en la ultima sincronizacion. */
+  /** Guias de Addi que cruzaron con pedidos en esa busqueda. */
   lastSyncCount: z.number().int().nullable(),
   updatedAt: z.string().datetime(),
 });
 export type AddiLbaConnectionSummary = z.infer<typeof addiLbaConnectionSummarySchema>;
 
-/** Resultado de "Sincronizar ahora". */
+/** Resultado de "Buscar guías faltantes". */
 export const addiLbaSyncResultSchema = z.object({
   shipments: z.number().int(),
   matched: z.number().int(),
@@ -82,10 +84,13 @@ export type AddiSenderState = z.infer<typeof addiSenderStateSchema>;
 export const addiGuideInfoSchema = z.object({
   /** Hay conexion configurada (si no, el panel invita a configurarla). */
   connected: z.boolean(),
+  /** El pedido es de Addi Logistics (transportadora "(LBA)" en VTEX). */
+  lba: z.boolean(),
   guide: z.string().nullable(),
   carrier: z.string().nullable(),
   packageStatus: z.string().nullable(),
   dispatchDeadline: z.string().datetime().nullable(),
+  /** Cuando se leyo de Addi el estado del paquete. */
   syncedAt: z.string().datetime().nullable(),
   sender: z.object({
     state: addiSenderStateSchema,

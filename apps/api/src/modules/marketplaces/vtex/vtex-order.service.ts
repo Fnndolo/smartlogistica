@@ -3,6 +3,7 @@ import type { PrismaClient as TenantPrismaClient } from '.prisma/tenant-client';
 
 import { applyRecentConfirmation } from '../../webhooks/confirmation-retro';
 import { WhatsappService } from '../../whatsapp/whatsapp.service';
+import { AddiLbaService, isLbaOrder, type AddiIngestGuide } from '../addi/addi-lba.service';
 import { mapVtexOrderItems, mapVtexOrderToUpsert } from './vtex-order.mapper';
 import type { VtexOrderDetail } from './vtex.types';
 
@@ -10,7 +11,10 @@ import type { VtexOrderDetail } from './vtex.types';
 export class VtexOrderService {
   private readonly logger = new Logger(VtexOrderService.name);
 
-  constructor(private readonly whatsapp: WhatsappService) {}
+  constructor(
+    private readonly whatsapp: WhatsappService,
+    private readonly addi: AddiLbaService,
+  ) {}
 
   async upsertFromDetail(
     prisma: TenantPrismaClient,
@@ -29,27 +33,38 @@ export class VtexOrderService {
         ? items.map((i) => i.name).sort((a, b) => a.localeCompare(b, 'es'))[0]
         : null;
 
+    const key = {
+      provider_accountName_externalId: {
+        provider: 'vtex',
+        accountName,
+        externalId: detail.orderId,
+      },
+    };
+
+    // GUIA DE ADDI, ANTES de guardar (y por tanto de mostrar) el pedido: cuando
+    // VTEX lo suelta en ready-for-handling (~30 min despues de creado), Addi ya
+    // genero la guia. Solo para pedidos que aun no la tienen; el pedido nunca
+    // espera mas de unos segundos ni falla por Addi.
+    const lba = isLbaOrder(detail);
+    let addi: AddiIngestGuide | null = null;
+    let missing = false;
+    if (tenantId && detail.status === 'ready-for-handling') {
+      const known = await prisma.order.findUnique({ where: key, select: { addiGuide: true } });
+      if (!known || (!known.addiGuide && lba)) {
+        const found = await this.addi.lookupAtIngest(tenantId, prisma, detail.orderId);
+        if (found && found !== 'off') addi = found;
+        // Solo un LBA "debe" tener guia: si no aparecio, se reintenta ese pedido.
+        else missing = found === null && lba;
+      }
+    }
+    const addiData = addi ? { addiGuide: addi.addiGuide, addiShipment: addi.addiShipment } : {};
+
     const { order, isNew } = await prisma.$transaction(async (tx) => {
-      const existed = await tx.order.findUnique({
-        where: {
-          provider_accountName_externalId: {
-            provider: 'vtex',
-            accountName,
-            externalId: detail.orderId,
-          },
-        },
-        select: { id: true },
-      });
+      const existed = await tx.order.findUnique({ where: key, select: { id: true } });
       const row = await tx.order.upsert({
-        where: {
-          provider_accountName_externalId: {
-            provider: 'vtex',
-            accountName,
-            externalId: detail.orderId,
-          },
-        },
-        create: { ...create, primaryProduct, items: { create: items } },
-        update: { ...update, primaryProduct },
+        where: key,
+        create: { ...create, primaryProduct, ...addiData, items: { create: items } },
+        update: { ...update, primaryProduct, ...addiData },
       });
 
       // Replace items on update so quantity/price stay current
@@ -61,6 +76,8 @@ export class VtexOrderService {
       }
       return { order: row, isNew: !existed };
     });
+
+    if (missing && tenantId) void this.addi.scheduleLookup(tenantId, order.id, 0);
 
     // CONFIRMACION por WhatsApp (reemplaza el "Confirmador de pedidos" de n8n):
     // solo pedidos NUEVOS; el service ademas exige ready-for-handling, telefono,
@@ -90,6 +107,8 @@ export class VtexOrderService {
       );
     }
 
-    this.logger.debug(`Order upserted ${detail.orderId} (${detail.status})`);
+    this.logger.debug(
+      `Order upserted ${detail.orderId} (${detail.status})${addi ? ` guia Addi ${addi.addiGuide}` : ''}`,
+    );
   }
 }

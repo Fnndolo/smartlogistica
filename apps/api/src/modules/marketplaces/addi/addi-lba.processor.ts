@@ -2,73 +2,60 @@ import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import type { Job } from 'bullmq';
 
-import { ControlPlaneService } from '../../../infrastructure/prisma/control-plane.service';
 import { TenantConnectionService } from '../../../infrastructure/prisma/tenant-connection.service';
 import { QUEUE_ADDI_LBA } from '../../../infrastructure/queue/queue.module';
 import { tenantContext } from '../../../infrastructure/tenant-context';
 import { AddiLbaService } from './addi-lba.service';
 
+interface AddiJob {
+  tenantId?: string;
+  orderIds?: string[];
+  orderId?: string;
+  attempt?: number;
+}
+
 /**
- * Trabajos de GUIAS DE ADDI:
- *  - 'apply' {tenantId, orderIds}: recien asignados/transferidos -> cambiar
- *    remitente ya (lo encola OrdersService.assign via AddiLbaService).
- *  - 'tick' (periodico): por cada tenant con conexion, sincroniza guias desde
- *    el portal de Addi y aplica los cambios de remitente pendientes.
- * El worker procesa de a uno: un tick y un 'apply' nunca se pisan.
+ * Trabajos de GUIAS DE ADDI. Todos son de UN pedido (o un lote recien
+ * transferido); NO hay ciclo periodico:
+ *  - 'apply'  {tenantId, orderIds, attempt}: cambiar el remitente al de la
+ *    sede (al transferir, o reintento ante un fallo pasajero).
+ *  - 'lookup' {tenantId, orderId, attempt}: la guia no estaba al llegar el
+ *    pedido (Addi caido/lento): se busca de nuevo solo esa.
+ * El worker procesa de a uno: dos trabajos nunca se pisan.
  */
 @Processor(QUEUE_ADDI_LBA)
 export class AddiLbaProcessor extends WorkerHost {
   private readonly logger = new Logger(AddiLbaProcessor.name);
 
   constructor(
-    private readonly control: ControlPlaneService,
     private readonly tenants: TenantConnectionService,
     private readonly addi: AddiLbaService,
   ) {
     super();
   }
 
-  async process(job: Job<{ tenantId?: string; orderIds?: string[] }>): Promise<unknown> {
-    if (job.name === 'apply') {
-      const { tenantId, orderIds } = job.data;
-      if (!tenantId || !orderIds?.length) return { applied: 0 };
-      const { client: prisma, slug } = await this.tenants.getForTenant(tenantId);
-      let applied = 0;
-      await tenantContext.run({ tenantId, tenantSlug: slug, prisma }, async () => {
-        for (const id of orderIds) {
-          if (await this.addi.applySender(id).catch(() => false)) applied++;
+  async process(job: Job<AddiJob>): Promise<unknown> {
+    const { tenantId } = job.data;
+    // 'tick' era el ciclo de 5 min de la primera version: si quedo alguno en
+    // cola, se descarta.
+    if (!tenantId || (job.name !== 'apply' && job.name !== 'lookup')) return { ignored: true };
+    const { client: prisma, slug } = await this.tenants.getForTenant(tenantId);
+    return tenantContext.run({ tenantId, tenantSlug: slug, prisma }, async () => {
+      if (job.name === 'lookup') {
+        if (job.data.orderId) {
+          await this.addi
+            .retryLookup(job.data.orderId, job.data.attempt ?? 0)
+            .catch((err) => this.logger.warn(`Busqueda de guia de Addi fallo: ${err.message}`));
         }
-      });
-      return { applied };
-    }
-
-    const active = await this.control.tenant.findMany({
-      where: { status: 'ACTIVE' },
-      select: { id: true, slug: true },
-    });
-    let synced = 0;
-    let applied = 0;
-    for (const t of active) {
-      try {
-        const { client: prisma, slug } = await this.tenants.getForTenant(t.id);
-        const has = await prisma.addiLbaConnection.count();
-        if (!has) continue;
-        await tenantContext.run({ tenantId: t.id, tenantSlug: slug, prisma }, async () => {
-          try {
-            const r = await this.addi.syncTenant();
-            synced += r.updated;
-          } catch (err) {
-            this.logger.warn(
-              `Guias de Addi: sincronizacion fallida (${t.slug}): ${(err as Error).message}`,
-            );
-          }
-          const p = await this.addi.processPending();
-          applied += p.applied;
-        });
-      } catch (err) {
-        this.logger.warn(`Guias de Addi: tenant ${t.slug} omitido: ${(err as Error).message}`);
+        return { done: true };
       }
-    }
-    return { synced, applied };
+      let applied = 0;
+      for (const id of job.data.orderIds ?? []) {
+        if (await this.addi.applySender(id, undefined, job.data.attempt ?? 0).catch(() => false)) {
+          applied++;
+        }
+      }
+      return { applied };
+    });
   }
 }

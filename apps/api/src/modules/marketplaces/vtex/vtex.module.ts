@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { WhatsappModule } from '../../whatsapp/whatsapp.module';
+import { AddiLbaModule } from '../addi/addi-lba.module';
 import { MktDocumentService } from './mkt-document.service';
 import { VtexBackfillProcessor } from './processors/vtex-backfill.processor';
 import { VtexReconcileProcessor } from './processors/vtex-reconcile.processor';
@@ -11,7 +12,7 @@ import { VtexReconcileScheduler } from './vtex-reconcile.scheduler';
 import { VtexWebhookRegistrar } from './vtex-webhook-registrar.service';
 
 @Module({
-  imports: [WhatsappModule],
+  imports: [WhatsappModule, AddiLbaModule],
   providers: [
     VtexClient,
     VtexOrderService,
