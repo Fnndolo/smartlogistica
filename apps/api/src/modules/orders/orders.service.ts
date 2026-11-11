@@ -53,7 +53,13 @@ import type {
   MentionItem,
   OrderSearchResult,
 } from '@smartlogistica/shared';
-import { DELIVERY_COURIER, DELIVERY_SUPPORT_PREFIX } from '@smartlogistica/shared';
+import {
+  DELIVERY_COURIER,
+  DELIVERY_SUPPORT_PREFIX,
+  GUIDE_CHANNEL_LABEL,
+  guidesEnabledFor,
+  type MarketplaceProvider,
+} from '@smartlogistica/shared';
 import { PDFDocument } from 'pdf-lib';
 
 import { Prisma } from '.prisma/tenant-client';
@@ -275,20 +281,28 @@ export class OrdersService implements OnModuleInit {
     this.opLocks.add(key);
   }
 
-  /** ¿Esta encendido el modulo de guias? (Ajustes › Envios; por defecto si.) */
-  private async guidesEnabled(): Promise<boolean> {
-    return (await loadGuideModule()).enabled;
+  /**
+   * ¿Se generan guias para los pedidos de este canal (vtex, manual...)? Se
+   * apaga POR CANAL en Ajustes › Envios; por defecto, si.
+   */
+  private async guidesEnabled(provider: string): Promise<boolean> {
+    return guidesEnabledFor(await loadGuideModule(), provider);
   }
 
   /**
-   * Con el modulo APAGADO no se emite ningun envio: ni Coordinadora, ni
-   * Skydropx, ni soporte de domicilio, ni "Hacer todo". El front ya no los
-   * ofrece; esto ataja una pestaña que quedo abierta de antes.
+   * Con las guias APAGADAS para el canal del pedido no se emite ningun envio:
+   * ni Coordinadora, ni Skydropx, ni soporte de domicilio, ni "Hacer todo". El
+   * front ya no los ofrece; esto ataja una pestaña que quedo abierta de antes.
+   * Si el pedido no existe, no decide aqui: lo rechaza la carga de siempre.
    */
-  private async assertGuidesEnabled(): Promise<void> {
-    if (!(await this.guidesEnabled())) {
+  private async assertGuidesEnabled(orderId: string): Promise<void> {
+    const row = await getTenantContext().prisma.order.findUnique({
+      where: { id: orderId },
+      select: { provider: true },
+    });
+    if (row && !(await this.guidesEnabled(row.provider))) {
       throw new BadRequestException(
-        'El módulo de guías está apagado: al facturar, el pedido se cierra directo en VTEX. Para generar guías, enciéndelo en Ajustes › Envíos.',
+        `Las guías están apagadas para los pedidos de ${GUIDE_CHANNEL_LABEL[row.provider as MarketplaceProvider] ?? row.provider}: al facturar, el pedido se cierra solo. Para generar guías, enciéndelas en Ajustes › Envíos.`,
       );
     }
   }
@@ -2917,11 +2931,14 @@ export class OrdersService implements OnModuleInit {
     // Pedido montado a mano: si la guia ya existia, con la factura queda COMPLETO
     // (pasa a Facturados). Best-effort: la factura ya quedo emitida igual.
     if (manual) await this.finalizeManual(order, auth).catch(() => null);
-    // MODULO DE GUIAS APAGADO: no habra guia que cierre el pedido, asi que el
+    // GUIAS APAGADAS PARA VTEX: no habra guia que cierre el pedido, asi que el
     // cierre en VTEX (factura de salida sin tracking + MKT al chat) sale YA.
+    // Solo VTEX, explicito: otro marketplace que llegue tendra su propio cierre.
     // Best-effort como siempre: si VTEX falla, la factura de Alegra queda y el
     // panel ofrece "Cerrar en VTEX" (retryFinalize).
-    else if (!(await this.guidesEnabled())) await this.closeInVtexAtInvoice(order, auth);
+    else if (order.provider === 'vtex' && !(await this.guidesEnabled('vtex'))) {
+      await this.closeInVtexAtInvoice(order, auth);
+    }
     await this.dropFeedsForOrder(orderId);
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
     return result;
@@ -3436,7 +3453,7 @@ export class OrdersService implements OnModuleInit {
     if (!canManageOrders(auth)) {
       throw new ForbiddenException('No tienes permiso para generar guías.');
     }
-    await this.assertGuidesEnabled();
+    await this.assertGuidesEnabled(orderId);
     this.acquireLock(`${orderId}:guide`, 'Ya hay una guía en curso para este pedido.');
     try {
       return await this.generateGuideSkydropxLocked(orderId, input, auth);
@@ -3664,7 +3681,7 @@ export class OrdersService implements OnModuleInit {
     if (!canManageOrders(auth)) {
       throw new ForbiddenException('No tienes permiso para emitir soportes de entrega.');
     }
-    await this.assertGuidesEnabled();
+    await this.assertGuidesEnabled(orderId);
     // MISMA clave que Coordinadora y Skydropx: un pedido tiene un solo envio en
     // vuelo, salga como salga.
     this.acquireLock(`${orderId}:guide`, 'Ya hay un envío en curso para este pedido.');
@@ -3908,7 +3925,7 @@ export class OrdersService implements OnModuleInit {
   ): Promise<ProcessAllResult> {
     // ANTES de facturar: si se revisara en la guia, la factura ya habria
     // salido y "Hacer todo" quedaria a medias.
-    await this.assertGuidesEnabled();
+    await this.assertGuidesEnabled(orderId);
     const invoice = await this.createInvoice(orderId, input.invoice, auth);
     const guide = await this.generateGuide(orderId, input.guide, auth);
     return { invoice, guide };
@@ -3916,7 +3933,7 @@ export class OrdersService implements OnModuleInit {
 
   /** Genera la guia en Coordinadora, adjunta el rotulo al chat y registra el evento. */
   async generateGuide(orderId: string, input: CreateGuideInput, auth: AuthContext): Promise<Guide> {
-    await this.assertGuidesEnabled();
+    await this.assertGuidesEnabled(orderId);
     this.acquireLock(`${orderId}:guide`, 'Ya hay una guía en curso para este pedido.');
     try {
       return await this.generateGuideLocked(orderId, input, auth);
@@ -4323,7 +4340,7 @@ export class OrdersService implements OnModuleInit {
     const guide = await this.existingGuide(order.id);
     // Sin guia solo se cierra con el modulo APAGADO (si esta encendido, la guia
     // es la que cierra y aun no se ha generado).
-    const withoutGuide = !guide && !(await this.guidesEnabled());
+    const withoutGuide = !guide && !(await this.guidesEnabled(order.provider));
     if (!invoice || (!guide && !withoutGuide)) {
       await this.systemMessage(
         order.id,
@@ -4462,7 +4479,7 @@ export class OrdersService implements OnModuleInit {
     ]);
     // Aun falta una de las dos patas: se completara en el otro paso. Con el
     // modulo de guias APAGADO no habra guia: la factura sola lo completa.
-    if (!invoice || (!guide && (await this.guidesEnabled()))) return;
+    if (!invoice || (!guide && (await this.guidesEnabled(order.provider)))) return;
 
     await prisma.order.update({ where: { id: order.id }, data: { status: 'invoiced' } });
     await prisma.orderEvent.create({

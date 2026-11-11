@@ -78,7 +78,16 @@ const PAYMENT_METHODS: { value: InvoicePaymentMethod; label: string }[] = [
   { value: 'credit-card', label: 'Tarjeta crédito' },
 ];
 
-export function InvoicePanel({ orderId, manual = false }: { orderId: string; manual?: boolean }) {
+export function InvoicePanel({
+  orderId,
+  manual = false,
+  provider,
+}: {
+  orderId: string;
+  manual?: boolean;
+  /** Canal del pedido (vtex, manual...): las guias se apagan por canal. */
+  provider: string;
+}) {
   const qc = useQueryClient();
   // Items editados: arrancan del borrador si el usuario ya habia trabajado aqui
   // (cerro el drawer o navego y volvio); si no, se llenan desde el preview.
@@ -90,8 +99,8 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
     () => getDraft<Payment[]>(`invoice-pay:${orderId}`) ?? [emptyPayment()],
   );
   const [result, setResult] = useState<InvoiceResult | null>(null);
-  // MODULO DE GUIAS apagado: sin "Hacer todo", y facturar cierra en VTEX.
-  const { enabled: guidesOn, ready: guidesReady } = useGuideModule();
+  // Guias apagadas PARA ESTE CANAL: sin "Hacer todo", y facturar cierra el pedido.
+  const { enabled: guidesOn, ready: guidesReady } = useGuideModule(provider);
 
   const {
     data: preview,

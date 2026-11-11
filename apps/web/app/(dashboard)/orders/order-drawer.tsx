@@ -385,10 +385,10 @@ function DrawerContent({
   // solo trazabilidad — sin Facturar ni Guia.
   const external = !order.warehouseId && order.status !== 'ready-for-handling';
 
-  // MODULO DE GUIAS (Ajustes › Envios). Apagado solo deja de CREAR guias: el
-  // pedido que ya tiene envio conserva su pestaña (rotulo, rastreo, entrega a
-  // domicilio). Los demas se cierran en VTEX al facturar.
-  const { enabled: guidesOn } = useGuideModule();
+  // MODULO DE GUIAS (Ajustes › Envios), POR CANAL. Apagado solo deja de CREAR
+  // guias: el pedido que ya tiene envio conserva su pestaña (rotulo, rastreo,
+  // entrega a domicilio). Los demas se cierran al facturar.
+  const { enabled: guidesOn } = useGuideModule(order.provider);
   // Estos campos solo existen cuando ya se emitio un envio (el domicilio no
   // tiene guideNumber, pero si proveedor y estado).
   const hasShipment = Boolean(order.guideNumber || order.shippingProvider || order.shippingState);
@@ -648,7 +648,11 @@ function DrawerContent({
         </TabPane>
         {canManage && !external ? (
           <TabPane tab="facturar" active={tab === 'facturar'} scroll>
-            <InvoicePanel orderId={order.id} manual={order.provider === 'manual'} />
+            <InvoicePanel
+              orderId={order.id}
+              manual={order.provider === 'manual'}
+              provider={order.provider}
+            />
           </TabPane>
         ) : null}
         {showGuide ? (

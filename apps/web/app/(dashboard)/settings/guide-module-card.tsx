@@ -1,15 +1,21 @@
 'use client';
 
 import { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Truck } from 'lucide-react';
 import { toast } from 'sonner';
-import type { GuideModule } from '@smartlogistica/shared';
+import {
+  GUIDE_CHANNEL_LABEL,
+  guidesEnabledFor,
+  type GuideModule,
+  type MarketplaceProvider,
+} from '@smartlogistica/shared';
 
 import { Button } from '@/components/ui/button';
 import { ApiError, api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 
+import { useGuideModuleSetting } from '../orders/use-guide-module';
 import {
   BTN_GHOST_CLS,
   BTN_PRIMARY_CLS,
@@ -21,38 +27,53 @@ import {
   Pill,
 } from './settings-ui';
 
+/** Que pasa en cada canal con las guias APAGADAS (la confirmacion lo repite). */
+const OFF_EFFECT: Record<MarketplaceProvider, string> = {
+  vtex: 'al facturar en Alegra, el pedido queda facturado también en VTEX, sin guía, y el MKT llega a la conversación.',
+  manual: 'con la factura el pedido queda completo, sin guía (y sin recaudo contraentrega).',
+};
+
+const CHANNELS = Object.keys(GUIDE_CHANNEL_LABEL) as MarketplaceProvider[];
+
 /**
- * Encender/apagar el MODULO DE GUIAS (global). Apagarlo pide confirmacion:
- * desde ese momento facturar tambien factura en VTEX, que es irreversible.
- * Encenderlo no la pide (vuelve todo a como era).
+ * Guias POR CANAL. Apagar un canal pide confirmacion: en VTEX, desde ese
+ * momento facturar tambien factura alla, que es irreversible. Encender no la
+ * pide (vuelve todo a como era). Un pedido que ya tiene envio conserva su
+ * pestaña y su rastreo en cualquier caso.
  */
 export function GuideModuleCard() {
   const qc = useQueryClient();
-  const [confirmOff, setConfirmOff] = useState(false);
+  const [confirmOff, setConfirmOff] = useState<MarketplaceProvider | null>(null);
 
   // Misma clave que el drawer: al guardar, la pestaña Guia de esta pestaña del
   // navegador cambia sin esperar el evento.
-  const { data, isError, refetch } = useQuery({
-    queryKey: ['guide-module'],
-    queryFn: () => api.get<GuideModule>('/v1/guide-module'),
-    staleTime: 5 * 60_000,
-  });
-  const enabled = data?.enabled;
+  const { data, isError, refetch } = useGuideModuleSetting();
 
   const save = useMutation({
-    mutationFn: (next: boolean) => api.put<GuideModule>('/v1/guide-module', { enabled: next }),
-    onSuccess: (saved) => {
+    mutationFn: (next: GuideModule) => api.put<GuideModule>('/v1/guide-module', next),
+    onSuccess: (saved, next) => {
       qc.setQueryData(['guide-module'], saved);
-      setConfirmOff(false);
-      toast.success(
-        saved.enabled
-          ? 'Guías encendidas: la pestaña Guía vuelve a los pedidos'
-          : 'Guías apagadas: al facturar, el pedido se cierra en VTEX',
+      setConfirmOff(null);
+      const changed = CHANNELS.find(
+        (c) => guidesEnabledFor(saved, c) !== (data ? guidesEnabledFor(data, c) : true),
       );
+      if (changed) {
+        toast.success(
+          `${GUIDE_CHANNEL_LABEL[changed]}: guías ${guidesEnabledFor(next, changed) ? 'encendidas' : 'apagadas'}`,
+        );
+      }
     },
     onError: (err) =>
       toast.error(err instanceof ApiError ? err.message : 'No se pudo cambiar el módulo de guías'),
   });
+
+  const setChannel = (channel: MarketplaceProvider, on: boolean) => {
+    if (!data) return;
+    const disabled = new Set(data.disabledFor);
+    if (on) disabled.delete(channel);
+    else disabled.add(channel);
+    save.mutate({ disabledFor: [...disabled] });
+  };
 
   return (
     <div className={CARD_CLS}>
@@ -60,51 +81,7 @@ export function GuideModuleCard() {
         icon={<Truck />}
         tone="cobalt"
         title="Módulo de guías"
-        badge={
-          enabled === undefined ? null : enabled ? (
-            <Pill tone="ok" dot>
-              Encendido
-            </Pill>
-          ) : (
-            <Pill tone="warn" dot>
-              Apagado
-            </Pill>
-          )
-        }
-        description={
-          <>
-            <b className="text-foreground">Encendido:</b> la pestaña Guía genera el envío
-            (Coordinadora, Skydropx o domicilio) y con él el pedido se factura en VTEX.{' '}
-            <b className="text-foreground">Apagado:</b> no hay pestaña Guía ni «Hacer todo»; al
-            facturar en Alegra el pedido queda facturado también en VTEX, sin guía, y el MKT llega a
-            la conversación.
-          </>
-        }
-        action={
-          enabled === undefined ? null : (
-            <button
-              type="button"
-              role="switch"
-              aria-checked={enabled}
-              aria-label="Módulo de guías"
-              disabled={save.isPending}
-              onClick={() => (enabled ? setConfirmOff(true) : save.mutate(true))}
-              className={cn(
-                'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors motion-reduce:transition-none disabled:opacity-60',
-                enabled ? 'border-transparent bg-accent' : 'border-border bg-muted',
-                FOCUS_RING,
-              )}
-            >
-              <span
-                aria-hidden
-                className={cn(
-                  'inline-block h-[18px] w-[18px] rounded-full bg-white shadow-sm transition-transform motion-reduce:transition-none',
-                  enabled ? 'translate-x-[22px]' : 'translate-x-[2px]',
-                )}
-              />
-            </button>
-          )
-        }
+        description="Elige en qué pedidos se generan guías. Donde lo apagues, desaparecen la pestaña Guía y «Hacer todo», y el pedido se cierra al facturar. Los pedidos que ya tienen guía conservan su pestaña y su rastreo."
       />
 
       {data === undefined ? (
@@ -127,35 +104,88 @@ export function GuideModuleCard() {
             'Cargando...'
           )}
         </div>
-      ) : null}
+      ) : (
+        <ul className="mt-4 divide-y divide-border rounded-[12px] border border-border">
+          {CHANNELS.map((channel) => {
+            const on = guidesEnabledFor(data, channel);
+            const label = GUIDE_CHANNEL_LABEL[channel];
+            return (
+              <li key={channel} className="px-3.5 py-3">
+                <div className="flex items-center gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[13px] font-bold">{label}</span>
+                      {on ? (
+                        <Pill tone="ok" dot>
+                          Con guías
+                        </Pill>
+                      ) : (
+                        <Pill tone="warn" dot>
+                          Sin guías
+                        </Pill>
+                      )}
+                    </div>
+                    {!on ? (
+                      <p className="mt-0.5 text-[12px] text-muted-foreground">
+                        Apagado: {OFF_EFFECT[channel]}
+                      </p>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={on}
+                    aria-label={`Guías para ${label}`}
+                    disabled={save.isPending}
+                    onClick={() => (on ? setConfirmOff(channel) : setChannel(channel, true))}
+                    className={cn(
+                      'relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors motion-reduce:transition-none disabled:opacity-60',
+                      on ? 'border-transparent bg-accent' : 'border-border bg-muted',
+                      FOCUS_RING,
+                    )}
+                  >
+                    <span
+                      aria-hidden
+                      className={cn(
+                        'inline-block h-[18px] w-[18px] rounded-full bg-white shadow-sm transition-transform motion-reduce:transition-none',
+                        on ? 'translate-x-[22px]' : 'translate-x-[2px]',
+                      )}
+                    />
+                  </button>
+                </div>
 
-      {confirmOff ? (
-        <div className="mt-4 rounded-[12px] border border-amber-500/30 bg-amber-500/10 px-3.5 py-3">
-          <p className="text-[12.5px] leading-[1.45] text-amber-700 dark:text-amber-400">
-            <b>¿Apagar las guías?</b> Desde ya, cada pedido que se facture en Alegra se factura
-            también en VTEX sin número de guía. Eso no se puede deshacer en VTEX.
-          </p>
-          <div className="mt-2.5 flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              onClick={() => save.mutate(false)}
-              loading={save.isPending}
-              className={cn(BTN_PRIMARY_CLS, BTN_SM_CLS)}
-            >
-              Sí, apagar
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setConfirmOff(false)}
-              disabled={save.isPending}
-              className={cn(BTN_GHOST_CLS, BTN_SM_CLS)}
-            >
-              Cancelar
-            </Button>
-          </div>
-        </div>
-      ) : null}
+                {confirmOff === channel ? (
+                  <div className="mt-3 rounded-[12px] border border-amber-500/30 bg-amber-500/10 px-3.5 py-3">
+                    <p className="text-[12.5px] leading-[1.45] text-amber-700 dark:text-amber-400">
+                      <b>¿Apagar las guías para {label}?</b> Desde ya, {OFF_EFFECT[channel]}
+                      {channel === 'vtex' ? ' Eso no se puede deshacer en VTEX.' : ''}
+                    </p>
+                    <div className="mt-2.5 flex flex-wrap gap-2">
+                      <Button
+                        size="sm"
+                        onClick={() => setChannel(channel, false)}
+                        loading={save.isPending}
+                        className={cn(BTN_PRIMARY_CLS, BTN_SM_CLS)}
+                      >
+                        Sí, apagar
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setConfirmOff(null)}
+                        disabled={save.isPending}
+                        className={cn(BTN_GHOST_CLS, BTN_SM_CLS)}
+                      >
+                        Cancelar
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
