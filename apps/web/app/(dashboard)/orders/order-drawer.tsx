@@ -385,15 +385,19 @@ function DrawerContent({
   // solo trazabilidad — sin Facturar ni Guia.
   const external = !order.warehouseId && order.status !== 'ready-for-handling';
 
-  // MODULO DE GUIAS (Ajustes › Envios). Apagado: sin pestaña Guia — el pedido
-  // se cierra en VTEX al facturar.
+  // MODULO DE GUIAS (Ajustes › Envios). Apagado solo deja de CREAR guias: el
+  // pedido que ya tiene envio conserva su pestaña (rotulo, rastreo, entrega a
+  // domicilio). Los demas se cierran en VTEX al facturar.
   const { enabled: guidesOn } = useGuideModule();
-  const showGuide = canManage && !external && guidesOn;
-  // Si lo apagan con la pestaña Guia abierta, se vuelve a la conversacion en
-  // vez de quedar mirando un panel que ya no existe.
+  // Estos campos solo existen cuando ya se emitio un envio (el domicilio no
+  // tiene guideNumber, pero si proveedor y estado).
+  const hasShipment = Boolean(order.guideNumber || order.shippingProvider || order.shippingState);
+  const showGuide = canManage && !external && (guidesOn || hasShipment);
+  // Si lo apagan con la pestaña Guia abierta (y el pedido no tiene envio), se
+  // vuelve a la conversacion en vez de quedar mirando un panel que ya no existe.
   useEffect(() => {
-    if (!guidesOn && tab === 'guia') setTab('conversacion');
-  }, [guidesOn, tab]);
+    if (!showGuide && tab === 'guia') setTab('conversacion');
+  }, [showGuide, tab]);
 
   // PRECARGAR Facturar y Guia apenas se abre el pedido: cuando el usuario
   // entra a esas pestañas, el contenido ya esta en cache (antes esperaba
@@ -405,13 +409,13 @@ function DrawerContent({
       queryFn: () => api.get(`/v1/orders/${order.id}/invoice-preview`),
       staleTime: 20_000,
     });
-    if (!guidesOn) return;
+    if (!showGuide) return;
     void qc.prefetchQuery({
       queryKey: ['guide-preview', order.id],
       queryFn: () => api.get(`/v1/orders/${order.id}/guide-preview`),
       staleTime: 20_000,
     });
-  }, [order.id, canManage, external, guidesOn, qc]);
+  }, [order.id, canManage, external, showGuide, qc]);
 
   const tabs: { id: Tab; label: string; icon: typeof Info }[] = [
     { id: 'conversacion', label: 'Conversación', icon: MessageSquare },
