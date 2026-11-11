@@ -264,7 +264,9 @@ export class AddiLbaService implements OnModuleInit {
   private async credsOrNull(): Promise<Creds | null> {
     const { tenantId, prisma } = getTenantContext();
     const hit = this.credsCache.get(tenantId);
-    if (hit && Date.now() - hit.at < 60_000) return hit.value;
+    // 10 min: descifrar cuesta dos consultas al control plane y las
+    // credenciales casi nunca cambian (connect/disconnect limpian esta cache).
+    if (hit && Date.now() - hit.at < 10 * 60_000) return hit.value;
     const c = await prisma.addiLbaConnection.findFirst({ orderBy: { createdAt: 'desc' } });
     let value: Creds | null = null;
     if (c) {
@@ -527,14 +529,20 @@ export class AddiLbaService implements OnModuleInit {
         .filter((o) => o.addiGuide || isLbaOrder(o.rawPayload))
         .map((o) => o.id);
       if (ids.length === 0) return;
+      // La sesion de la suite se abre YA (en paralelo con lo que sigue).
+      this.suite.warm(creds.suite);
       await prisma.order.updateMany({
         where: { id: { in: ids } },
         data: { addiSenderPendingAt: new Date(), addiSenderError: null },
       });
-      await this.queue.add(
-        'apply',
-        { tenantId, orderIds: ids, attempt: 0 },
-        { delay: 1_500, attempts: 1, removeOnComplete: true, removeOnFail: true },
+      // UN trabajo por pedido y sin espera: un lote de traslados se procesa
+      // en paralelo (el worker toma varios a la vez), no en fila.
+      await this.queue.addBulk(
+        ids.map((id) => ({
+          name: 'apply',
+          data: { tenantId, orderIds: [id], attempt: 0 },
+          opts: { attempts: 1, removeOnComplete: true, removeOnFail: true },
+        })),
       );
     } catch (err) {
       this.logger.warn(
@@ -603,18 +611,25 @@ export class AddiLbaService implements OnModuleInit {
         throw new PermanentFailure('Solo los pedidos de VTEX traen guía de Addi.');
       if (!order.warehouseId) throw new PermanentFailure('El pedido no está en una sede.');
       const mkt = order.externalId.replace(/^MKT-/, '');
+      // La sesion de la suite se abre YA, en paralelo con lo de abajo.
+      this.suite.warm(creds.suite);
 
-      // 1. La guia y su estado ACTUAL en Addi.
-      const ship = await this.findShipment(creds, mkt, LOOKUP_PAGES);
-      const guide = ship?.trackingNumber ?? order.addiGuide;
-      if (ship?.trackingNumber) {
-        await prisma.order.update({
-          where: { id: orderId },
-          data: {
-            addiGuide: ship.trackingNumber,
-            addiShipment: snapshot(ship) as unknown as Prisma.InputJsonValue,
-          },
-        });
+      // 1. La guia: la que se guardo al llegar el pedido. Solo si no esta se
+      //    pregunta a Addi (si ya la recogieron lo dice la suite, abajo).
+      let guide = order.addiGuide;
+      let ship: AddiShipment | null = null;
+      if (!guide) {
+        ship = await this.findShipment(creds, mkt, LOOKUP_PAGES);
+        guide = ship?.trackingNumber ?? null;
+        if (ship?.trackingNumber) {
+          await prisma.order.update({
+            where: { id: orderId },
+            data: {
+              addiGuide: ship.trackingNumber,
+              addiShipment: snapshot(ship) as unknown as Prisma.InputJsonValue,
+            },
+          });
+        }
       }
       if (!guide) {
         // Aun sin guia: queda pendiente y se busca de nuevo solo para este pedido.
@@ -657,10 +672,14 @@ export class AddiLbaService implements OnModuleInit {
         );
       }
 
-      // 3. La guia en la suite: que exista, que no este anulada ni recogida y
-      //    que SEA de este pedido (esa cuenta ve las guias de todos los
-      //    comercios de Addi).
-      const row = await this.suite.findGuide(creds.suite, guide);
+      // 3. La guia en la suite (estado + datos, EN PARALELO): que exista, que
+      //    no este anulada ni recogida y que SEA de este pedido (esa cuenta ve
+      //    las guias de todos los comercios de Addi).
+      const [row, current, actor] = await Promise.all([
+        this.suite.findGuide(creds.suite, guide),
+        this.suite.getGuide(creds.suite, guide),
+        this.suite.actor(creds.suite),
+      ]);
       if (!row)
         throw new PermanentFailure(
           `La guía ${guide} no aparece en la suite de Coordinadora de Addi.`,
@@ -673,15 +692,13 @@ export class AddiLbaService implements OnModuleInit {
           `La guía ${guide} ya está «${row.estadoTracking}» en Coordinadora: no se le cambia el remitente.`,
         );
       }
-      const current = await this.suite.getGuide(creds.suite, guide);
       if ((current.referenciaGuia ?? '').trim() !== mkt) {
         throw new PermanentFailure(
           `La guía ${guide} no corresponde a este pedido (su referencia es ${current.referenciaGuia ?? 'vacía'}). No se tocó.`,
         );
       }
 
-      // 4. Editar y comprobar.
-      const actor = await this.suite.actor(creds.suite);
+      // 4. Editar. Luego comprobar y bajar el rotulo A LA VEZ.
       const payload = buildSenderUpdate(
         current,
         {
@@ -694,7 +711,16 @@ export class AddiLbaService implements OnModuleInit {
         actor,
       );
       await this.suite.updateGuide(creds.suite, payload);
-      const after = await this.suite.getGuide(creds.suite, guide);
+      const [after, label] = await Promise.all([
+        this.suite.getGuide(creds.suite, guide),
+        this.suite.printLabel(creds.suite, guide, conn.rotuloId || 55).then(
+          (pdf) => ({ pdf: pdf as Buffer | null, error: null as string | null }),
+          (err: unknown) => ({
+            pdf: null as Buffer | null,
+            error: err instanceof Error ? err.message : 'error desconocido',
+          }),
+        ),
+      ]);
       // Definitivo a proposito: reintentar seria volver a escribir sobre la
       // guia sin saber por que no tomo el cambio.
       if (after.ciudadRemitente !== conn.senderCityCode) {
@@ -702,17 +728,10 @@ export class AddiLbaService implements OnModuleInit {
           `La suite de Coordinadora aceptó el cambio, pero la guía ${guide} sigue con otro remitente. Revísala en la suite.`,
         );
       }
+      const { pdf, error: labelError } = label;
 
-      // 5. Rotulo (si falla, el remitente YA quedo cambiado: se avisa aparte).
-      let pdf: Buffer | null = null;
-      let labelError: string | null = null;
-      try {
-        pdf = await this.suite.printLabel(creds.suite, guide, conn.rotuloId || 55);
-      } catch (err) {
-        labelError = err instanceof Error ? err.message : 'error desconocido';
-      }
-
-      // 6. Estado. Si lo movieron OTRA vez mientras tanto, sigue pendiente.
+      // 5. ¿Lo movieron OTRA vez mientras se editaba? Entonces este rotulo ya
+      //    es de una sede vieja: no se publica y se aplica de nuevo con la nueva.
       const fresh = await prisma.order.findUnique({
         where: { id: orderId },
         select: { addiSenderPendingAt: true, warehouseId: true },
@@ -722,52 +741,56 @@ export class AddiLbaService implements OnModuleInit {
         (fresh?.addiSenderPendingAt != null &&
           order.addiSenderPendingAt != null &&
           fresh.addiSenderPendingAt.getTime() !== order.addiSenderPendingAt.getTime());
-      await prisma.order.update({
-        where: { id: orderId },
-        data: {
-          addiSenderWarehouseId: order.warehouseId,
-          addiSenderAt: new Date(),
-          addiSenderError: labelError
-            ? `Remitente cambiado, pero el rótulo no salió: ${labelError}`.slice(0, 500)
-            : null,
-          ...(movedAgain ? {} : { addiSenderPendingAt: null }),
-        },
-      });
-      // Lo movieron otra vez mientras se editaba: el traslado nuevo choco con
-      // este candado, asi que se vuelve a aplicar ya con la sede nueva.
+
+      // 6. Primero el chat (es lo que espera el equipo), despues el registro.
+      const city = (conn.senderCityName ?? '').split(/[(—]/)[0].trim();
+      if (!movedAgain) {
+        await this.postToChat(
+          order,
+          labelError
+            ? `Guía de Addi ${guide}: remitente cambiado a ${conn.senderName}${city ? ` (${city})` : ''}, pero el rótulo no se pudo descargar. Imprímelo desde la suite de Coordinadora.`
+            : `Guía de Addi ${guide}: remitente cambiado a ${conn.senderName}${city ? ` (${city})` : ''}. Rótulo actualizado:`,
+          pdf,
+        );
+      }
+      await Promise.all([
+        prisma.order.update({
+          where: { id: orderId },
+          data: {
+            addiSenderWarehouseId: order.warehouseId,
+            addiSenderAt: new Date(),
+            addiSenderError: labelError
+              ? `Remitente cambiado, pero el rótulo no salió: ${labelError}`.slice(0, 500)
+              : null,
+            ...(movedAgain ? {} : { addiSenderPendingAt: null }),
+          },
+        }),
+        prisma.orderEvent.create({
+          data: {
+            orderId,
+            type: 'addi_sender_updated',
+            actorId: manual?.userId ?? null,
+            actorName: manual ? manual.name?.trim() || manual.email : BOT.name,
+            data: {
+              guide,
+              warehouseId: order.warehouseId,
+              warehouseName: sedeName,
+              senderName: conn.senderName,
+              cityCode: conn.senderCityCode,
+            } as Prisma.InputJsonValue,
+          },
+        }),
+      ]);
       if (movedAgain && fresh?.warehouseId) {
         await this.queue
           .add(
             'apply',
             { tenantId, orderIds: [orderId], attempt: 0 },
-            { delay: 1_500, attempts: 1, removeOnComplete: true, removeOnFail: true },
+            { attempts: 1, removeOnComplete: true, removeOnFail: true },
           )
           .catch(() => null);
       }
-      await prisma.orderEvent.create({
-        data: {
-          orderId,
-          type: 'addi_sender_updated',
-          actorId: manual?.userId ?? null,
-          actorName: manual ? manual.name?.trim() || manual.email : BOT.name,
-          data: {
-            guide,
-            warehouseId: order.warehouseId,
-            warehouseName: sedeName,
-            senderName: conn.senderName,
-            cityCode: conn.senderCityCode,
-          } as Prisma.InputJsonValue,
-        },
-      });
-      const city = (conn.senderCityName ?? '').split(/[(—]/)[0].trim();
-      await this.postToChat(
-        order,
-        labelError
-          ? `Guía de Addi ${guide}: remitente cambiado a ${conn.senderName}${city ? ` (${city})` : ''}, pero el rótulo no se pudo descargar. Imprímelo desde la suite de Coordinadora.`
-          : `Guía de Addi ${guide}: remitente cambiado a ${conn.senderName}${city ? ` (${city})` : ''}. Rótulo actualizado:`,
-        pdf,
-      );
-      return true;
+      return !movedAgain;
     } catch (err) {
       if (!order) throw err;
       if (err instanceof BadRequestException && manual) throw err;

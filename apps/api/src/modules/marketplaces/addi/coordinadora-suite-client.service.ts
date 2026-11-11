@@ -61,6 +61,7 @@ export class SuiteHttpError extends Error {
 export class CoordinadoraSuiteClient {
   private readonly logger = new Logger(CoordinadoraSuiteClient.name);
   private readonly sessions = new Map<string, Session>();
+  private readonly logins = new Map<string, Promise<Session>>();
 
   async validate(creds: SuiteCreds): Promise<void> {
     await this.login(creds);
@@ -184,9 +185,23 @@ export class CoordinadoraSuiteClient {
   private async session(creds: SuiteCreds): Promise<Session> {
     const hit = this.sessions.get(creds.email);
     if (hit && Date.now() - hit.at < SESSION_TTL_MS) return hit;
-    const s = await this.login(creds);
+    // Varios pedidos transferidos a la vez comparten UN inicio de sesion.
+    let pending = this.logins.get(creds.email);
+    if (!pending) {
+      pending = this.login(creds).finally(() => this.logins.delete(creds.email));
+      this.logins.set(creds.email, pending);
+    }
+    const s = await pending;
     this.sessions.set(creds.email, s);
     return s;
+  }
+
+  /**
+   * Abre (o confirma) la sesion SIN esperar a nadie: se llama al transferir,
+   * en paralelo con lo demas, para que el inicio de sesion no sume al envio.
+   */
+  warm(creds: SuiteCreds): void {
+    void this.session(creds).catch(() => null);
   }
 
   private async login(creds: SuiteCreds): Promise<Session> {

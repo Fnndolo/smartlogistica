@@ -21,9 +21,11 @@ interface AddiJob {
  *    sede (al transferir, o reintento ante un fallo pasajero).
  *  - 'lookup' {tenantId, orderId, attempt}: la guia no estaba al llegar el
  *    pedido (Addi caido/lento): se busca de nuevo solo esa.
- * El worker procesa de a uno: dos trabajos nunca se pisan.
+ * Hasta 4 trabajos a la vez; el mismo pedido nunca dos veces (candado).
  */
-@Processor(QUEUE_ADDI_LBA)
+// Varios pedidos a la vez (cada uno con su candado): transferir un lote no
+// pone los rotulos en fila.
+@Processor(QUEUE_ADDI_LBA, { concurrency: 4 })
 export class AddiLbaProcessor extends WorkerHost {
   private readonly logger = new Logger(AddiLbaProcessor.name);
 
