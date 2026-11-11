@@ -1106,6 +1106,22 @@ export class OrdersService implements OnModuleInit {
       },
     });
 
+    // Guias de ADDI: el rotulo de la sede ANTERIOR se elimina en cuanto el
+    // pedido cambia de sede (lleva el remitente viejo de la misma guia). Va
+    // ANTES del aviso en vivo para que el chat abierto se refresque ya sin el.
+    // Queda en la bitacora: el propietario lo sigue viendo, en rojo.
+    const retired = await this.addiLba
+      .retireLabels(
+        prior.filter((o) => o.warehouseId !== input.warehouseId).map((o) => o.id),
+        actorOf(auth),
+        toName,
+      )
+      .catch((err) => {
+        this.logger.warn(`Rotulos de Addi anteriores no retirados: ${(err as Error).message}`);
+        return 0;
+      });
+    if (retired > 0) this.bumpFeeds(tenantId);
+
     // INMEDIATEZ: el cambio ya esta en la base -> avisar YA a todas las vistas
     // (la sede destino lo pinta al instante). La actividad se registra despues:
     // no cambia la lista y no tiene por que retrasar el aviso.

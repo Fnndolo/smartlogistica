@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto';
 import { canManageOrders, isAdmin } from '../../../common/rbac';
 import type { AuthContext } from '../../../common/types/authenticated-request';
 import { EnvelopeService } from '../../../infrastructure/crypto/envelope.service';
+import { AuditService, type AuditActor } from '../../audit/audit.service';
 import { QUEUE_ADDI_LBA } from '../../../infrastructure/queue/queue.module';
 import { RealtimeService } from '../../../infrastructure/realtime/realtime.service';
 import { StorageService } from '../../../infrastructure/storage/storage.service';
@@ -156,6 +157,7 @@ export class AddiLbaService implements OnModuleInit {
     private readonly realtime: RealtimeService,
     private readonly warehouses: WarehousesService,
     @InjectQueue(QUEUE_ADDI_LBA) private readonly queue: Queue,
+    private readonly audit: AuditService,
   ) {}
 
   /** La primera version consultaba Addi cada 5 min: se borra ese ciclo si quedo. */
@@ -904,6 +906,79 @@ export class AddiLbaService implements OnModuleInit {
       superMention: false,
       createdAt: last.createdAt.toISOString(),
     });
+  }
+
+  /**
+   * Al CAMBIAR de sede, el rotulo de la guia de Addi de la sede anterior se
+   * elimina YA del chat (lleva el remitente viejo del MISMO numero de guia).
+   * Igual que borrar un mensaje a mano: desaparece para el equipo, pero queda
+   * copiado en la bitacora y el PROPIETARIO lo sigue viendo en rojo (y su PDF
+   * sigue en storage). Solo los rotulos que publico esta automatizacion.
+   * Lo llama OrdersService.assign ANTES de su aviso en vivo, para que el chat
+   * abierto se refresque ya sin el. Devuelve cuantos elimino.
+   */
+  async retireLabels(
+    orderIds: string[],
+    actor: AuditActor,
+    toName: string | null,
+  ): Promise<number> {
+    if (orderIds.length === 0) return 0;
+    const { prisma } = getTenantContext();
+    const old = await prisma.orderMessage.findMany({
+      where: {
+        orderId: { in: orderIds },
+        authorId: BOT.id,
+        kind: 'document',
+        body: { startsWith: 'GUIA-' },
+      },
+    });
+    if (old.length === 0) return 0;
+    const orders = new Map(
+      (
+        await prisma.order.findMany({
+          where: { id: { in: [...new Set(old.map((m) => m.orderId))] } },
+          select: { id: true, externalId: true, customerName: true },
+        })
+      ).map((o) => [o.id, o]),
+    );
+    let n = 0;
+    for (const msg of old) {
+      const gone = await prisma.orderMessage
+        .delete({ where: { id: msg.id } })
+        .then(() => true)
+        .catch(() => false); // ya no estaba (otro traslado simultaneo)
+      if (!gone) continue;
+      n++;
+      const order = orders.get(msg.orderId);
+      await this.audit.log(actor, {
+        action: 'chat.message_deleted',
+        resource: `order:${msg.orderId}`,
+        summary: `Eliminó el rótulo anterior de la guía de Addi al transferir el pedido${toName ? ` a ${toName}` : ''}`,
+        detail: `📄 ${msg.body ?? 'Rótulo'}`,
+        data: {
+          // Misma foja que deja deleteMessage: el propietario lo ve en el chat.
+          message: {
+            id: msg.id,
+            kind: msg.kind,
+            authorId: msg.authorId,
+            authorName: msg.authorName,
+            body: msg.body,
+            caption: msg.caption,
+            attachmentKey: msg.attachmentKey,
+            attachmentMime: msg.attachmentMime,
+            imeis: msg.imeis,
+            mentions: msg.mentions,
+            replyToId: msg.replyToId,
+            editedAt: msg.editedAt?.toISOString() ?? null,
+            createdAt: msg.createdAt.toISOString(),
+          },
+          externalId: order?.externalId ?? null,
+          customerName: order?.customerName ?? null,
+          reason: 'addi_transfer',
+        },
+      });
+    }
+    return n;
   }
 
   // === Detalle del pedido ===
