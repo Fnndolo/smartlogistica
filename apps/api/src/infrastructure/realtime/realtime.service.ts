@@ -18,7 +18,8 @@ export interface OrderRealtimeEvent {
     | 'chat.message'
     | 'chat.reaction'
     | 'chat.edit'
-    | 'chat.typing';
+    | 'chat.typing'
+    | 'guide-module.changed';
   externalId?: string;
   at: number;
   // Campos extra de los eventos de chat (chat.message / chat.reaction): el

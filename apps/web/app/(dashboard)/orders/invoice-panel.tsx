@@ -11,6 +11,7 @@ import {
   Loader2,
   Plus,
   ReceiptText,
+  RefreshCw,
   Search,
   Trash2,
   User,
@@ -34,6 +35,7 @@ import { ApiError, api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 
 import { clearDraft, getDraft, setDraft } from './panel-drafts';
+import { useGuideModule } from './use-guide-module';
 
 interface Line {
   key: string;
@@ -88,6 +90,8 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
     () => getDraft<Payment[]>(`invoice-pay:${orderId}`) ?? [emptyPayment()],
   );
   const [result, setResult] = useState<InvoiceResult | null>(null);
+  // MODULO DE GUIAS apagado: sin "Hacer todo", y facturar cierra en VTEX.
+  const { enabled: guidesOn, ready: guidesReady } = useGuideModule();
 
   const {
     data: preview,
@@ -266,9 +270,9 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
       clearDraft(`invoice-pay:${orderId}`);
       toast.success(`Factura ${r.number} emitida`);
       refreshOrder();
-      // Montado a mano: si la guia ya estaba, el pedido queda COMPLETO -> la
-      // lista de la sede cambia de seccion.
-      if (manual) qc.invalidateQueries({ queryKey: ['orders'] });
+      // Montado a mano con la guia ya hecha, o guias apagadas (el server cerro
+      // el pedido al facturar): queda COMPLETO -> la lista cambia de seccion.
+      if (manual || !guidesOn) qc.invalidateQueries({ queryKey: ['orders'] });
     },
     onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo facturar'),
   });
@@ -280,6 +284,8 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
     queryFn: () => api.get<GuidePreview>(`/v1/orders/${orderId}/guide-preview`),
     retry: false,
     staleTime: 30_000,
+    // Con las guias apagadas no hay "Hacer todo": ni se pide.
+    enabled: guidesOn,
   });
 
   const recip = guidePrev?.recipient;
@@ -371,7 +377,19 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
   }
   // Si ya se facturo (en esta sesion o antes), no se puede volver a facturar.
   const emitted = result ?? preview?.invoice ?? null;
-  if (emitted) return <InvoicedView invoice={emitted} />;
+  if (emitted) {
+    return (
+      <InvoicedView
+        invoice={emitted}
+        orderId={orderId}
+        manual={manual}
+        // Solo con las guias apagadas el cierre depende de este panel; y solo
+        // se sabe si cerro cuando el preview ya trae la factura (justo despues
+        // de facturar aun puede venir el de antes).
+        closeState={guidesOn || !preview?.invoice ? null : preview.closed ? 'closed' : 'pending'}
+      />
+    );
+  }
 
   return (
     <div className="space-y-5 p-[22px]">
@@ -686,8 +704,10 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
           Facturar en Alegra
         </Button>
         {/* "Hacer todo" solo en pedidos de marketplace: en los montados a mano
-            la guia tiene decision propia (recaudo contraentrega) -> por pasos. */}
-        {!manual ? (
+            la guia tiene decision propia (recaudo contraentrega) -> por pasos.
+            Y solo con el modulo de guias encendido (y ya confirmado: no se
+            ofrece ni un instante si esta apagado). */}
+        {!manual && guidesOn && guidesReady ? (
           <Button
             variant="outline"
             onClick={() => requestRun('all')}
@@ -704,7 +724,24 @@ export function InvoicePanel({ orderId, manual = false }: { orderId: string; man
             Hacer todo
           </Button>
         ) : null}
-        {manual ? (
+        {manual && !guidesOn ? (
+          <span className="min-w-[min(100%,220px)] flex-1 text-xs leading-[1.45] text-hint">
+            Pedido montado a mano: la factura sale con los medios de pago que elijas (hasta 3, como
+            en Alegra).{' '}
+            <span className="font-bold text-muted-foreground">
+              Con la factura el pedido queda completo (las guías están apagadas). Este pedido no
+              genera MKT.
+            </span>
+          </span>
+        ) : !guidesOn ? (
+          <span className="min-w-[min(100%,220px)] flex-1 text-xs leading-[1.45] text-hint">
+            Se emite pagada con la cuenta &laquo;MARKETPLACE ADDI&raquo; y queda cerrada/cobrada.{' '}
+            <span className="font-bold text-muted-foreground">
+              Al facturar, el pedido también queda facturado en VTEX (sin guía) y el MKT llega a la
+              conversación.
+            </span>
+          </span>
+        ) : manual ? (
           <span className="min-w-[min(100%,220px)] flex-1 text-xs leading-[1.45] text-hint">
             Pedido montado a mano: la factura sale con los medios de pago que elijas (hasta 3, como
             en Alegra).{' '}
@@ -1256,8 +1293,39 @@ function ItemPicker({
 }
 
 /** Pedido ya facturado: se muestra la factura emitida; NO se puede re-facturar. */
-function InvoicedView({ invoice }: { invoice: { number: string; total: string; status: string } }) {
+function InvoicedView({
+  invoice,
+  orderId,
+  manual,
+  closeState,
+}: {
+  invoice: { number: string; total: string; status: string };
+  orderId: string;
+  manual: boolean;
+  /** Solo con las guias APAGADAS (el cierre sale al facturar): null = no
+   *  aplica o aun no se sabe; 'pending' = la factura quedo pero VTEX no. */
+  closeState: 'closed' | 'pending' | null;
+}) {
+  const qc = useQueryClient();
   const paid = invoice.status === 'closed';
+
+  // Reintentar el cierre (VTEX caido al facturar, o pedido facturado antes de
+  // apagar las guias). Idempotente en el server: nunca factura dos veces.
+  const finalize = useMutation({
+    mutationKey: ['op-finalize', orderId],
+    mutationFn: () => api.post<{ ok: boolean }>(`/v1/orders/${orderId}/finalize`, {}),
+    onSuccess: (r) => {
+      if (r.ok) toast.success(manual ? 'Pedido completo' : 'Pedido cerrado en VTEX');
+      else toast.error('VTEX sigue sin responder — el motivo está en la conversación');
+      qc.invalidateQueries({ queryKey: ['invoice-preview', orderId] });
+      qc.invalidateQueries({ queryKey: ['order-messages', orderId] });
+      qc.invalidateQueries({ queryKey: ['order-events', orderId] });
+      qc.invalidateQueries({ queryKey: ['orders'] });
+    },
+    onError: (err) =>
+      toast.error(err instanceof ApiError ? err.message : 'No se pudo cerrar el pedido'),
+  });
+
   return (
     <div className="p-[22px]">
       <div className="rounded-[14px] border border-emerald-500/20 bg-emerald-500/10 p-6 text-center shadow-[var(--shadow-card)]">
@@ -1278,6 +1346,43 @@ function InvoicedView({ invoice }: { invoice: { number: string; total: string; s
           {paid ? 'Cerrada / cobrada' : `Estado: ${invoice.status}`}
         </span>
       </div>
+      {closeState === 'closed' ? (
+        <p className="mt-3 flex items-center justify-center gap-1.5 text-center text-[12.5px] font-semibold text-emerald-600 dark:text-emerald-400">
+          <CheckCircle2 className="h-[15px] w-[15px] shrink-0" />
+          {manual
+            ? 'Pedido completo: pasó a Facturados.'
+            : 'Facturado en VTEX: el MKT está en la conversación.'}
+        </p>
+      ) : closeState === 'pending' ? (
+        <div className="mt-3 rounded-[14px] border border-amber-500/30 bg-amber-500/10 px-4 py-3.5">
+          <p className="flex items-start gap-2.5 text-[12.5px] leading-[1.45] text-amber-700 dark:text-amber-400">
+            <AlertTriangle className="mt-px h-[15px] w-[15px] shrink-0" />
+            <span className="min-w-0 break-words">
+              {manual ? (
+                <>
+                  <b>Falta completar el pedido.</b> La factura de Alegra quedó; ciérralo para que
+                  pase a Facturados.
+                </>
+              ) : (
+                <>
+                  <b>Falta cerrarlo en VTEX.</b> La factura de Alegra quedó, pero el pedido aún no
+                  está facturado en VTEX ni tiene MKT. Si VTEX falló, el motivo está en la
+                  conversación.
+                </>
+              )}
+            </span>
+          </p>
+          <Button
+            onClick={() => finalize.mutate()}
+            loading={finalize.isPending}
+            disabled={finalize.isPending}
+            className={cn(BTN_PRIMARY_CLS, 'mt-3')}
+          >
+            <RefreshCw className="h-[15px] w-[15px]" />
+            {manual ? 'Completar pedido' : 'Cerrar en VTEX'}
+          </Button>
+        </div>
+      ) : null}
       <p className="mt-4 text-center text-xs leading-[1.45] text-hint">
         Este pedido ya fue facturado; el PDF está en la conversación. Para volver a facturar, anula
         primero la factura en Alegra.

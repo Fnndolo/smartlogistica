@@ -8,6 +8,7 @@ import { VtexModule } from '../marketplaces/vtex/vtex.module';
 import { WhatsappModule } from '../whatsapp/whatsapp.module';
 import { WarehousesModule } from '../warehouses/warehouses.module';
 import { DeliverySupportService } from './delivery-support.service';
+import { GuideModuleController } from './guide-module.controller';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
 import { PlatformsController } from './platforms.controller';
@@ -25,7 +26,7 @@ import { VtexFeesController } from './vtex-fees.controller';
     WhatsappModule,
     SkydropxModule,
   ],
-  controllers: [OrdersController, PlatformsController, VtexFeesController],
+  controllers: [OrdersController, PlatformsController, VtexFeesController, GuideModuleController],
   providers: [
     OrdersService,
     DeliverySupportService,

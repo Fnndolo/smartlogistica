@@ -69,6 +69,7 @@ import { ClaimChip } from './claim-chip';
 import { GuidePanel } from './guide-panel';
 import { InvoicePanel } from './invoice-panel';
 import { BADGE_COLOR_CLASSES, platformOf, usePlatforms } from './platform-badge';
+import { useGuideModule } from './use-guide-module';
 import { useOrderActions } from './use-order-actions';
 import { WhatsappPanel } from './whatsapp-panel';
 import { compressImage } from '@/lib/compress-image';
@@ -384,6 +385,16 @@ function DrawerContent({
   // solo trazabilidad — sin Facturar ni Guia.
   const external = !order.warehouseId && order.status !== 'ready-for-handling';
 
+  // MODULO DE GUIAS (Ajustes › Envios). Apagado: sin pestaña Guia — el pedido
+  // se cierra en VTEX al facturar.
+  const { enabled: guidesOn } = useGuideModule();
+  const showGuide = canManage && !external && guidesOn;
+  // Si lo apagan con la pestaña Guia abierta, se vuelve a la conversacion en
+  // vez de quedar mirando un panel que ya no existe.
+  useEffect(() => {
+    if (!guidesOn && tab === 'guia') setTab('conversacion');
+  }, [guidesOn, tab]);
+
   // PRECARGAR Facturar y Guia apenas se abre el pedido: cuando el usuario
   // entra a esas pestañas, el contenido ya esta en cache (antes esperaba
   // 4-6s el fetch de Alegra/Coordinadora al abrir la pestaña).
@@ -394,21 +405,30 @@ function DrawerContent({
       queryFn: () => api.get(`/v1/orders/${order.id}/invoice-preview`),
       staleTime: 20_000,
     });
+    if (!guidesOn) return;
     void qc.prefetchQuery({
       queryKey: ['guide-preview', order.id],
       queryFn: () => api.get(`/v1/orders/${order.id}/guide-preview`),
       staleTime: 20_000,
     });
-  }, [order.id, canManage, external, qc]);
+  }, [order.id, canManage, external, guidesOn, qc]);
 
   const tabs: { id: Tab; label: string; icon: typeof Info }[] = [
     { id: 'conversacion', label: 'Conversación', icon: MessageSquare },
     { id: 'detalle', label: 'Detalle', icon: Info },
     ...(canManage && !external
-      ? ([
-          { id: 'facturar', label: 'Facturar', icon: ReceiptText },
-          { id: 'guia', label: 'Guía', icon: Truck },
-        ] as { id: Tab; label: string; icon: typeof Info }[])
+      ? ([{ id: 'facturar', label: 'Facturar', icon: ReceiptText }] as {
+          id: Tab;
+          label: string;
+          icon: typeof Info;
+        }[])
+      : []),
+    ...(showGuide
+      ? ([{ id: 'guia', label: 'Guía', icon: Truck }] as {
+          id: Tab;
+          label: string;
+          icon: typeof Info;
+        }[])
       : []),
     // Actividad: es RASTRO, y el rastro solo lo ve el propietario (ni los
     // admins ni los gestores). El API tambien lo niega.
@@ -623,18 +643,18 @@ function DrawerContent({
           <DetalleTab order={order} detail={detail} onDeleted={onClose} />
         </TabPane>
         {canManage && !external ? (
-          <>
-            <TabPane tab="facturar" active={tab === 'facturar'} scroll>
-              <InvoicePanel orderId={order.id} manual={order.provider === 'manual'} />
-            </TabPane>
-            <TabPane tab="guia" active={tab === 'guia'} scroll>
-              <GuidePanel
-                orderId={order.id}
-                manual={order.provider === 'manual'}
-                orderTotal={order.totalValue}
-              />
-            </TabPane>
-          </>
+          <TabPane tab="facturar" active={tab === 'facturar'} scroll>
+            <InvoicePanel orderId={order.id} manual={order.provider === 'manual'} />
+          </TabPane>
+        ) : null}
+        {showGuide ? (
+          <TabPane tab="guia" active={tab === 'guia'} scroll>
+            <GuidePanel
+              orderId={order.id}
+              manual={order.provider === 'manual'}
+              orderTotal={order.totalValue}
+            />
+          </TabPane>
         ) : null}
         {/* Mismo permiso que el boton: montado para quien no la ve, pedia
             /events en cada drawer y recibia 403 (con reintento y al enfocar). */}

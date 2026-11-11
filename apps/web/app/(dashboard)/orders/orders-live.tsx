@@ -233,6 +233,12 @@ export function OrdersLive({ initialData, scope = { kind: 'general' }, state }: 
       // alguien escribe) se colaba como refresh completo y recargaba lista +
       // conteos + pulso en todas las pestañas.
       const kind = event?.kind;
+      // Encendieron/apagaron las guias (Ajustes): se re-lee SOLO ese ajuste
+      // (la pestaña Guia aparece o se va); la tabla no cambia.
+      if (kind === 'guide-module.changed') {
+        queryClient.invalidateQueries({ queryKey: ['guide-module'] });
+        return;
+      }
       const full =
         kind === 'orders.refresh' || kind === 'order.upserted' || kind === 'order.removed';
       const chatOnly = kind === 'chat.message';

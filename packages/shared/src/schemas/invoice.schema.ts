@@ -131,6 +131,10 @@ export const invoicePreviewSchema = z.object({
   billedTo: alegraFixedClientSchema.nullable().default(null),
   // Si el pedido ya se facturo, aqui va la factura -> el front no deja re-facturar.
   invoice: existingInvoiceSchema.nullable(),
+  /** El pedido ya quedo CERRADO: facturado en VTEX o, si es montado a mano,
+   *  completo. Con el modulo de guias apagado el cierre sale al facturar, y si
+   *  fallo (VTEX caido) el panel ofrece reintentarlo desde aqui. */
+  closed: z.boolean().default(false),
 });
 export type InvoicePreview = z.infer<typeof invoicePreviewSchema>;
 

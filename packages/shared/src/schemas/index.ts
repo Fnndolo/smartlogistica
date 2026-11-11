@@ -13,6 +13,7 @@ export * from './certificate.schema';
 export * from './member.schema';
 export * from './platform.schema';
 export * from './vtex-fees.schema';
+export * from './guide-module.schema';
 export * from './whatsapp.schema';
 export * from './skydropx.schema';
 export * from './delivery.schema';

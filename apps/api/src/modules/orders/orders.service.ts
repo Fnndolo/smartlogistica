@@ -89,6 +89,7 @@ import { WaUpsellService } from '../whatsapp/wa-upsell.service';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { WarehousesService } from '../warehouses/warehouses.service';
 import { DeliverySupportService } from './delivery-support.service';
+import { loadGuideModule } from './guide-module.store';
 import { loadPlatforms } from './platforms.store';
 
 const IMAGE_EXT: Record<ImageMime, string> = {
@@ -272,6 +273,24 @@ export class OrdersService implements OnModuleInit {
   private acquireLock(key: string, busyMessage: string): void {
     if (this.opLocks.has(key)) throw new ConflictException(busyMessage);
     this.opLocks.add(key);
+  }
+
+  /** ¿Esta encendido el modulo de guias? (Ajustes › Envios; por defecto si.) */
+  private async guidesEnabled(): Promise<boolean> {
+    return (await loadGuideModule()).enabled;
+  }
+
+  /**
+   * Con el modulo APAGADO no se emite ningun envio: ni Coordinadora, ni
+   * Skydropx, ni soporte de domicilio, ni "Hacer todo". El front ya no los
+   * ofrece; esto ataja una pestaña que quedo abierta de antes.
+   */
+  private async assertGuidesEnabled(): Promise<void> {
+    if (!(await this.guidesEnabled())) {
+      throw new BadRequestException(
+        'El módulo de guías está apagado: al facturar, el pedido se cierra directo en VTEX. Para generar guías, enciéndelo en Ajustes › Envíos.',
+      );
+    }
   }
 
   constructor(
@@ -2572,9 +2591,16 @@ export class OrdersService implements OnModuleInit {
     const invoice = await this.existingInvoice(orderId);
     if (invoice) {
       const c = extractInvoiceClient(order);
+      // ¿Ya quedo cerrado (VTEX o montado a mano)? Con las guias apagadas el
+      // panel ofrece reintentar el cierre si no.
+      const closed = await getTenantContext().prisma.orderEvent.findFirst({
+        where: { orderId, type: { in: FINALIZED_EVENTS } },
+        select: { id: true },
+      });
       return {
         invoice,
         billedTo,
+        closed: Boolean(closed),
         lines: [],
         client: {
           name: c.name,
@@ -2596,6 +2622,7 @@ export class OrdersService implements OnModuleInit {
       return {
         invoice: null,
         billedTo,
+        closed: false,
         lines: order.items.map((i) => ({
           codes: [],
           itemId: i.sku,
@@ -2649,6 +2676,7 @@ export class OrdersService implements OnModuleInit {
     return {
       invoice: null,
       billedTo,
+      closed: false,
       // Se factura el TOTAL del pedido (envio/recargos incluidos), no solo el
       // valor de los productos: el excedente se reparte entre las lineas.
       lines: prorateToOrderTotal(withVerdict, Number(order.totalValue)),
@@ -2889,6 +2917,11 @@ export class OrdersService implements OnModuleInit {
     // Pedido montado a mano: si la guia ya existia, con la factura queda COMPLETO
     // (pasa a Facturados). Best-effort: la factura ya quedo emitida igual.
     if (manual) await this.finalizeManual(order, auth).catch(() => null);
+    // MODULO DE GUIAS APAGADO: no habra guia que cierre el pedido, asi que el
+    // cierre en VTEX (factura de salida sin tracking + MKT al chat) sale YA.
+    // Best-effort como siempre: si VTEX falla, la factura de Alegra queda y el
+    // panel ofrece "Cerrar en VTEX" (retryFinalize).
+    else if (!(await this.guidesEnabled())) await this.closeInVtexAtInvoice(order, auth);
     await this.dropFeedsForOrder(orderId);
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
     return result;
@@ -3403,6 +3436,7 @@ export class OrdersService implements OnModuleInit {
     if (!canManageOrders(auth)) {
       throw new ForbiddenException('No tienes permiso para generar guías.');
     }
+    await this.assertGuidesEnabled();
     this.acquireLock(`${orderId}:guide`, 'Ya hay una guía en curso para este pedido.');
     try {
       return await this.generateGuideSkydropxLocked(orderId, input, auth);
@@ -3630,6 +3664,7 @@ export class OrdersService implements OnModuleInit {
     if (!canManageOrders(auth)) {
       throw new ForbiddenException('No tienes permiso para emitir soportes de entrega.');
     }
+    await this.assertGuidesEnabled();
     // MISMA clave que Coordinadora y Skydropx: un pedido tiene un solo envio en
     // vuelo, salga como salga.
     this.acquireLock(`${orderId}:guide`, 'Ya hay un envío en curso para este pedido.');
@@ -3871,6 +3906,9 @@ export class OrdersService implements OnModuleInit {
     input: ProcessAllInput,
     auth: AuthContext,
   ): Promise<ProcessAllResult> {
+    // ANTES de facturar: si se revisara en la guia, la factura ya habria
+    // salido y "Hacer todo" quedaria a medias.
+    await this.assertGuidesEnabled();
     const invoice = await this.createInvoice(orderId, input.invoice, auth);
     const guide = await this.generateGuide(orderId, input.guide, auth);
     return { invoice, guide };
@@ -3878,6 +3916,7 @@ export class OrdersService implements OnModuleInit {
 
   /** Genera la guia en Coordinadora, adjunta el rotulo al chat y registra el evento. */
   async generateGuide(orderId: string, input: CreateGuideInput, auth: AuthContext): Promise<Guide> {
+    await this.assertGuidesEnabled();
     this.acquireLock(`${orderId}:guide`, 'Ya hay una guía en curso para este pedido.');
     try {
       return await this.generateGuideLocked(orderId, input, auth);
@@ -4245,9 +4284,30 @@ export class OrdersService implements OnModuleInit {
   }
 
   /**
-   * Automatico tras la guia: factura el pedido en VTEX (start-handling + invoice
-   * con tracking = numero de guia) y lo deja en `invoiced`. Best-effort e
-   * idempotente. Requiere factura de Alegra (para el numero) + guia.
+   * Cierre en VTEX AL FACTURAR (modulo de guias apagado). Toma el candado del
+   * envio, el MISMO de la guia y del reintento: dos cierres a la vez
+   * facturarian dos veces en VTEX, que es irreversible. Si ya hay un cierre en
+   * curso no hace nada: ese termina el trabajo.
+   */
+  private async closeInVtexAtInvoice(order: OrderWithItems, auth: AuthContext): Promise<void> {
+    const key = `${order.id}:guide`;
+    if (this.opLocks.has(key)) return;
+    this.opLocks.add(key);
+    try {
+      await this.finalizeVtex(order, auth);
+    } catch {
+      // finalizeVtex ya avisa en el chat lo de VTEX; la factura ya quedo.
+    } finally {
+      this.opLocks.delete(key);
+    }
+  }
+
+  /**
+   * Factura el pedido en VTEX (start-handling + invoice) y lo deja en
+   * `invoiced`. Best-effort e idempotente. Requiere factura de Alegra (para el
+   * numero) + guia, cuyo numero viaja como tracking. Con el modulo de guias
+   * APAGADO no hay guia: se llama al facturar y la factura de VTEX va sin
+   * tracking.
    */
   private async finalizeVtex(order: OrderWithItems, auth: AuthContext): Promise<void> {
     if (!order.warehouseId) return;
@@ -4261,7 +4321,10 @@ export class OrdersService implements OnModuleInit {
 
     const invoice = await this.existingInvoice(order.id);
     const guide = await this.existingGuide(order.id);
-    if (!invoice || !guide) {
+    // Sin guia solo se cierra con el modulo APAGADO (si esta encendido, la guia
+    // es la que cierra y aun no se ha generado).
+    const withoutGuide = !guide && !(await this.guidesEnabled());
+    if (!invoice || (!guide && !withoutGuide)) {
       await this.systemMessage(
         order.id,
         auth,
@@ -4289,7 +4352,7 @@ export class OrdersService implements OnModuleInit {
       // campos se OMITEN (undefined -> axios no los serializa); mandarlos como
       // "" crearia en VTEX un paquete con seguimiento vacio, que es justo el
       // enlace muerto que no debe llegarle al cliente.
-      const viaDomicilio = order.shippingProvider === 'domicilio' || guide.via === 'domicilio';
+      const viaDomicilio = order.shippingProvider === 'domicilio' || guide?.via === 'domicilio';
       await this.vtex.notifyInvoice(
         http,
         order.externalId,
@@ -4301,15 +4364,27 @@ export class OrdersService implements OnModuleInit {
               invoiceValue,
               courier: DELIVERY_COURIER,
             }
-          : {
-              type: 'Output',
-              issuanceDate: new Date().toISOString(),
-              invoiceNumber,
-              invoiceValue,
-              trackingNumber: guide.number,
-              trackingUrl: 'https://coordinadora.com/rastreo/rastreo-de-guia/',
-              courier: 'Transportadora estándar',
-            },
+          : !guide
+            ? {
+                // MODULO DE GUIAS APAGADO: no hay numero que mandar como
+                // tracking. Mismo payload que domicilio (verificado en
+                // produccion: VTEX deja el pedido en invoiced con el tracking
+                // vacio), con la transportadora generica de siempre.
+                type: 'Output',
+                issuanceDate: new Date().toISOString(),
+                invoiceNumber,
+                invoiceValue,
+                courier: 'Transportadora estándar',
+              }
+            : {
+                type: 'Output',
+                issuanceDate: new Date().toISOString(),
+                invoiceNumber,
+                invoiceValue,
+                trackingNumber: guide.number,
+                trackingUrl: 'https://coordinadora.com/rastreo/rastreo-de-guia/',
+                courier: 'Transportadora estándar',
+              },
       );
       // Re-traer el pedido (ya con la factura/tracking cargados) y generar el MKT.
       const detail = await this.vtex.getOrder(http, order.externalId);
@@ -4328,11 +4403,17 @@ export class OrdersService implements OnModuleInit {
         type: 'vtex_invoiced',
         actorId: auth.userId,
         actorName: displayName(auth),
-        data: { invoiceNumber, tracking: guide.number } as Prisma.InputJsonValue,
+        data: { invoiceNumber, tracking: guide?.number ?? null } as Prisma.InputJsonValue,
       },
     });
     await this.stampInvoicedAt(prisma, order.id);
-    await this.systemMessage(order.id, auth, `Facturado en VTEX · MKT ${invoiceNumber}.`);
+    await this.systemMessage(
+      order.id,
+      auth,
+      withoutGuide
+        ? `Facturado en VTEX sin guía (módulo de guías apagado) · MKT ${invoiceNumber}.`
+        : `Facturado en VTEX · MKT ${invoiceNumber}.`,
+    );
 
     // Adjuntar el MKT (identico al Print order de VTEX) al chat como archivo.
     if (mktPdf && this.storage.isConfigured()) {
@@ -4379,8 +4460,9 @@ export class OrdersService implements OnModuleInit {
       this.existingInvoice(order.id),
       this.existingGuide(order.id),
     ]);
-    // Aun falta una de las dos patas: se completara en el otro paso.
-    if (!invoice || !guide) return;
+    // Aun falta una de las dos patas: se completara en el otro paso. Con el
+    // modulo de guias APAGADO no habra guia: la factura sola lo completa.
+    if (!invoice || (!guide && (await this.guidesEnabled()))) return;
 
     await prisma.order.update({ where: { id: order.id }, data: { status: 'invoiced' } });
     await prisma.orderEvent.create({
@@ -4389,13 +4471,18 @@ export class OrdersService implements OnModuleInit {
         type: 'manual_completed',
         actorId: auth.userId,
         actorName: displayName(auth),
-        data: { invoiceNumber: invoice.number, tracking: guide.number } as Prisma.InputJsonValue,
+        data: {
+          invoiceNumber: invoice.number,
+          tracking: guide?.number ?? null,
+        } as Prisma.InputJsonValue,
       },
     });
     await this.systemMessage(
       order.id,
       auth,
-      `Pedido completado · Factura ${invoice.number} + guia ${guide.number} (montado a mano, sin MKT).`,
+      guide
+        ? `Pedido completado · Factura ${invoice.number} + guia ${guide.number} (montado a mano, sin MKT).`
+        : `Pedido completado · Factura ${invoice.number} (montado a mano, sin guía ni MKT).`,
     );
     await this.realtime.publish(tenantId, { kind: 'orders.refresh' });
   }

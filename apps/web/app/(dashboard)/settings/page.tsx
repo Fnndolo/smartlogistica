@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils';
 
 import { AlegraSellerCard } from './alegra-seller-card';
 import { ChangePasswordCard } from './change-password-card';
+import { GuideModuleCard } from './guide-module-card';
 import { PlatformsCard } from './platforms-card';
 import {
   CARD_CLS,
@@ -159,6 +160,7 @@ export default async function SettingsPage() {
         {isOwner ? (
           <section className="space-y-2.5">
             <SectionHead>Envíos</SectionHead>
+            <GuideModuleCard />
             {/* Los paquetes NO se editan aqui: cada catalogo tiene su propia
                 pagina, que es donde caben en condiciones. Los dos catalogos son
                 HERMANOS -> van en la misma fila, con el mismo punto de quiebre
