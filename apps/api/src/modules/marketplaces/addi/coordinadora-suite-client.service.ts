@@ -21,8 +21,12 @@ import { CookieJar, follow, netError, request } from './http-session';
  */
 
 const BASE = 'https://envios.coordinadora.com';
-/** El token de Keycloak dura 10 min; la sesion se rehace antes. */
-const SESSION_TTL_MS = 8 * 60_000;
+/**
+ * El token de Keycloak dura 10 min y la suite NO lo renueva sola (verificado:
+ * a los 11 min el proxy responde 401 "Jwt is expired"). Se rehace a los 9;
+ * si aun asi vence, call() reintenta con sesion nueva.
+ */
+const SESSION_TTL_MS = 9 * 60_000;
 
 export interface SuiteCreds {
   email: string;
@@ -155,7 +159,10 @@ export class CoordinadoraSuiteClient {
       (res.status === 401 || res.status === 403 || (res.status >= 300 && res.status < 400)) &&
       !retried
     ) {
-      this.sessions.delete(creds.email);
+      // Se marca vencida (no se borra): la renovacion reusa sus cookies de
+      // Keycloak y entra sin contraseña.
+      const cur = this.sessions.get(creds.email);
+      if (cur) cur.at = 0;
       return this.call(creds, service, path, method, payload, true);
     }
     const text = await res.text();
@@ -188,7 +195,7 @@ export class CoordinadoraSuiteClient {
     // Varios pedidos transferidos a la vez comparten UN inicio de sesion.
     let pending = this.logins.get(creds.email);
     if (!pending) {
-      pending = this.login(creds).finally(() => this.logins.delete(creds.email));
+      pending = this.renew(creds, hit).finally(() => this.logins.delete(creds.email));
       this.logins.set(creds.email, pending);
     }
     const s = await pending;
@@ -204,8 +211,26 @@ export class CoordinadoraSuiteClient {
     void this.session(creds).catch(() => null);
   }
 
-  private async login(creds: SuiteCreds): Promise<Session> {
-    const jar = new CookieJar();
+  /**
+   * Sesion nueva. Con una anterior se reentra con SUS cookies de Keycloak: si
+   * la sesion de Keycloak sigue viva no pide contraseña (~0.7-1.3 s contra
+   * ~2.2 s del login completo; verificado tambien a los 11 min). Si algo raro
+   * pasa con esas cookies, login limpio. Una contraseña mala NO se reintenta
+   * (no sumar intentos fallidos en Keycloak).
+   */
+  private async renew(creds: SuiteCreds, prev?: Session): Promise<Session> {
+    if (prev) {
+      try {
+        return await this.login(creds, prev);
+      } catch (err) {
+        if (err instanceof SuiteAuthError) throw err;
+      }
+    }
+    return this.login(creds);
+  }
+
+  private async login(creds: SuiteCreds, prev?: Session): Promise<Session> {
+    const jar = prev?.jar ?? new CookieJar();
     try {
       // 1. CSRF de NextAuth + inicio del flujo de Keycloak.
       let res = await request(jar, `${BASE}/api/auth/csrf`, {
@@ -229,7 +254,14 @@ export class CoordinadoraSuiteClient {
         .match(/"loginAction":\s*"([^"]+)"/)?.[1]
         ?.replace(/\\\//g, '/')
         .replace(/&amp;/g, '&');
-      if (!action) throw new Error('Cambió la página de inicio de sesión de Coordinadora');
+      if (!action) {
+        // Sin formulario = Keycloak reconocio su sesion y ya devolvio a la
+        // suite con la cookie nueva de NextAuth (reentrada sin contraseña).
+        if (prev && new URL(kc.url).hostname === new URL(BASE).hostname) {
+          return { jar, actor: prev.actor, nit: prev.nit, at: Date.now() };
+        }
+        throw new Error('Cambió la página de inicio de sesión de Coordinadora');
+      }
 
       // 3. Usuario y contraseña. Exito = redireccion al callback de NextAuth.
       res = await request(jar, action, {
