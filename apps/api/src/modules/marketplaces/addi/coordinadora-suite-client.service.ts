@@ -12,7 +12,8 @@ import { CookieJar, follow, netError, request } from './http-session';
  * el proxy de la misma app con la cookie de sesion. Validado contra la suite
  * real (2026-11-11):
  *   - POST /api/proxy/suiteBackendService/guias/listado   buscar por numero
- *   - GET  /api/proxy/guiasService/guias/{n}              guia completa
+ *   - GET  /api/proxy/suiteBackendService/guias/{n}       guia completa
+ *     (hasta el 2026-11-12 era guiasService/guias/{n}; se prueban las dos)
  *   - PUT  /api/proxy/suiteBackendService/guias           editar (el "Editar guia")
  *   - POST /api/proxy/suiteBackendService/etiquetas/impresion   rotulo (PDF base64)
  *
@@ -87,12 +88,22 @@ export class CoordinadoraSuiteClient {
 
   /** La guia completa, tal como la carga el formulario de edicion. */
   async getGuide(creds: SuiteCreds, code: string): Promise<SuiteGuide> {
-    const body = await this.call(
-      creds,
-      'guiasService',
-      `/guias/${encodeURIComponent(code)}`,
-      'GET',
-    );
+    // Coordinadora ya movio esta ruta una vez (2026-11-13: guiasService paso a
+    // dar 404 y la suite empezo a leerla de suiteBackendService, con la MISMA
+    // respuesta). Se usa la actual y, si da 404, la otra: un cambio asi no
+    // vuelve a tumbar los remitentes.
+    let body: unknown;
+    try {
+      body = await this.call(
+        creds,
+        'suiteBackendService',
+        `/guias/${encodeURIComponent(code)}`,
+        'GET',
+      );
+    } catch (err) {
+      if (!(err instanceof SuiteHttpError) || err.status !== 404) throw err;
+      body = await this.call(creds, 'guiasService', `/guias/${encodeURIComponent(code)}`, 'GET');
+    }
     const data = (body as { data?: SuiteGuide })?.data;
     if (!data || String(data.codigoRemision) !== code) {
       throw new Error(`La suite de Coordinadora no devolvió la guía ${code}`);
