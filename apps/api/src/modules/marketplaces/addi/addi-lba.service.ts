@@ -10,6 +10,7 @@ import {
 import {
   ADDI_EDITABLE_STATUS,
   ADDI_PACKAGE_STATUS_LABEL,
+  addiGuidesActive,
   type AddiGuideInfo,
   type AddiLbaConnectionInput,
   type AddiLbaConnectionSummary,
@@ -27,6 +28,7 @@ import { QUEUE_ADDI_LBA } from '../../../infrastructure/queue/queue.module';
 import { RealtimeService } from '../../../infrastructure/realtime/realtime.service';
 import { StorageService } from '../../../infrastructure/storage/storage.service';
 import { getTenantContext, tenantContext } from '../../../infrastructure/tenant-context';
+import { loadGuideModule } from '../../orders/guide-module.store';
 import { WarehousesService } from '../../warehouses/warehouses.service';
 import { buildSenderUpdate } from './addi-guide-edit';
 import {
@@ -139,6 +141,13 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
  *  3. Al ASIGNAR / TRANSFERIR a una sede: se edita la guia en la suite de
  *     Coordinadora con el remitente de esa sede, se verifica y el rotulo cae
  *     a la conversacion del pedido.
+ *
+ * EL BOTON es el de las guias de VTEX (Ajustes › Envios): apagadas = modo Addi
+ * (todo lo de arriba); encendidas = cada sede genera su guia y esto queda EN
+ * PAUSA: no se consulta el portal al llegar los pedidos ni se busca nada. Lo
+ * unico que sigue es terminar los pedidos que YA traen guia de Addi (si se
+ * transfieren, su guia pasa al remitente de la nueva sede). Volver a apagarlas
+ * lo reactiva tal cual: la conexion y sus credenciales no se tocan.
  */
 @Injectable()
 export class AddiLbaService implements OnModuleInit {
@@ -159,6 +168,15 @@ export class AddiLbaService implements OnModuleInit {
     @InjectQueue(QUEUE_ADDI_LBA) private readonly queue: Queue,
     private readonly audit: AuditService,
   ) {}
+
+  /**
+   * ¿Guias de Addi activas? Solo con las guias de VTEX APAGADAS (ver doc de la
+   * clase). Una lectura de AppSetting: se consulta en cada decision para que
+   * el boton aplique al instante, sin cache que esperar.
+   */
+  private async active(): Promise<boolean> {
+    return addiGuidesActive(await loadGuideModule());
+  }
 
   /** La primera version consultaba Addi cada 5 min: se borra ese ciclo si quedo. */
   async onModuleInit(): Promise<void> {
@@ -351,6 +369,11 @@ export class AddiLbaService implements OnModuleInit {
     externalId: string,
   ): Promise<AddiIngestGuide | null | 'off'> {
     return tenantContext.run({ tenantId, tenantSlug: '', prisma }, async () => {
+      // En pausa (guias de VTEX encendidas): ni se le pregunta a Addi. Si no se
+      // pudo saber, null: un LBA se reintenta y el reintento vuelve a mirar.
+      const on = await this.active().catch(() => null);
+      if (on === false) return 'off';
+      if (on === null) return null;
       const creds = await this.credsOrNull().catch(() => null);
       if (!creds) return 'off';
       try {
@@ -408,6 +431,17 @@ export class AddiLbaService implements OnModuleInit {
     });
     if (!order || order.provider !== 'vtex') return;
     if (!order.addiGuide) {
+      // En pausa: ya no se busca. Si esperaba la guia para cambiar remitente,
+      // se suelta (sin aviso: no hay nada que hacer con ese pedido).
+      if (!(await this.active())) {
+        if (order.addiSenderPendingAt) {
+          await prisma.order.update({
+            where: { id: orderId },
+            data: { addiSenderPendingAt: null, addiSenderError: null },
+          });
+        }
+        return;
+      }
       const creds = await this.credsOrNull();
       if (!creds) return;
       let ship: AddiShipment | null = null;
@@ -452,6 +486,11 @@ export class AddiLbaService implements OnModuleInit {
     const { prisma } = getTenantContext();
     const creds = await this.credsOrNull();
     if (!creds) throw new BadRequestException('Configura primero la conexión de guías de Addi');
+    if (!(await this.active())) {
+      throw new BadRequestException(
+        'Las guías de Addi están en pausa porque las guías de VTEX están encendidas (Ajustes › Envíos).',
+      );
+    }
     let list: AddiShipment[];
     try {
       list = await this.portal.listShipments(creds.portal);
@@ -520,13 +559,15 @@ export class AddiLbaService implements OnModuleInit {
       });
       if (!sender?.senderAddress?.trim() || !sender.senderCityCode) return;
       // Solo pedidos con guia de Addi o marcados LBA (los demas no tienen guia
-      // de Addi que editar).
+      // de Addi que editar). EN PAUSA solo los que ya la traen: a un LBA sin
+      // guia ya no se le busca.
       const candidates = await prisma.order.findMany({
         where: { id: { in: orderIds }, provider: 'vtex' },
         select: { id: true, addiGuide: true, rawPayload: true },
       });
+      const active = await this.active();
       const ids = candidates
-        .filter((o) => o.addiGuide || isLbaOrder(o.rawPayload))
+        .filter((o) => o.addiGuide || (active && isLbaOrder(o.rawPayload)))
         .map((o) => o.id);
       if (ids.length === 0) return;
       // La sesion de la suite se abre YA (en paralelo con lo que sigue).
@@ -618,6 +659,19 @@ export class AddiLbaService implements OnModuleInit {
       //    pregunta a Addi (si ya la recogieron lo dice la suite, abajo).
       let guide = order.addiGuide;
       let ship: AddiShipment | null = null;
+      if (!guide && !(await this.active())) {
+        // En pausa no se busca la guia: sin ella no hay nada que editar.
+        await prisma.order.update({
+          where: { id: orderId },
+          data: { addiSenderPendingAt: null, addiSenderError: null },
+        });
+        if (manual) {
+          throw new BadRequestException(
+            'Este pedido no trae guía de Addi, y las guías de Addi están en pausa (las de VTEX están encendidas).',
+          );
+        }
+        return false;
+      }
       if (!guide) {
         ship = await this.findShipment(creds, mkt, LOOKUP_PAGES);
         guide = ship?.trackingNumber ?? null;
@@ -1034,11 +1088,14 @@ export class AddiLbaService implements OnModuleInit {
     // Al abrir el Detalle (no hay consultas periodicas): si el estado del
     // paquete es viejo, o es LBA y aun no tiene guia, se relee de Addi. Con
     // tope de tiempo: si Addi tarda, se muestra lo que hay.
+    // En pausa, al que no trajo guia ya no se le busca (el estado del paquete
+    // de los que si la tienen se sigue releyendo: se estan terminando).
+    const active = await this.active().catch(() => true);
     const stale =
       (guide &&
         ship?.packageStatus !== 'DELIVERED' &&
         (!ship?.checkedAt || Date.now() - Date.parse(ship.checkedAt) > STATUS_STALE_MS)) ||
-      (!guide && lba);
+      (!guide && lba && active);
     let connected = false;
     const creds = await this.credsOrNull().catch(() => null);
     connected = Boolean(creds);
@@ -1106,6 +1163,7 @@ export class AddiLbaService implements OnModuleInit {
         Boolean(guide) &&
         Boolean(order.warehouseId) &&
         editable,
+      paused: !active,
     };
   }
 

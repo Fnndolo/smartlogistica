@@ -1,12 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Truck } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   GUIDE_CHANNEL_LABEL,
   guidesEnabledFor,
+  type AddiLbaConnectionSummary,
   type GuideModule,
   type MarketplaceProvider,
 } from '@smartlogistica/shared';
@@ -48,6 +49,14 @@ export function GuideModuleCard() {
   // Misma clave que el drawer: al guardar, la pestaña Guia de esta pestaña del
   // navegador cambia sin esperar el evento.
   const { data, isError, refetch } = useGuideModuleSetting();
+  // Con las guias de Addi conectadas, el interruptor de VTEX es TAMBIEN el suyo
+  // (apagadas = las pone Addi; encendidas = Addi en pausa). Misma clave que la
+  // tarjeta de Addi: una sola consulta.
+  const { data: addi } = useQuery({
+    queryKey: ['addi-lba-connection'],
+    queryFn: () => api.get<AddiLbaConnectionSummary | null>('/v1/addi-lba/connection'),
+    staleTime: 30_000,
+  });
 
   const save = useMutation({
     mutationFn: (next: GuideModule) => api.put<GuideModule>('/v1/guide-module', next),
@@ -128,6 +137,12 @@ export function GuideModuleCard() {
                     {!on ? (
                       <p className="mt-0.5 text-[12px] text-muted-foreground">
                         Apagado: {OFF_EFFECT[channel]}
+                        {channel === 'vtex' && addi ? ' Las guías las pone Addi (Guías de Addi).' : ''}
+                      </p>
+                    ) : channel === 'vtex' && addi ? (
+                      <p className="mt-0.5 text-[12px] text-muted-foreground">
+                        Cada sede genera su guía; las guías de Addi quedan en pausa (los pedidos que
+                        ya traen una salen con ella).
                       </p>
                     ) : null}
                   </div>

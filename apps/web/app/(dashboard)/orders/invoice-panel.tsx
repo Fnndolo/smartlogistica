@@ -35,7 +35,7 @@ import { ApiError, api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 
 import { clearDraft, getDraft, setDraft } from './panel-drafts';
-import { useGuideModule } from './use-guide-module';
+import { useOrderGuides } from './use-guide-module';
 
 interface Line {
   key: string;
@@ -82,11 +82,14 @@ export function InvoicePanel({
   orderId,
   manual = false,
   provider,
+  addiGuide = null,
 }: {
   orderId: string;
   manual?: boolean;
   /** Canal del pedido (vtex, manual...): las guias se apagan por canal. */
   provider: string;
+  /** Guia que ya genero Addi: el pedido sale con ella y se cierra al facturar. */
+  addiGuide?: string | null;
 }) {
   const qc = useQueryClient();
   // Items editados: arrancan del borrador si el usuario ya habia trabajado aqui
@@ -99,8 +102,9 @@ export function InvoicePanel({
     () => getDraft<Payment[]>(`invoice-pay:${orderId}`) ?? [emptyPayment()],
   );
   const [result, setResult] = useState<InvoiceResult | null>(null);
-  // Guias apagadas PARA ESTE CANAL: sin "Hacer todo", y facturar cierra el pedido.
-  const { enabled: guidesOn, ready: guidesReady } = useGuideModule(provider);
+  // Guias apagadas PARA ESTE CANAL (o el pedido ya trae la guia de Addi): sin
+  // "Hacer todo", y facturar cierra el pedido.
+  const { enabled: guidesOn, ready: guidesReady } = useOrderGuides({ provider, addiGuide });
 
   const {
     data: preview,
@@ -746,8 +750,9 @@ export function InvoicePanel({
           <span className="min-w-[min(100%,220px)] flex-1 text-xs leading-[1.45] text-hint">
             Se emite pagada con la cuenta &laquo;MARKETPLACE ADDI&raquo; y queda cerrada/cobrada.{' '}
             <span className="font-bold text-muted-foreground">
-              Al facturar, el pedido también queda facturado en VTEX (sin guía) y el MKT llega a la
-              conversación.
+              {addiGuide
+                ? `Este pedido sale con la guía de Addi ${addiGuide}: al facturar queda facturado en VTEX y el MKT llega a la conversación.`
+                : 'Al facturar, el pedido también queda facturado en VTEX (sin guía) y el MKT llega a la conversación.'}
             </span>
           </span>
         ) : manual ? (

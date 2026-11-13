@@ -65,8 +65,9 @@ export function AddiGuideSection({ order }: { order: OrderSummary }) {
   });
 
   // Solo pedidos de Addi Logistics (LBA) o que ya tienen guia de Addi: los
-  // demas pedidos de VTEX no tienen guia de Addi que mostrar.
-  if (!data || (!data.guide && !(data.lba && data.connected))) return null;
+  // demas pedidos de VTEX no tienen guia de Addi que mostrar. En pausa (guias
+  // de VTEX encendidas) solo los que ya la tienen: a los demas no se les busca.
+  if (!data || (!data.guide && (data.paused || !(data.lba && data.connected)))) return null;
 
   const status = data.packageStatus;
   const tone = status ? (STATUS_TONE[status] ?? 'cobalt') : null;

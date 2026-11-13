@@ -1,7 +1,12 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { guidesEnabledFor, type GuideModule } from '@smartlogistica/shared';
+import {
+  DEFAULT_GUIDE_MODULE,
+  guidesEnabledFor,
+  guidesEnabledForOrder,
+  type GuideModule,
+} from '@smartlogistica/shared';
 
 import { api } from '@/lib/api-client';
 
@@ -27,4 +32,23 @@ export function useGuideModuleSetting() {
 export function useGuideModule(provider: string): { enabled: boolean; ready: boolean } {
   const { data } = useGuideModuleSetting();
   return { enabled: data ? guidesEnabledFor(data, provider) : true, ready: data !== undefined };
+}
+
+/**
+ * Lo mismo pero para UN pedido: el que ya trae la guia de ADDI no genera guia
+ * propia (se despacha con la de Addi y se cierra al facturar) aunque las guias
+ * de su canal esten encendidas. Ver guidesEnabledForOrder en shared.
+ */
+export function useOrderGuides(order: { provider: string; addiGuide?: string | null }): {
+  enabled: boolean;
+  ready: boolean;
+} {
+  const { data } = useGuideModuleSetting();
+  // Con TODO encendido solo lo apaga la guia de Addi: esa respuesta no depende
+  // del ajuste, asi que es definitiva aunque el ajuste aun no haya llegado.
+  const fromAddi = !guidesEnabledForOrder(DEFAULT_GUIDE_MODULE, order);
+  return {
+    enabled: data ? guidesEnabledForOrder(data, order) : !fromAddi,
+    ready: fromAddi || data !== undefined,
+  };
 }

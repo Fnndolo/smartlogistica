@@ -93,6 +93,10 @@ export const orderSummarySchema = z.object({
    *  (legado). En 'domicilio' NO hay guideNumber ni link de rastreo. Texto
    *  libre a proposito: un valor inesperado no debe tumbar el listado entero. */
   shippingProvider: z.string().nullable().default(null),
+  /** Guia que genero ADDI para el pedido (VTEX de Addi Logistics), o null. Un
+   *  pedido con ella se despacha con esa guia: no ofrece generar otra (ver
+   *  guidesEnabledForOrder). */
+  addiGuide: z.string().nullable().default(null),
   // Confirmacion de direccion por WhatsApp: null = sin responder.
   addressStatus: addressStatusSchema.nullable(),
   confirmedAddress: z.string().nullable(),

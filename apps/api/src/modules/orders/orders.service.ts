@@ -58,6 +58,7 @@ import {
   DELIVERY_SUPPORT_PREFIX,
   GUIDE_CHANNEL_LABEL,
   guidesEnabledFor,
+  guidesEnabledForOrder,
   type MarketplaceProvider,
 } from '@smartlogistica/shared';
 import { PDFDocument } from 'pdf-lib';
@@ -291,7 +292,20 @@ export class OrdersService implements OnModuleInit {
   }
 
   /**
-   * Con las guias APAGADAS para el canal del pedido no se emite ningun envio:
+   * ¿Este PEDIDO genera guia propia? Lo del canal, salvo que ya traiga la guia
+   * de ADDI: ese se despacha con ella y se cierra al facturar (aunque las
+   * guias del canal esten encendidas). Ver guidesEnabledForOrder en shared.
+   */
+  private async guidesEnabledForOrder(order: {
+    provider: string;
+    addiGuide?: string | null;
+  }): Promise<boolean> {
+    return guidesEnabledForOrder(await loadGuideModule(), order);
+  }
+
+  /**
+   * Con las guias APAGADAS para el canal del pedido (o si el pedido ya trae la
+   * guia de Addi) no se emite ningun envio:
    * ni Coordinadora, ni Skydropx, ni soporte de domicilio, ni "Hacer todo". El
    * front ya no los ofrece; esto ataja una pestaña que quedo abierta de antes.
    * Si el pedido no existe, no decide aqui: lo rechaza la carga de siempre.
@@ -299,13 +313,17 @@ export class OrdersService implements OnModuleInit {
   private async assertGuidesEnabled(orderId: string): Promise<void> {
     const row = await getTenantContext().prisma.order.findUnique({
       where: { id: orderId },
-      select: { provider: true },
+      select: { provider: true, addiGuide: true },
     });
-    if (row && !(await this.guidesEnabled(row.provider))) {
+    if (!row || (await this.guidesEnabledForOrder(row))) return;
+    if (row.provider === 'vtex' && row.addiGuide) {
       throw new BadRequestException(
-        `Las guías están apagadas para los pedidos de ${GUIDE_CHANNEL_LABEL[row.provider as MarketplaceProvider] ?? row.provider}: al facturar, el pedido se cierra solo. Para generar guías, enciéndelas en Ajustes › Envíos.`,
+        `Este pedido ya tiene la guía de Addi ${row.addiGuide}: se despacha con esa (el rótulo está en la conversación) y al facturar se cierra solo en VTEX.`,
       );
     }
+    throw new BadRequestException(
+      `Las guías están apagadas para los pedidos de ${GUIDE_CHANNEL_LABEL[row.provider as MarketplaceProvider] ?? row.provider}: al facturar, el pedido se cierra solo. Para generar guías, enciéndelas en Ajustes › Envíos.`,
+    );
   }
 
   constructor(
@@ -2971,7 +2989,8 @@ export class OrdersService implements OnModuleInit {
     // Solo VTEX, explicito: otro marketplace que llegue tendra su propio cierre.
     // Best-effort como siempre: si VTEX falla, la factura de Alegra queda y el
     // panel ofrece "Cerrar en VTEX" (retryFinalize).
-    else if (order.provider === 'vtex' && !(await this.guidesEnabled('vtex'))) {
+    // Igual el que ya trae la guia de ADDI, con las guias encendidas o no.
+    else if (order.provider === 'vtex' && !(await this.guidesEnabledForOrder(order))) {
       await this.closeInVtexAtInvoice(order, auth);
     }
     await this.dropFeedsForOrder(orderId);
@@ -4375,7 +4394,8 @@ export class OrdersService implements OnModuleInit {
     const guide = await this.existingGuide(order.id);
     // Sin guia solo se cierra con el modulo APAGADO (si esta encendido, la guia
     // es la que cierra y aun no se ha generado).
-    const withoutGuide = !guide && !(await this.guidesEnabled(order.provider));
+    // (Ni con el pedido que ya trae la guia de Addi: no tendra guia propia.)
+    const withoutGuide = !guide && !(await this.guidesEnabledForOrder(order));
     if (!invoice || (!guide && !withoutGuide)) {
       await this.systemMessage(
         order.id,
@@ -4688,6 +4708,7 @@ export class OrdersService implements OnModuleInit {
       shippingUpdatedAt: o.shippingUpdatedAt ? o.shippingUpdatedAt.toISOString() : null,
       // Sin esto la tabla no puede distinguir "sin guia" de "sale por domicilio".
       shippingProvider: o.shippingProvider,
+      addiGuide: o.addiGuide,
       addressStatus: (o.addressStatus as OrderSummary['addressStatus']) ?? null,
       confirmedAddress: o.confirmedAddress,
       addressConfirmedAt: o.addressConfirmedAt ? o.addressConfirmedAt.toISOString() : null,

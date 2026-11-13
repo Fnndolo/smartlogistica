@@ -18,6 +18,7 @@ import { Label } from '@/components/ui/label';
 import { ApiError, api } from '@/lib/api-client';
 import { cn } from '@/lib/utils';
 
+import { useGuideModule } from '../orders/use-guide-module';
 import {
   BTN_GHOST_CLS,
   BTN_PRIMARY_CLS,
@@ -67,6 +68,11 @@ export function AddiLbaCard() {
 
   const configured = Boolean(data);
   const showForm = !isLoading && !isError && (editing || !configured);
+  // El boton de este modo es el de las guias de VTEX (tarjeta de arriba):
+  // encendidas = cada sede genera su guia y lo de Addi queda EN PAUSA. Solo con
+  // el ajuste ya cargado, para no pintar "En pausa" un instante sin serlo.
+  const vtexGuides = useGuideModule('vtex');
+  const paused = configured && vtexGuides.ready && vtexGuides.enabled;
 
   useEffect(() => {
     if (!editing) return;
@@ -147,7 +153,11 @@ export function AddiLbaCard() {
         title="Guías de Addi"
         badge={
           data ? (
-            data.status === 'error' ? (
+            paused ? (
+              <Pill tone="muted" dot>
+                En pausa
+              </Pill>
+            ) : data.status === 'error' ? (
               <Pill tone="bad" dot>
                 Con error
               </Pill>
@@ -290,7 +300,16 @@ export function AddiLbaCard() {
                 : 'Ninguna (las guías se traen solas al llegar cada pedido)'}
             </dd>
           </dl>
-          {data.status === 'error' && data.lastError ? (
+          {paused ? (
+            <p className="rounded-[10px] border border-border bg-wash px-3 py-2.5 text-[12.5px] leading-[1.5] text-muted-foreground">
+              <b className="text-foreground">En pausa:</b> las guías de VTEX están encendidas (Módulo
+              de guías), así que cada sede genera la suya y ya no se le pregunta nada a Addi. Los
+              pedidos que ya traían guía de Addi se terminan con ella: salen con su rótulo y, si se
+              transfieren, la guía toma el remitente de la nueva sede. Para volver a este modo, apaga
+              las guías de VTEX; la conexión queda guardada.
+            </p>
+          ) : null}
+          {!paused && data.status === 'error' && data.lastError ? (
             <p className="rounded-[10px] bg-destructive/10 px-3 py-2 text-[12px] text-destructive">
               {data.lastError}
             </p>
@@ -327,6 +346,8 @@ export function AddiLbaCard() {
                 size="sm"
                 onClick={() => sync.mutate()}
                 loading={sync.isPending}
+                disabled={paused}
+                title={paused ? 'En pausa mientras las guías de VTEX estén encendidas' : undefined}
                 className={cn(BTN_PRIMARY_CLS, BTN_SM_CLS)}
               >
                 <RefreshCw className="h-3.5 w-3.5" />

@@ -70,7 +70,7 @@ import { ClaimChip } from './claim-chip';
 import { GuidePanel } from './guide-panel';
 import { InvoicePanel } from './invoice-panel';
 import { BADGE_COLOR_CLASSES, platformOf, usePlatforms } from './platform-badge';
-import { useGuideModule } from './use-guide-module';
+import { useOrderGuides } from './use-guide-module';
 import { useOrderActions } from './use-order-actions';
 import { WhatsappPanel } from './whatsapp-panel';
 import { compressImage } from '@/lib/compress-image';
@@ -388,8 +388,9 @@ function DrawerContent({
 
   // MODULO DE GUIAS (Ajustes › Envios), POR CANAL. Apagado solo deja de CREAR
   // guias: el pedido que ya tiene envio conserva su pestaña (rotulo, rastreo,
-  // entrega a domicilio). Los demas se cierran al facturar.
-  const { enabled: guidesOn } = useGuideModule(order.provider);
+  // entrega a domicilio). Los demas se cierran al facturar. El que ya trae la
+  // guia de ADDI tampoco crea otra (sale con la de Addi), aun encendidas.
+  const { enabled: guidesOn } = useOrderGuides(order);
   // Estos campos solo existen cuando ya se emitio un envio (el domicilio no
   // tiene guideNumber, pero si proveedor y estado).
   const hasShipment = Boolean(order.guideNumber || order.shippingProvider || order.shippingState);
@@ -653,6 +654,7 @@ function DrawerContent({
               orderId={order.id}
               manual={order.provider === 'manual'}
               provider={order.provider}
+              addiGuide={order.addiGuide ?? null}
             />
           </TabPane>
         ) : null}

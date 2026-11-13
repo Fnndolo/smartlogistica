@@ -100,5 +100,8 @@ export const addiGuideInfoSchema = z.object({
   }),
   /** El usuario puede pedir (re)aplicar el remitente de la sede actual. */
   canApply: z.boolean(),
+  /** Guias de Addi EN PAUSA (las de VTEX estan encendidas): no se busca la guia
+   *  de los pedidos que no la trajeron; los que ya la tienen se terminan igual. */
+  paused: z.boolean().default(false),
 });
 export type AddiGuideInfo = z.infer<typeof addiGuideInfoSchema>;
