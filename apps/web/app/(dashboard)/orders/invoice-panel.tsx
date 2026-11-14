@@ -18,15 +18,19 @@ import {
   Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import type {
-  AlegraItem,
-  AlegraPaymentAccount,
-  CatalogMatch,
-  GuidePreview,
-  InvoicePaymentMethod,
-  InvoicePreview,
-  InvoiceResult,
-  ProcessAllResult,
+import {
+  INVOICE_WARNINGS_CODE,
+  invoiceWarningsSchema,
+  type AlegraItem,
+  type AlegraPaymentAccount,
+  type CatalogMatch,
+  type GuidePreview,
+  type InvoiceMismatch,
+  type InvoicePaymentMethod,
+  type InvoicePreview,
+  type InvoiceResult,
+  type InvoiceWarnings,
+  type ProcessAllResult,
 } from '@smartlogistica/shared';
 
 import { Button } from '@/components/ui/button';
@@ -47,7 +51,40 @@ interface Line {
   quantity: number;
   // AVISO de la IA: el producto de la compra no corresponde al del pedido
   // (modelo/almacenamiento/RAM). Se puede facturar igual, previa confirmacion.
-  mismatch?: { expected: string; found: string; note: string } | null;
+  // Vale para ESE producto: al cambiarlo se borra (el API revisa el nuevo).
+  mismatch?: InvoiceMismatch | null;
+}
+
+/** Facturar / "Hacer todo" frenado por avisos de la IA: el modal los muestra. */
+interface PendingWarnings {
+  action: 'invoice' | 'all';
+  warnings: InvoiceWarnings;
+}
+
+/** Los avisos que trae el 409 del API al facturar (null = es otro error). */
+function warningsOf(err: unknown): InvoiceWarnings | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  const data = err.data as { code?: unknown; warnings?: unknown } | null | undefined;
+  if (!data || data.code !== INVOICE_WARNINGS_CODE) return null;
+  const parsed = invoiceWarningsSchema.safeParse(data.warnings);
+  return parsed.success ? parsed.data : null;
+}
+
+/** Mismo aviso (por contenido: cada refetch del preview trae objetos nuevos). */
+function sameMismatch(
+  a: InvoiceMismatch | null | undefined,
+  b: InvoiceMismatch | null | undefined,
+) {
+  if (!a || !b) return !a && !b;
+  return a.expected === b.expected && a.found === b.found && a.note === b.note;
+}
+
+/** Firma de unas lineas (producto x cantidad), para saber si siguen siendo las del preview. */
+function linesSignature(lines: Array<{ productName: string | null; quantity?: number }>): string {
+  return lines
+    .map((l) => `${(l.productName ?? '').trim().toUpperCase()}×${l.quantity ?? 1}`)
+    .sort()
+    .join('|');
 }
 
 /** Un pago elegido (pedidos MONTADOS a mano): cuenta de Alegra + medio + valor. */
@@ -155,10 +192,15 @@ export function InvoicePanel({
           codes.some((c) => !removedCodes.current.has(c))
         );
       });
-      // Enriquecer las existentes con el veredicto de la IA (llega despues).
+      // Enriquecer las existentes con el veredicto de la IA (llega despues),
+      // solo si siguen con el MISMO producto: el veredicto es de ese producto.
       const enriched = prev.map((p) => {
-        const match = fromPreview.find((f) => f.codesText === p.codesText);
-        return match && match.mismatch !== p.mismatch ? { ...p, mismatch: match.mismatch } : p;
+        const match = fromPreview.find(
+          (f) => f.codesText === p.codesText && f.productName === p.productName,
+        );
+        return match && !sameMismatch(match.mismatch, p.mismatch)
+          ? { ...p, mismatch: match.mismatch }
+          : p;
       });
       const changed = missing.length > 0 || enriched.some((p, i) => p !== prev[i]);
       return changed ? [...enriched, ...missing] : prev;
@@ -182,7 +224,15 @@ export function InvoicePanel({
   });
 
   const patch = (key: string, p: Partial<Line>) =>
-    setLines((ls) => (ls ?? []).map((l) => (l.key === key ? { ...l, ...p } : l)));
+    setLines((ls) =>
+      (ls ?? []).map((l) => {
+        if (l.key !== key) return l;
+        // Otro producto: el aviso de la IA era del anterior (al facturar, el
+        // API revisa el nuevo).
+        const productChanged = p.itemId !== undefined && p.itemId !== l.itemId;
+        return { ...l, ...p, ...(productChanged ? { mismatch: null } : {}) };
+      }),
+    );
   const remove = (key: string) =>
     setLines((ls) => {
       const target = (ls ?? []).find((l) => l.key === key);
@@ -208,10 +258,21 @@ export function InvoicePanel({
   const current = lines ?? [];
   const total = current.reduce((s, l) => s + (Number(l.price) || 0) * l.quantity, 0);
 
-  // Si la IA dice que algun IMEI trae un producto distinto al del pedido, no se
-  // factura de un clic: primero un modal que obliga a leer el aviso.
-  const mismatches = current.flatMap((l) => (l.mismatch ? [l.mismatch] : []));
-  const [pendingAction, setPendingAction] = useState<'invoice' | 'all' | null>(null);
+  // Avisos de la IA (producto distinto / pedido incompleto): los decide el API
+  // AL FACTURAR, sobre las lineas finales. Si hay alguno no factura: responde
+  // 409 con los avisos y aqui se abre el modal que obliga a leerlos; "Facturar
+  // igual" reenvia su token y el API deja el rastro en Registros.
+  const [pending, setPending] = useState<PendingWarnings | null>(null);
+
+  // Aviso PREVIO de "incompleto" (el preview lo calcula para las lineas de las
+  // fotos): solo mientras las lineas sigan siendo esas. Si el usuario agrega o
+  // cambia productos, el que decide es el API al facturar.
+  const incompleteHint =
+    preview?.incomplete &&
+    preview.lines.length > 0 &&
+    linesSignature(current) === linesSignature(preview.lines)
+      ? preview.incomplete
+      : null;
 
   // Codigos que llegaron por FOTO del chat: el preview arma UNA linea por foto,
   // asi que su presencia aqui dice (SOLO al pintar) si la linea nacio de una foto
@@ -248,6 +309,9 @@ export function InvoicePanel({
         .filter(Boolean);
       return {
         itemId: l.itemId!,
+        // Con el nombre el API revisa (IA) que sea el producto del pedido y que
+        // no falte nada. No viaja a Alegra.
+        ...(l.productName ? { name: l.productName.slice(0, 300) } : {}),
         price: Number(l.price),
         quantity: l.quantity,
         description: codes.length ? codes.join('\n') : undefined,
@@ -272,10 +336,13 @@ export function InvoicePanel({
     // Con clave: si el usuario cierra el drawer con la facturacion EN CURSO, al
     // volver el boton sigue "cargando" (useIsMutating) y no se puede re-enviar.
     mutationKey: ['op-invoice', orderId],
-    mutationFn: () =>
+    // `ack` = token de los avisos de la IA que el usuario confirmo (null = aun
+    // ninguno: si el API encuentra avisos, responde 409 y se abre el modal).
+    mutationFn: (ack: string | null) =>
       api.post<InvoiceResult>(`/v1/orders/${orderId}/invoice`, {
         lines: buildLines(),
         ...(manual ? { payments: buildPayments() } : {}),
+        acknowledgedWarnings: ack,
       }),
     onSuccess: (r) => {
       setResult(r);
@@ -287,7 +354,11 @@ export function InvoicePanel({
       // el pedido al facturar): queda COMPLETO -> la lista cambia de seccion.
       if (manual || !guidesOn) qc.invalidateQueries({ queryKey: ['orders'] });
     },
-    onError: (err) => toast.error(err instanceof ApiError ? err.message : 'No se pudo facturar'),
+    onError: (err) => {
+      const warnings = warningsOf(err);
+      if (warnings) setPending({ action: 'invoice', warnings });
+      else toast.error(err instanceof ApiError ? err.message : 'No se pudo facturar');
+    },
   });
 
   // Preview de la guia: se carga aqui para que "Hacer todo" pueda mandar el
@@ -315,9 +386,9 @@ export function InvoicePanel({
 
   const processAll = useMutation({
     mutationKey: ['op-all', orderId],
-    mutationFn: () =>
+    mutationFn: (ack: string | null) =>
       api.post<ProcessAllResult>(`/v1/orders/${orderId}/process-all`, {
-        invoice: { lines: buildLines() },
+        invoice: { lines: buildLines(), acknowledgedWarnings: ack },
         guide: {
           recipient: {
             name: recip!.name,
@@ -338,8 +409,11 @@ export function InvoicePanel({
       qc.invalidateQueries({ queryKey: ['guide-preview', orderId] });
       qc.invalidateQueries({ queryKey: ['orders'] });
     },
-    onError: (err) =>
-      toast.error(err instanceof ApiError ? err.message : 'No se pudo completar el proceso'),
+    onError: (err) => {
+      const warnings = warningsOf(err);
+      if (warnings) setPending({ action: 'all', warnings });
+      else toast.error(err instanceof ApiError ? err.message : 'No se pudo completar el proceso');
+    },
   });
 
   // Pendientes GLOBALES (aunque este panel se haya remontado): cuenta las
@@ -348,12 +422,10 @@ export function InvoicePanel({
   const doingAll = useIsMutating({ mutationKey: ['op-all', orderId] }) > 0;
   const busy = invoicing || doingAll;
 
-  const run = (action: 'invoice' | 'all') =>
-    action === 'invoice' ? invoice.mutate() : processAll.mutate();
-  const requestRun = (action: 'invoice' | 'all') => {
-    if (mismatches.length > 0) setPendingAction(action);
-    else run(action);
-  };
+  const run = (action: 'invoice' | 'all', ack: string | null = null) =>
+    action === 'invoice' ? invoice.mutate(ack) : processAll.mutate(ack);
+  // Siempre al API: el decide si hay avisos (y entonces vuelve con el modal).
+  const requestRun = (action: 'invoice' | 'all') => run(action);
 
   // Si la operacion la disparo una instancia YA desmontada (cerraron el drawer
   // mientras facturaba), sus onSuccess no corren aqui: al terminar (busy
@@ -531,6 +603,26 @@ export function InvoicePanel({
             />
           ))
         )}
+
+        {/* AVISO de la IA: el pedido trae mas de lo que se va a facturar (el
+            reloj o los audifonos del combo). Facturar asi pide confirmarlo. */}
+        {incompleteHint ? (
+          <div className="flex items-start gap-2.5 rounded-xl bg-amber-500/10 px-3.5 py-[11px] text-[12.5px] leading-[1.45] text-amber-600 dark:text-amber-400">
+            <AlertTriangle className="mt-px h-[15px] w-[15px] shrink-0" />
+            <span className="min-w-0 break-words">
+              <b>Aviso de la IA:</b>{' '}
+              {incompleteHint.missing.length > 0 ? (
+                <>
+                  falta facturar <b>{incompleteHint.missing.join(', ')}</b>.
+                </>
+              ) : (
+                incompleteHint.note
+              )}{' '}
+              Agrégalo con «Agregar» (o sube la foto de su serial al chat). Si facturas así, te
+              pediremos confirmarlo.
+            </span>
+          </div>
+        ) : null}
 
         {/* Total del pedido: cierra la seccion de productos (.total-row del mockup). */}
         <div className="!mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-border pt-3 text-[15px]">
@@ -777,14 +869,13 @@ export function InvoicePanel({
         )}
       </div>
 
-      <MismatchConfirm
-        action={pendingAction}
-        mismatches={mismatches}
-        onCancel={() => setPendingAction(null)}
+      <WarningsConfirm
+        pending={pending}
+        onCancel={() => setPending(null)}
         onConfirm={() => {
-          const action = pendingAction;
-          setPendingAction(null);
-          if (action && !busy) run(action);
+          const p = pending;
+          setPending(null);
+          if (p && !busy) run(p.action, p.warnings.token);
         }}
       />
     </div>
@@ -792,34 +883,35 @@ export function InvoicePanel({
 }
 
 /** Segundos que el boton de confirmar queda bloqueado: el tiempo de leer el aviso. */
-const MISMATCH_READ_SECONDS = 5;
+const WARNINGS_READ_SECONDS = 5;
 
 /**
- * Confirmacion antes de facturar cuando la IA dice que el IMEI trae un producto
- * distinto al del pedido. El boton de seguir arranca bloqueado unos segundos
- * para que el aviso se lea y no se despache con el reflejo del clic; el foco
- * cae en "Revisar", asi un Enter tampoco factura.
+ * Confirmacion antes de facturar cuando la IA encuentra avisos: un producto que
+ * no es el del pedido, o algo del pedido que falta facturar (el accesorio del
+ * combo). El boton de seguir arranca bloqueado unos segundos para que el aviso
+ * se lea y no se despache con el reflejo del clic; el foco cae en "Revisar",
+ * asi un Enter tampoco factura. Facturar igual queda registrado.
  */
-function MismatchConfirm({
-  action,
-  mismatches,
+function WarningsConfirm({
+  pending,
   onCancel,
   onConfirm,
 }: {
-  action: 'invoice' | 'all' | null;
-  mismatches: NonNullable<Line['mismatch']>[];
+  pending: PendingWarnings | null;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  const open = action !== null;
-  const [left, setLeft] = useState(MISMATCH_READ_SECONDS);
+  const open = pending !== null;
+  const [left, setLeft] = useState(WARNINGS_READ_SECONDS);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  // Cada aviso nuevo (otro token) reinicia la cuenta.
+  const token = pending?.warnings.token ?? null;
 
   // La cuenta se reinicia cada vez que se abre, contra el reloj (no por ticks).
   useEffect(() => {
-    if (!open) return;
-    const until = Date.now() + MISMATCH_READ_SECONDS * 1000;
-    setLeft(MISMATCH_READ_SECONDS);
+    if (!token) return;
+    const until = Date.now() + WARNINGS_READ_SECONDS * 1000;
+    setLeft(WARNINGS_READ_SECONDS);
     const id = setInterval(() => {
       const s = Math.max(0, Math.ceil((until - Date.now()) / 1000));
       setLeft(s);
@@ -827,7 +919,7 @@ function MismatchConfirm({
     }, 200);
     cancelRef.current?.focus();
     return () => clearInterval(id);
-  }, [open]);
+  }, [token]);
 
   // Escape cancela, en fase de captura + stopPropagation: si no, tambien
   // cerraria el drawer (que escucha Escape en document).
@@ -843,9 +935,19 @@ function MismatchConfirm({
     return () => document.removeEventListener('keydown', onKey, true);
   }, [open, onCancel]);
 
-  if (!open || typeof document === 'undefined') return null;
+  if (!pending || typeof document === 'undefined') return null;
+  const { mismatches, incomplete } = pending.warnings;
   const locked = left > 0;
-  const verb = action === 'all' ? 'Hacer todo' : 'Facturar';
+  const verb = pending.action === 'all' ? 'Hacer todo' : 'Facturar';
+
+  const title =
+    mismatches.length > 0 && incomplete
+      ? 'La factura no cuadra con el pedido'
+      : incomplete
+        ? 'El pedido va incompleto'
+        : mismatches.length > 1
+          ? `${mismatches.length} productos no corresponden al pedido`
+          : 'El producto no corresponde al pedido';
 
   return createPortal(
     <div
@@ -855,8 +957,8 @@ function MismatchConfirm({
       <div
         role="alertdialog"
         aria-modal="true"
-        aria-labelledby="mismatch-title"
-        aria-describedby="mismatch-desc"
+        aria-labelledby="warnings-title"
+        aria-describedby="warnings-desc"
         className="shadow-pop w-full max-w-md rounded-2xl border border-border bg-card p-5"
         onClick={(e) => e.stopPropagation()}
       >
@@ -865,22 +967,48 @@ function MismatchConfirm({
             <AlertTriangle className="h-[18px] w-[18px]" />
           </span>
           <div className="min-w-0">
-            <h3 id="mismatch-title" className="text-[15px] font-semibold leading-tight">
-              {mismatches.length > 1
-                ? `${mismatches.length} equipos no corresponden al pedido`
-                : 'El equipo no corresponde al pedido'}
+            <h3 id="warnings-title" className="text-[15px] font-semibold leading-tight">
+              {title}
             </h3>
             <p
-              id="mismatch-desc"
+              id="warnings-desc"
               className="mt-1.5 text-[12.5px] leading-relaxed text-muted-foreground"
             >
-              La IA revisó el IMEI contra lo que compró el cliente. Si sigues, la factura sale con
-              un equipo que <b className="text-foreground">no es el que pidió</b>.
+              La IA revisó la factura contra lo que compró el cliente. Si sigues, la factura sale{' '}
+              {mismatches.length > 0 && incomplete ? (
+                <>
+                  con un producto que <b className="text-foreground">no es el que pidió</b> y{' '}
+                  <b className="text-foreground">sin parte del pedido</b>.
+                </>
+              ) : incomplete ? (
+                <>
+                  <b className="text-foreground">sin parte del pedido</b>.
+                </>
+              ) : (
+                <>
+                  con un producto que <b className="text-foreground">no es el que pidió</b>.
+                </>
+              )}
             </p>
           </div>
         </div>
 
         <ul className="mt-4 max-h-[40vh] space-y-2 overflow-y-auto">
+          {incomplete ? (
+            <li className="rounded-xl border border-amber-500/30 bg-amber-500/[0.06] px-3.5 py-2.5 text-[12.5px] leading-[1.45]">
+              <dl className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-2 gap-y-1">
+                <dt className="font-semibold text-hint">Falta</dt>
+                <dd className="min-w-0 break-words font-semibold text-amber-600 dark:text-amber-400">
+                  {incomplete.missing.length > 0
+                    ? incomplete.missing.join(', ')
+                    : 'Parte del pedido'}
+                </dd>
+              </dl>
+              {incomplete.note ? (
+                <p className="mt-1.5 break-words text-muted-foreground">{incomplete.note}</p>
+              ) : null}
+            </li>
+          ) : null}
           {mismatches.map((m, i) => (
             <li
               key={i}
@@ -889,7 +1017,7 @@ function MismatchConfirm({
               <dl className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-2 gap-y-1">
                 <dt className="font-semibold text-hint">Pedido</dt>
                 <dd className="min-w-0 break-words font-semibold">{m.expected}</dd>
-                <dt className="font-semibold text-hint">IMEI</dt>
+                <dt className="font-semibold text-hint">Factura</dt>
                 <dd className="min-w-0 break-words font-semibold text-amber-600 dark:text-amber-400">
                   {m.found}
                 </dd>
@@ -899,7 +1027,11 @@ function MismatchConfirm({
           ))}
         </ul>
 
-        <div className="mt-5 flex flex-wrap justify-end gap-2">
+        <p className="mt-3 text-[11.5px] leading-[1.45] text-hint">
+          Si {verb === 'Facturar' ? 'facturas' : 'sigues'} igual, queda registrado en el pedido.
+        </p>
+
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
           <Button
             ref={cancelRef}
             variant="outline"

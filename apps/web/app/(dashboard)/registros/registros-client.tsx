@@ -19,6 +19,7 @@ import {
   LogIn,
   MessageCircle,
   PackageCheck,
+  PackageMinus,
   PackagePlus,
   PackageX,
   Pencil,
@@ -28,6 +29,7 @@ import {
   ScrollText,
   Search,
   ShieldAlert,
+  Smartphone,
   Trash2,
   Truck,
   Undo2,
@@ -53,6 +55,9 @@ const CATEGORIES: { value: AuditCategory | ''; label: string; icon: LucideIcon }
   { value: 'acceso', label: 'Ingresos', icon: LogIn },
   { value: 'pedidos', label: 'Pedidos', icon: ArrowRightLeft },
   { value: 'facturas', label: 'Facturas', icon: ReceiptText },
+  // Facturas emitidas IGNORANDO el aviso de la IA, cada tipo con su filtro.
+  { value: 'producto_distinto', label: 'Producto distinto', icon: Smartphone },
+  { value: 'incompletos', label: 'Incompletos', icon: PackageMinus },
   { value: 'guias', label: 'Guías', icon: Truck },
   { value: 'mensajes', label: 'Mensajes', icon: MessageCircle },
   { value: 'equipo', label: 'Equipo', icon: Users },
@@ -98,6 +103,10 @@ function lookOf(action: string): { icon: LucideIcon; tone: Tone } {
       return { icon: ReceiptText, tone: 'emerald' };
     case 'vtex_invoiced_external':
       return { icon: ReceiptText, tone: 'amber' };
+    case 'invoiced_product_mismatch':
+      return { icon: Smartphone, tone: 'amber' };
+    case 'invoiced_incomplete':
+      return { icon: PackageMinus, tone: 'amber' };
     case 'guide_generated':
       return { icon: Truck, tone: 'amber' };
     case 'order.deleted':
@@ -289,8 +298,8 @@ export function RegistrosClient() {
           </Button>
         </div>
         <p className="relative mt-1 max-w-[70ch] text-[13px] text-muted-foreground">
-          Cada movimiento que deja rastro: ingresos, facturas, guías, movidas de sede, mensajes
-          eliminados o editados y cambios del equipo.
+          Cada movimiento que deja rastro: ingresos, facturas (y las que salieron ignorando un aviso
+          de la IA), guías, movidas de sede, mensajes eliminados o editados y cambios del equipo.
         </p>
       </div>
 
@@ -538,7 +547,8 @@ function Detail({ action, text }: { action: string; text: string }) {
   const removed = action.endsWith('_deleted') || action === 'member.removed';
   const lines = text.split('\n').filter(Boolean);
   const labeled = lines.map((l) => {
-    const m = /^(Antes|Ahora|Rol|Nombre|Sedes|Prefijo de factura): ([\s\S]*)$/.exec(l);
+    const m =
+      /^(Antes|Ahora|Rol|Nombre|Sedes|Prefijo de factura|Pedido|Factura|Faltó): ([\s\S]*)$/.exec(l);
     return m ? { label: m[1]!, value: m[2]! } : { label: null, value: l };
   });
   return (

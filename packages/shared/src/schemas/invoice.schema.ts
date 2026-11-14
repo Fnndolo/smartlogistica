@@ -24,6 +24,48 @@ export const saveSellerPrefSchema = z.object({ seller: alegraSellerSchema.nullab
 export type SaveSellerPrefInput = z.infer<typeof saveSellerPrefSchema>;
 
 /**
+ * AVISO de la IA (experta en celulares): el producto de una linea no
+ * corresponde al del PEDIDO (modelo/almacenamiento/RAM, o un accesorio que el
+ * pedido no trae).
+ */
+export const invoiceMismatchSchema = z.object({
+  /** Producto del pedido mas parecido, textual. */
+  expected: z.string(),
+  /** Lo que se va a facturar (nombre del producto de Alegra). */
+  found: z.string(),
+  note: z.string(),
+});
+export type InvoiceMismatch = z.infer<typeof invoiceMismatchSchema>;
+
+/**
+ * AVISO de la IA: la factura NO trae todo el pedido. Tipico de los combos
+ * ("celular + reloj"): se factura el equipo y se olvida el accesorio.
+ */
+export const invoiceIncompleteSchema = z.object({
+  /** Lo que falta facturar, tal como lo dice el pedido ("Reloj Smart Watch"). */
+  missing: z.array(z.string()),
+  note: z.string(),
+});
+export type InvoiceIncomplete = z.infer<typeof invoiceIncompleteSchema>;
+
+/**
+ * Avisos de una factura antes de emitirla. Si hay alguno, el API NO factura
+ * hasta que se confirme (el modal de 5 s); confirmarlo deja el rastro en el
+ * pedido y en Registros.
+ */
+export const invoiceWarningsSchema = z.object({
+  mismatches: z.array(invoiceMismatchSchema),
+  incomplete: invoiceIncompleteSchema.nullable(),
+  /** Huella de ESTOS avisos: se devuelve al confirmar. Si al facturar los
+   *  avisos ya son otros, se vuelve a preguntar en vez de facturar a ciegas. */
+  token: z.string(),
+});
+export type InvoiceWarnings = z.infer<typeof invoiceWarningsSchema>;
+
+/** `code` del 409 que pide confirmar los avisos (trae `warnings`). */
+export const INVOICE_WARNINGS_CODE = 'INVOICE_WARNINGS';
+
+/**
  * Una linea del preview = UNA foto (un celular).
  *
  * `codes` trae SOLO EL IMEI 1, aunque la foto de un dual-SIM tenga dos: el
@@ -40,12 +82,9 @@ export const invoiceLinePreviewSchema = z.object({
   quantity: z.number().int().min(1).default(1),
   matched: z.boolean(),
   // AVISO de la IA (experta en celulares): el producto de la COMPRA no
-  // corresponde al del PEDIDO (modelo/almacenamiento/RAM). Solo informa,
-  // no bloquea facturar. null = coincide o no se pudo verificar.
-  mismatch: z
-    .object({ expected: z.string(), found: z.string(), note: z.string() })
-    .nullable()
-    .default(null),
+  // corresponde al del PEDIDO (modelo/almacenamiento/RAM). Facturar igual pide
+  // confirmarlo. null = coincide o no se pudo verificar.
+  mismatch: invoiceMismatchSchema.nullable().default(null),
 });
 export type InvoiceLinePreview = z.infer<typeof invoiceLinePreviewSchema>;
 
@@ -135,12 +174,18 @@ export const invoicePreviewSchema = z.object({
    *  completo. Con el modulo de guias apagado el cierre sale al facturar, y si
    *  fallo (VTEX caido) el panel ofrece reintentarlo desde aqui. */
   closed: z.boolean().default(false),
+  /** AVISO de la IA para las lineas de las FOTOS: falta facturar parte del
+   *  pedido (p. ej. el reloj del combo). null = completo o no se pudo revisar. */
+  incomplete: invoiceIncompleteSchema.nullable().default(null),
 });
 export type InvoicePreview = z.infer<typeof invoicePreviewSchema>;
 
 /** Linea a facturar (ya revisada/corregida por el usuario). */
 export const createInvoiceLineSchema = z.object({
   itemId: z.string().min(1, 'Falta el producto'),
+  /** Nombre del producto de Alegra que se ve en el panel: con el se revisa,
+   *  antes de facturar, que el producto sea el del pedido y que no falte nada. */
+  name: z.string().trim().max(300).optional(),
   description: z.string().max(500).optional(),
   price: z.number().nonnegative(),
   quantity: z.number().int().min(1).default(1),
@@ -178,6 +223,13 @@ export const createInvoiceSchema = z.object({
   // SOLO pedidos montados a mano: pagos elegidos (los VTEX siguen saliendo
   // pagados con la cuenta MARKETPLACE ADDI, como siempre).
   payments: z.array(invoicePaymentSchema).max(3, 'Maximo 3 pagos').optional(),
+  /**
+   * Avisos de la IA (producto distinto / pedido incompleto) que el usuario leyo
+   * y decidio facturar igual: el `token` del 409 que los mostro.
+   * null = aun no ha visto ninguno (el panel siempre lo manda: el API revisa).
+   * Ausente = panel viejo (antes de existir el control): se factura sin el.
+   */
+  acknowledgedWarnings: z.string().max(100).nullable().optional(),
 });
 export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>;
 

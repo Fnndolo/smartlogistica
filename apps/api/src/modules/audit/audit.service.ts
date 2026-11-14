@@ -58,6 +58,8 @@ const EVENT_ACTIONS = [
   'manual_completed',
   'packed',
   'unpacked',
+  'invoiced_product_mismatch',
+  'invoiced_incomplete',
 ] as const;
 
 const CATEGORY_OF: Record<string, AuditCategory> = {
@@ -74,6 +76,9 @@ const CATEGORY_OF: Record<string, AuditCategory> = {
   invoiced: 'facturas',
   vtex_invoiced: 'facturas',
   vtex_invoiced_external: 'facturas',
+  // Facturo IGNORANDO el aviso de la IA: cada uno con su filtro.
+  invoiced_product_mismatch: 'producto_distinto',
+  invoiced_incomplete: 'incompletos',
   guide_generated: 'guias',
   'chat.message_deleted': 'mensajes',
   'chat.message_edited': 'mensajes',
@@ -471,6 +476,38 @@ function describe(
         summary: `Completó el pedido manual${str(d.invoiceNumber) ? ` · factura ${str(d.invoiceNumber)}` : ''}${str(d.tracking) ? ` + guía ${str(d.tracking)}` : ''}`,
         detail: null,
       };
+    case 'invoiced_product_mismatch': {
+      const number = str(d.invoiceNumber);
+      const items = Array.isArray(d.mismatches)
+        ? (d.mismatches as unknown[]).filter(
+            (m): m is Record<string, unknown> => typeof m === 'object' && m !== null,
+          )
+        : [];
+      return {
+        summary: `Facturó con ${items.length > 1 ? `${items.length} productos distintos` : 'un producto distinto'} al del pedido, ignorando el aviso de la IA${number ? ` · factura ${number}` : ''}`,
+        detail:
+          items
+            .map((m) =>
+              [`Pedido: ${str(m.expected) ?? '—'}`, `Factura: ${str(m.found) ?? '—'}`, str(m.note)]
+                .filter(Boolean)
+                .join('\n'),
+            )
+            .join('\n') || null,
+      };
+    }
+    case 'invoiced_incomplete': {
+      const number = str(d.invoiceNumber);
+      const missing = Array.isArray(d.missing)
+        ? (d.missing as unknown[]).map(str).filter((m): m is string => m !== null)
+        : [];
+      return {
+        summary: `Facturó el pedido incompleto, ignorando el aviso de la IA${number ? ` · factura ${number}` : ''}`,
+        detail:
+          [missing.length > 0 ? `Faltó: ${missing.join(', ')}` : null, str(d.note)]
+            .filter(Boolean)
+            .join('\n') || null,
+      };
+    }
     case 'packed':
       return { summary: 'Empacó el pedido', detail: null };
     case 'unpacked':

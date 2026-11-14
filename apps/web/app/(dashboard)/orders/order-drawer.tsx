@@ -26,6 +26,7 @@ import {
   Pencil,
   Printer,
   Package,
+  PackageMinus,
   PlusCircle,
   ReceiptText,
   Reply,
@@ -3930,6 +3931,8 @@ function EventIcon({ type }: { type: string }) {
   if (type === 'vtex_invoiced' || type === 'vtex_invoiced_external' || type === 'manual_completed')
     return <ReceiptText className={cls} />;
   if (type === 'wa_confirmation') return <MessageCircle className={cls} />;
+  if (type === 'invoiced_product_mismatch') return <Smartphone className={cls} />;
+  if (type === 'invoiced_incomplete') return <PackageMinus className={cls} />;
   return <Activity className={cls} />;
 }
 
@@ -3981,6 +3984,29 @@ function describeEvent(e: OrderEvent): string {
       return `Facturado en VTEX · MKT ${(e.data.invoiceNumber as string | undefined) ?? ''}`.trim();
     case 'vtex_invoiced_external':
       return 'Facturado POR FUERA de SmartLogística (cerrado directamente en VTEX)';
+    // Factura emitida IGNORANDO el aviso de la IA (quien confirmo el modal).
+    case 'invoiced_product_mismatch': {
+      const list = Array.isArray(e.data.mismatches)
+        ? (e.data.mismatches as Array<{ expected?: unknown; found?: unknown }>)
+        : [];
+      const pairs = list
+        .map((m) =>
+          typeof m.found === 'string' && typeof m.expected === 'string'
+            ? `«${m.found}» por «${m.expected}»`
+            : null,
+        )
+        .filter(Boolean)
+        .join('; ');
+      return `Facturó un producto distinto al del pedido, ignorando el aviso de la IA${pairs ? `: ${pairs}` : ''}`;
+    }
+    case 'invoiced_incomplete': {
+      const missing = Array.isArray(e.data.missing)
+        ? (e.data.missing as unknown[]).filter((m): m is string => typeof m === 'string')
+        : [];
+      return missing.length > 0
+        ? `Facturó el pedido incompleto, ignorando el aviso de la IA: faltó ${missing.join(', ')}`
+        : 'Facturó el pedido incompleto, ignorando el aviso de la IA';
+    }
     case 'manual_completed':
       return `Pedido completado · Factura ${(e.data.invoiceNumber as string | undefined) ?? ''} + guía ${(e.data.tracking as string | undefined) ?? ''} (sin MKT)`.trim();
     case 'wa_confirmation':

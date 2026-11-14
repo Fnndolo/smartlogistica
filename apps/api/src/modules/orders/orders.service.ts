@@ -7,9 +7,12 @@ import {
   NotFoundException,
   type OnModuleInit,
 } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { isAxiosError } from 'axios';
 import type {
+  InvoiceIncomplete,
+  InvoiceMismatch,
+  InvoiceWarnings,
   AlegraItem,
   AlegraPaymentAccount,
   AssignOrdersInput,
@@ -59,6 +62,7 @@ import {
   GUIDE_CHANNEL_LABEL,
   guidesEnabledFor,
   guidesEnabledForOrder,
+  INVOICE_WARNINGS_CODE,
   type MarketplaceProvider,
 } from '@smartlogistica/shared';
 import { PDFDocument } from 'pdf-lib';
@@ -113,6 +117,63 @@ const IMAGE_EXT: Record<ImageMime, string> = {
  * - manual_completed: pedido MONTADO a mano completado (factura + guia; sin VTEX ni MKT).
  */
 const FINALIZED_EVENTS = ['vtex_invoiced', 'manual_completed'];
+
+/**
+ * Actividad que deja una factura emitida IGNORANDO un aviso de la IA (el
+ * usuario leyo el modal y facturo igual). Registros los filtra aparte.
+ */
+const IGNORED_MISMATCH_EVENT = 'invoiced_product_mismatch';
+const IGNORED_INCOMPLETE_EVENT = 'invoiced_incomplete';
+
+/** Tope de espera de la IA al revisar una factura: facturar nunca se cuelga por ella. */
+const INVOICE_CHECK_TIMEOUT_MS = 10_000;
+
+/** Tope de veredictos de la IA guardados en memoria (al pasarse se va el mas viejo). */
+const VERDICT_CACHE_MAX = 5_000;
+
+/**
+ * El nombre de un producto del pedido es un COMBO ("CELULAR X + RELOJ SMART
+ * WATCH"): trae accesorios que van en su propia linea de la factura. El "+"
+ * pegado ("PRO+") es parte del modelo, no un combo.
+ */
+const COMBO_RE = /\s\+\s*\S|\b(combo|obsequio|regalo|incluye)\b/i;
+
+/** Nombre comparable: sin tildes, mayusculas y espacios simples. */
+function normName(s: string): string {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
+}
+
+/** `p` o, si falla o tarda mas de `ms`, `fallback` (lo que llegue tarde se ignora). */
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    p.catch(() => fallback),
+    new Promise<T>((resolve) => {
+      timer = setTimeout(() => resolve(fallback), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/** Map con tope: guardar uno nuevo con el Map lleno saca el mas viejo. */
+function cacheSet<K, V>(map: Map<K, V>, key: K, value: V): void {
+  if (!map.has(key) && map.size >= VERDICT_CACHE_MAX) {
+    const oldest = map.keys().next();
+    if (!oldest.done) map.delete(oldest.value);
+  }
+  map.set(key, value);
+}
+
+/** Huella de unos avisos: confirmar exige que sean ESTOS (si cambian, se re-pregunta). */
+function warningsToken(
+  mismatches: InvoiceMismatch[],
+  incomplete: InvoiceIncomplete | null,
+): string {
+  const body = JSON.stringify({
+    m: mismatches.map((m) => [m.expected, m.found, m.note]),
+    i: incomplete ? [incomplete.missing, incomplete.note] : null,
+  });
+  return createHash('sha256').update(body).digest('hex').slice(0, 24);
+}
 
 /**
  * Tope de vida de una bandeja guardada (Chats / Menciones). Un mensaje nuevo
@@ -209,12 +270,13 @@ export class OrdersService implements OnModuleInit {
    * pasaban el chequeo de existingInvoice antes de que la primera terminara.
    */
   private readonly opLocks = new Set<string>();
-  // Veredictos de la IA "producto de la compra vs pedido" (por linea, evita
-  // re-pagar el LLM en cada refetch del preview).
-  private readonly productMatchCache = new Map<
-    string,
-    { expected: string; found: string; note: string } | null
-  >();
+  // Veredictos de la IA "producto a facturar vs pedido" (por linea, evita
+  // re-pagar el LLM en cada refetch del preview). null = coincide.
+  private readonly productMatchCache = new Map<string, InvoiceMismatch | null>();
+  // Veredictos de la IA "¿la factura trae todo el pedido?" (por pedido + las
+  // lineas exactas). null = completa. El preview lo calienta: al facturar con
+  // las mismas lineas la respuesta es inmediata.
+  private readonly completenessCache = new Map<string, InvoiceIncomplete | null>();
   /**
    * Bandejas de Chats y Menciones por usuario. Las pide CADA pestaña abierta
    * (el numerito del menu) con cada evento en vivo, y cada una recorre el chat
@@ -2669,6 +2731,7 @@ export class OrdersService implements OnModuleInit {
         billedTo,
         closed: Boolean(closed),
         lines: [],
+        incomplete: null,
         client: {
           name: c.name,
           identification: c.identification,
@@ -2699,6 +2762,7 @@ export class OrdersService implements OnModuleInit {
           matched: true,
           mismatch: null,
         })),
+        incomplete: null,
         client: {
           name: client.name,
           identification: client.identification,
@@ -2718,26 +2782,30 @@ export class OrdersService implements OnModuleInit {
       suggestedPrice: vtexPriceForProduct(l.productName, vtexItems) ?? l.suggestedPrice,
     }));
 
-    // IA experta en celulares: ¿el producto de la COMPRA (por el IMEI leido)
-    // corresponde a ALGUN producto del PEDIDO (modelo + almacenamiento + RAM)?
-    // Solo un AVISO (no bloquea facturar). Best-effort con cache por linea.
+    // IA experta en celulares, sobre las lineas de las FOTOS: ¿cada producto
+    // corresponde a ALGUNO del PEDIDO (modelo + almacenamiento + RAM)? ¿y no
+    // falta nada (el reloj del combo)? Aqui solo AVISA en el panel; al facturar
+    // el API vuelve a revisar las lineas finales (con estos veredictos ya en
+    // cache) y pide confirmarlo. Best-effort: sin IA no hay aviso.
     const orderNames = order.items.map((i) => i.name).filter(Boolean);
-    const withVerdict = await Promise.all(
-      priced.map(async (l) => {
-        if (!l.productName || orderNames.length === 0) return { ...l, mismatch: null };
-        const cacheKey = `${orderId}:${l.productName}`;
-        if (this.productMatchCache.has(cacheKey)) {
-          return { ...l, mismatch: this.productMatchCache.get(cacheKey) ?? null };
-        }
-        const verdict = await this.ai.verifyProductMatch(orderNames, l.productName);
-        const mismatch =
-          verdict && !verdict.match
-            ? { expected: verdict.expected, found: l.productName, note: verdict.note }
-            : null;
-        this.productMatchCache.set(cacheKey, mismatch);
-        return { ...l, mismatch };
-      }),
-    );
+    const [withVerdict, incomplete] = await Promise.all([
+      Promise.all(
+        priced.map(async (l) => ({
+          ...l,
+          mismatch:
+            l.productName && orderNames.length > 0
+              ? await this.productMismatch(orderId, orderNames, l.productName)
+              : null,
+        })),
+      ),
+      // Con alguna foto sin producto aun no se sabe que se va a facturar.
+      priced.length > 0 && priced.every((l) => l.productName)
+        ? this.incompleteness(
+            order,
+            priced.map((l) => ({ name: l.productName!, quantity: l.quantity ?? 1 })),
+          )
+        : Promise.resolve(null),
+    ]);
 
     const client = extractInvoiceClient(order);
     return {
@@ -2747,6 +2815,7 @@ export class OrdersService implements OnModuleInit {
       // Se factura el TOTAL del pedido (envio/recargos incluidos), no solo el
       // valor de los productos: el excedente se reparte entre las lineas.
       lines: prorateToOrderTotal(withVerdict, Number(order.totalValue)),
+      incomplete,
       client: {
         name: client.name,
         identification: client.identification,
@@ -2755,6 +2824,176 @@ export class OrdersService implements OnModuleInit {
         address: client.address?.street ?? null,
       },
     };
+  }
+
+  /**
+   * ¿El producto a facturar `name` es el del pedido? Aviso de la IA o null
+   * (coincide, o no se pudo revisar). Con cache por pedido + producto; un fallo
+   * de la IA no se guarda (se reintenta la proxima vez).
+   */
+  private productMismatch(
+    orderId: string,
+    orderNames: string[],
+    name: string,
+  ): Promise<InvoiceMismatch | null> {
+    // Mismo nombre que un producto del pedido (los montados a mano, que se
+    // eligen del propio catalogo de Alegra): ni se pregunta.
+    const target = normName(name);
+    if (orderNames.some((n) => normName(n) === target)) return Promise.resolve(null);
+    const key = `${orderId}:${name}`;
+    if (this.productMatchCache.has(key)) {
+      return Promise.resolve(this.productMatchCache.get(key) ?? null);
+    }
+    const pending = this.ai.verifyProductMatch(orderNames, name).then((verdict) => {
+      if (!verdict) return null;
+      const mismatch = verdict.match
+        ? null
+        : { expected: verdict.expected, found: name, note: verdict.note };
+      cacheSet(this.productMatchCache, key, mismatch);
+      return mismatch;
+    });
+    return withTimeout(pending, INVOICE_CHECK_TIMEOUT_MS, null);
+  }
+
+  /**
+   * ¿Las lineas traen TODO el pedido? Aviso de lo que falta, o null.
+   *
+   * La IA solo se consulta cuando hay algo que revisar: un combo ("+ reloj")
+   * o menos unidades facturadas que pedidas. Si la IA no responde, cuenta lo
+   * seguro: menos unidades que las pedidas es incompleto siempre.
+   */
+  private async incompleteness(
+    order: { id: string; items: Array<{ name: string; quantity: number }> },
+    lines: Array<{ name: string; quantity: number }>,
+  ): Promise<InvoiceIncomplete | null> {
+    const items = order.items.filter((i) => i.name?.trim());
+    if (items.length === 0 || lines.length === 0) return null;
+    const ordered = items.reduce((s, i) => s + i.quantity, 0);
+    const invoiced = lines.reduce((s, l) => s + l.quantity, 0);
+    const short = invoiced < ordered;
+    const combo = items.some((i) => COMBO_RE.test(i.name));
+    if (!combo && !short) return null;
+
+    const key =
+      `${order.id}:` +
+      JSON.stringify([
+        items.map((i) => [normName(i.name), i.quantity]),
+        lines.map((l) => [normName(l.name), l.quantity]).sort(),
+      ]);
+    let verdict: InvoiceIncomplete | null | 'unknown';
+    if (this.completenessCache.has(key)) {
+      verdict = this.completenessCache.get(key) ?? null;
+    } else {
+      const pending = this.ai
+        .verifyInvoiceCompleteness(
+          items.map((i) => ({ name: i.name, quantity: i.quantity })),
+          lines,
+        )
+        .then((v): InvoiceIncomplete | null | 'unknown' => {
+          if (!v) return 'unknown';
+          const result = v.complete
+            ? null
+            : {
+                missing: v.missing,
+                note:
+                  v.note.trim() ||
+                  (v.missing.length > 0
+                    ? `Falta facturar: ${v.missing.join(', ')}.`
+                    : 'La factura no trae todo el pedido.'),
+              };
+          cacheSet(this.completenessCache, key, result);
+          return result;
+        });
+      verdict = await withTimeout(pending, INVOICE_CHECK_TIMEOUT_MS, 'unknown' as const);
+    }
+    if (verdict && verdict !== 'unknown') return verdict;
+    return short
+      ? {
+          missing: [],
+          note: `El pedido trae ${ordered} producto${ordered === 1 ? '' : 's'} y la factura solo ${invoiced}.`,
+        }
+      : null;
+  }
+
+  /**
+   * Avisos de la IA para unas lineas a facturar: productos que no son los del
+   * pedido y lo que falte facturar. null = sin avisos (o no se pudo revisar).
+   */
+  private async invoiceWarnings(
+    order: OrderWithItems,
+    lines: Array<{ name: string | null; quantity: number }>,
+  ): Promise<InvoiceWarnings | null> {
+    const orderNames = order.items.map((i) => i.name).filter(Boolean);
+    if (orderNames.length === 0 || lines.length === 0) return null;
+    const named = lines.flatMap((l) =>
+      l.name?.trim() ? [{ name: l.name.trim(), quantity: l.quantity }] : [],
+    );
+    const [mismatches, incomplete] = await Promise.all([
+      Promise.all(named.map((l) => this.productMismatch(order.id, orderNames, l.name))),
+      // Con alguna linea sin nombre no se sabe que se factura: no se adivina.
+      named.length === lines.length ? this.incompleteness(order, named) : Promise.resolve(null),
+    ]);
+    const found = mismatches.filter((m): m is InvoiceMismatch => m !== null);
+    if (found.length === 0 && !incomplete) return null;
+    return { mismatches: found, incomplete, token: warningsToken(found, incomplete) };
+  }
+
+  /** Nombre de cada linea: el que manda el panel o, si falta, el del catalogo de Alegra. */
+  private async invoiceLineNames(
+    warehouseId: string,
+    lines: CreateInvoiceLine[],
+  ): Promise<Array<string | null>> {
+    const unnamed = lines.filter((l) => !l.name?.trim()).map((l) => l.itemId);
+    const resolved =
+      unnamed.length > 0
+        ? await withTimeout(
+            this.alegra.itemNames(warehouseId, unnamed),
+            INVOICE_CHECK_TIMEOUT_MS,
+            new Map<string, string>(),
+          )
+        : new Map<string, string>();
+    return lines.map((l) => l.name?.trim() || resolved.get(l.itemId) || null);
+  }
+
+  /**
+   * Rastro de una factura emitida IGNORANDO avisos de la IA: un evento por tipo
+   * de aviso en la actividad del pedido (y de ahi en Registros, con su filtro).
+   * Best-effort: la factura ya quedo emitida.
+   */
+  private async recordIgnoredWarnings(
+    orderId: string,
+    warnings: InvoiceWarnings,
+    invoiceNumber: string,
+    auth: AuthContext,
+  ): Promise<void> {
+    const actor = { orderId, actorId: auth.userId, actorName: displayName(auth) };
+    const rows: Prisma.OrderEventCreateManyInput[] = [];
+    if (warnings.mismatches.length > 0) {
+      rows.push({
+        ...actor,
+        type: IGNORED_MISMATCH_EVENT,
+        data: { invoiceNumber, mismatches: warnings.mismatches } as Prisma.InputJsonValue,
+      });
+    }
+    if (warnings.incomplete) {
+      rows.push({
+        ...actor,
+        type: IGNORED_INCOMPLETE_EVENT,
+        data: {
+          invoiceNumber,
+          missing: warnings.incomplete.missing,
+          note: warnings.incomplete.note,
+        } as Prisma.InputJsonValue,
+      });
+    }
+    if (rows.length === 0) return;
+    try {
+      await getTenantContext().prisma.orderEvent.createMany({ data: rows });
+    } catch (err) {
+      this.logger.warn(
+        `No se pudo registrar el aviso ignorado del pedido ${orderId}: ${(err as Error).message}`,
+      );
+    }
   }
 
   /** Busca items de Alegra (selector manual de producto) usando el Alegra de la sede del pedido. */
@@ -2823,6 +3062,28 @@ export class OrdersService implements OnModuleInit {
     }
     if (manual && !input.payments) {
       throw new BadRequestException('Elige el/los medios de pago de la factura.');
+    }
+
+    // AVISOS DE LA IA sobre las lineas FINALES (equipo que no es el del pedido,
+    // o falta parte del pedido): con alguno no se factura hasta que el usuario
+    // lo lea y confirme (el panel abre el modal con este 409 y reenvia el
+    // token). Confirmados, quedan en la actividad del pedido y en Registros.
+    // Un panel viejo (sin el campo) factura como antes: no se le bloquea.
+    let warnings: InvoiceWarnings | null = null;
+    if (input.acknowledgedWarnings !== undefined) {
+      const names = await this.invoiceLineNames(order.warehouseId, input.lines);
+      warnings = await this.invoiceWarnings(
+        order,
+        input.lines.map((l, i) => ({ name: names[i] ?? null, quantity: l.quantity })),
+      );
+      if (warnings && input.acknowledgedWarnings !== warnings.token) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: INVOICE_WARNINGS_CODE,
+          message: 'Revisa los avisos de la IA antes de facturar.',
+          warnings,
+        });
+      }
     }
 
     const client = extractInvoiceClient(order);
@@ -2980,6 +3241,8 @@ export class OrdersService implements OnModuleInit {
         } as Prisma.InputJsonValue,
       },
     });
+    // Se facturo con avisos de la IA confirmados: queda el rastro.
+    if (warnings) await this.recordIgnoredWarnings(orderId, warnings, result.number, auth);
     await this.stampInvoicedAt(prisma, orderId);
     // Pedido montado a mano: si la guia ya existia, con la factura queda COMPLETO
     // (pasa a Facturados). Best-effort: la factura ya quedo emitida igual.

@@ -189,46 +189,99 @@ export class AiConnectionService {
   }
 
   /**
-   * IA experta en celulares: ¿el producto COMPRADO (hallado por el IMEI) es el
-   * MISMO telefono que alguno del pedido? Compara modelo + almacenamiento + RAM
-   * (ignora redaccion, color, "reacondicionado" y combos/obsequios). Devuelve
-   * null si no hay IA conectada o falla (best-effort: sin IA no hay aviso).
+   * IA experta en celulares: ¿el producto a FACTURAR (el de la compra hallada
+   * por el IMEI, o el que se eligio a mano) es el MISMO equipo que alguno del
+   * pedido? Compara modelo + almacenamiento + RAM (ignora redaccion, color y
+   * "reacondicionado"). Un ACCESORIO del combo ("+ reloj") cuenta como del
+   * pedido aunque cambie la version: el control es del equipo. Devuelve null
+   * si no hay IA conectada o falla (best-effort: sin IA no hay aviso).
    */
   async verifyProductMatch(
     orderProducts: string[],
     purchasedProduct: string,
   ): Promise<{ match: boolean; expected: string; note: string } | null> {
+    const prompt = [
+      'Eres un EXPERTO en celulares y tecnologia. Compara el producto A FACTURAR contra los productos del PEDIDO.',
+      'Si el A FACTURAR es un EQUIPO (el producto principal de un pedido: lo que va antes de "+", o un pedido sin combo): decide si es EXACTAMENTE el mismo equipo que ALGUNO del pedido: mismo modelo (ojo: "14" no es "14C", "16" no es "16 Pro"), mismo almacenamiento y misma RAM cuando aparezca.',
+      'Si el A FACTURAR es un ACCESORIO de un combo (lo que va despues de "+": reloj/smart watch, audifonos/buds, adaptador/cargador, lapiz/pencil/stylus, kit de proteccion...): match=true si el pedido trae ese tipo de accesorio, aunque cambie la version, la marca o la redaccion ("REDMI BUDS 8 ACTIVE" sirve por "REDMI BUDS 6 ACTIVE"; "CARGADOR IPHONE ORIGINAL" por "ADAPTADOR APPLE ORIGINAL 20W"). match=false si el pedido no trae ningun accesorio de ese tipo.',
+      'IGNORA: mayusculas, orden de palabras, color, la palabra "reacondicionado"/"open box". Al comparar un EQUIPO, ignora los accesorios del combo: compara SOLO el equipo principal.',
+      'Si el pedido NO trae RAM o almacenamiento explicitos, no lo cuentes como diferencia.',
+      `A FACTURAR: ${JSON.stringify(purchasedProduct)}`,
+      `PEDIDO: ${JSON.stringify(orderProducts)}`,
+      'Responde SOLO este JSON, sin nada mas:',
+      '{"match": true|false, "expected": "<producto del pedido mas parecido, textual>", "note": "<si match=false: una frase corta en espanol diciendo la diferencia concreta (modelo/almacenamiento/RAM, o el accesorio que el pedido no trae)>"}',
+    ].join('\n');
+    const parsed = await this.completeJson<{ match?: unknown; expected?: unknown; note?: unknown }>(
+      prompt,
+    );
+    if (!parsed || typeof parsed.match !== 'boolean') return null;
+    return {
+      match: parsed.match,
+      expected: String(parsed.expected ?? orderProducts[0] ?? ''),
+      note: String(parsed.note ?? ''),
+    };
+  }
+
+  /**
+   * IA experta: ¿la factura trae TODO el pedido? Los combos ("celular + reloj")
+   * son varios productos y cada accesorio fisico va en su propia linea; lo que
+   * se olvida es justo el accesorio. Los servicios ("Protección Total") no se
+   * facturan aparte. NO juzga el modelo del equipo (eso es verifyProductMatch):
+   * solo que no falte nada. null = sin IA conectada o fallo (best-effort).
+   */
+  async verifyInvoiceCompleteness(
+    orderItems: Array<{ name: string; quantity: number }>,
+    invoiceLines: Array<{ name: string; quantity: number }>,
+  ): Promise<{ complete: boolean; missing: string[]; note: string } | null> {
+    const prompt = [
+      'Eres un EXPERTO en celulares y tecnologia que revisa una factura ANTES de emitirla.',
+      'PEDIDO = lo que compro el cliente (cantidad x nombre). Un nombre puede ser un COMBO: "CELULAR X + RELOJ SMART WATCH + PROTECCION TOTAL" son varios productos.',
+      'Algunos nombres traen el combo repetido dos veces seguidas ("HONOR X 512GB + RELOJ SMART WATCH HONOR X 512GB + RELOJ SMART WATCH"): es UN solo combo, no dos.',
+      'FACTURA = las lineas que se van a facturar (nombres del inventario de Alegra, redactados distinto al pedido).',
+      'Decide si la FACTURA trae TODOS los productos FISICOS del pedido, en la cantidad pedida: el equipo principal y CADA accesorio del combo (reloj/smart watch, audifonos/buds, adaptador/cargador, lapiz/pencil/stylus, kit de proteccion, parlante, etc.).',
+      'NO cuentan (no se facturan aparte): servicios y coberturas como "PROTECCION TOTAL", seguros, garantias extendidas, envio o instalacion.',
+      'Un producto cuenta como facturado aunque cambie el nombre o la version: "ADAPTADOR APPLE ORIGINAL 20W" = "CARGADOR IPHONE ORIGINAL"; "LAPIZ OPTICO STYLUS" = "LAPIZ PENCIL STYLUS"; "REDMI BUDS 6 ACTIVE" facturado como "REDMI BUDS 8 ACTIVE" cuenta. Aqui NO juzgues si el modelo del equipo es el correcto (eso lo revisa otro control): solo que no FALTE nada.',
+      'Cada linea de la factura cubre UNA cosa del pedido: el celular no cubre su reloj, ni un reloj cubre unos audifonos.',
+      `PEDIDO: ${JSON.stringify(orderItems.map((i) => `${i.quantity} x ${i.name}`))}`,
+      `FACTURA: ${JSON.stringify(invoiceLines.map((l) => `${l.quantity} x ${l.name}`))}`,
+      'Responde SOLO este JSON, sin nada mas:',
+      '{"complete": true|false, "missing": ["<cada producto que falta, corto y como lo dice el pedido, p. ej. Reloj Smart Watch>"], "note": "<si complete=false: una frase corta en espanol diciendo que falta facturar>"}',
+    ].join('\n');
+    const parsed = await this.completeJson<{
+      complete?: unknown;
+      missing?: unknown;
+      note?: unknown;
+    }>(prompt);
+    if (!parsed || typeof parsed.complete !== 'boolean') return null;
+    const missing = Array.isArray(parsed.missing)
+      ? parsed.missing
+          .filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
+          .map((m) => m.trim().slice(0, 200))
+          .slice(0, 10)
+      : [];
+    return { complete: parsed.complete, missing, note: String(parsed.note ?? '').slice(0, 300) };
+  }
+
+  /**
+   * Corre un prompt de texto con la IA del tenant y lee el objeto JSON de la
+   * respuesta (aunque venga entre ``` o con una frase alrededor). null si no hay
+   * IA conectada, falla o no devuelve JSON.
+   */
+  private async completeJson<T>(prompt: string): Promise<T | null> {
     const { tenantId, prisma } = getTenantContext();
     const conn = await prisma.aiConnection.findFirst({ orderBy: { createdAt: 'desc' } });
     if (!conn) return null;
     try {
       const apiKey = await this.envelope.decryptField(tenantId, conn.encryptedApiKey);
-      const prompt = [
-        'Eres un EXPERTO en celulares y tecnologia. Compara el producto COMPRADO contra los productos del PEDIDO.',
-        'Decide si el COMPRADO es EXACTAMENTE el mismo telefono que ALGUNO del pedido: mismo modelo (ojo: "14" no es "14C", "16" no es "16 Pro"), mismo almacenamiento y misma RAM cuando aparezca.',
-        'IGNORA: mayusculas, orden de palabras, color, la palabra "reacondicionado"/"open box", y los obsequios de combos ("+ audifonos", "+ reloj", "+ smartwatch"): compara SOLO el telefono principal.',
-        'Si el pedido NO trae RAM o almacenamiento explicitos, no lo cuentes como diferencia.',
-        `COMPRADO: ${JSON.stringify(purchasedProduct)}`,
-        `PEDIDO: ${JSON.stringify(orderProducts)}`,
-        'Responde SOLO este JSON, sin nada mas:',
-        '{"match": true|false, "expected": "<producto del pedido mas parecido, textual>", "note": "<si match=false: una frase corta en espanol diciendo la diferencia concreta (modelo/almacenamiento/RAM)>"}',
-      ].join('\n');
       const raw = await this.client.completeText(
         { provider: conn.provider as AiProvider, apiKey, model: conn.model },
         prompt,
       );
-      const jsonText = raw.replace(/```json|```/g, '').trim();
-      const parsed = JSON.parse(jsonText) as {
-        match?: boolean;
-        expected?: string;
-        note?: string;
-      };
-      if (typeof parsed.match !== 'boolean') return null;
-      return {
-        match: parsed.match,
-        expected: String(parsed.expected ?? orderProducts[0] ?? ''),
-        note: String(parsed.note ?? ''),
-      };
+      const text = raw.replace(/```json|```/g, '');
+      const start = text.indexOf('{');
+      const end = text.lastIndexOf('}');
+      if (start < 0 || end <= start) return null;
+      return JSON.parse(text.slice(start, end + 1)) as T;
     } catch {
       return null;
     }

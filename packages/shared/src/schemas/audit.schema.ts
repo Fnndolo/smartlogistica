@@ -15,6 +15,10 @@ export const auditCategorySchema = z.enum([
   'acceso',
   'pedidos',
   'facturas',
+  /** Se facturo IGNORANDO el aviso de la IA: el equipo no es el del pedido. */
+  'producto_distinto',
+  /** Se facturo IGNORANDO el aviso de la IA: faltaba parte del pedido (combo). */
+  'incompletos',
   'guias',
   'mensajes',
   'equipo',
