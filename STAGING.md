@@ -4,6 +4,10 @@ Copia de producción para probar cambios **antes** de subirlos a `main`.
 Vive en el mismo proyecto de Railway que producción, en el entorno **`pruebas`**
 (producción es el entorno `production`).
 
+> **Ojo con los nombres:** el proyecto de Railway se llama **"Staging SmartLogistica"**,
+> pero su entorno `production` **es producción real**. Las pruebas van en el entorno
+> `pruebas`. Antes de cualquier comando de Railway, confirmar el entorno con `railway status`.
+
 | Servicio (entorno `pruebas`) | Qué es |
 |---|---|
 | `web-pruebas` | Next.js desde la rama **`staging`**. Es la URL para entrar. |
