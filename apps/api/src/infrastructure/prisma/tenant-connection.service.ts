@@ -5,6 +5,7 @@ import { PrismaClient as TenantPrismaClient } from '.prisma/tenant-client';
 import type { Tenant } from '.prisma/control-plane-client';
 
 import { EnvelopeService } from '../crypto/envelope.service';
+import { isSandboxMode } from '../sandbox/sandbox-policy';
 import { ControlPlaneService } from './control-plane.service';
 
 interface CachedTenant {
@@ -18,6 +19,32 @@ const POOL_MAX = 50;
 // aleatoria" y hacia que el webhook de Whapify cortara por timeout. POOL_MAX
 // sigue acotando la memoria; updateAgeOnGet mantiene vivos los activos.
 const POOL_TTL_MS = 1000 * 60 * 60 * 6;
+
+/**
+ * Hosts a probar para la DB de un tenant, en orden: el de `TENANT_DB_HOST` y,
+ * si no responde, el de la fila del control plane.
+ *
+ * En MODO PRUEBAS solo el de la variable, sin segunda opcion: la fila viene de
+ * la COPIA de produccion y apunta a la base real. Si el host de pruebas fallara
+ * y se cayera a la fila, el ambiente de pruebas leeria y ESCRIBIRIA sobre los
+ * datos de produccion sin que nada lo delatara.
+ */
+export function tenantDbHosts(
+  envHost: string | undefined,
+  rowHost: string,
+  sandbox: boolean,
+): string[] {
+  const fromEnv = envHost?.trim();
+  if (sandbox) {
+    if (!fromEnv) {
+      throw new Error(
+        'Modo pruebas: falta TENANT_DB_HOST (sin él se usaría la base de producción de la copia)',
+      );
+    }
+    return [fromEnv];
+  }
+  return [...new Set([fromEnv, rowHost].filter(Boolean))] as string[];
+}
 
 /**
  * Pool LRU de PrismaClient por tenant.
@@ -87,8 +114,11 @@ export class TenantConnectionService implements OnModuleDestroy {
     tenant: Pick<Tenant, 'dbHost' | 'dbName' | 'dbRole' | 'slug'>,
     password: string,
   ): Promise<TenantPrismaClient> {
-    const override = this.config.get<string>('TENANT_DB_HOST')?.trim();
-    const hosts = [...new Set([override, tenant.dbHost].filter(Boolean))] as string[];
+    const hosts = tenantDbHosts(
+      this.config.get<string>('TENANT_DB_HOST'),
+      tenant.dbHost,
+      isSandboxMode(),
+    );
 
     let ultimoError: unknown;
     for (const host of hosts) {
