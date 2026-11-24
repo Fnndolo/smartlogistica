@@ -33,6 +33,7 @@ import { cn, titleCaseName } from '@/lib/utils';
 import { ImageLightbox, type LightboxImage } from '../image-lightbox';
 import { useOrdersStream } from '../use-orders-stream';
 
+import { AttachPreview, type StagedWaFile } from './attach-preview';
 import { LiveWave } from './audio';
 import { WaBubble } from './bubbles';
 import { EmojiStickerPicker } from './emoji-picker';
@@ -115,6 +116,11 @@ function swallowRestOfDoubleClick(): () => void {
   const vence = window.setTimeout(desarmar, 10_000);
   return desarmar;
 }
+
+/** Tope del API por archivo (WA_FILE_MAX_BYTES): avisar antes de subir en vano. */
+const STAGE_MAX_BYTES = 50 * 1024 * 1024;
+/** Archivos por envio desde la vista previa (pegar / arrastrar). */
+const STAGE_MAX_FILES = 10;
 
 /* ============================== Panel ============================== */
 
@@ -394,8 +400,28 @@ export function WhatsappPanel({
       t.body.toLowerCase().includes(tplQuery),
   );
 
+  /** Burbuja OPTIMISTA de un archivo: aparece al instante con el archivo LOCAL (blob). */
+  const fileBubble = (file: File, tempId: string): WaMessage => {
+    const t = file.type;
+    const kind = t.startsWith('image/')
+      ? ('image' as const)
+      : t.startsWith('video/')
+        ? ('video' as const)
+        : t.startsWith('audio/')
+          ? ('audio' as const)
+          : ('file' as const);
+    return {
+      ...optimistic(''),
+      id: tempId,
+      kind,
+      body: kind === 'file' ? file.name : null,
+      mediaUrl: URL.createObjectURL(file),
+    };
+  };
+
   const sendFile = useMutation({
-    mutationFn: (vars: { file: File; tempId: string }) => {
+    /** preAppended: la burbuja ya la pinto quien llamo (envio de varios, en orden). */
+    mutationFn: (vars: { file: File; tempId: string; preAppended?: boolean }) => {
       const fd = new FormData();
       fd.append('file', vars.file, vars.file.name);
       return api.upload<WaMessage>(`${base}/file`, fd);
@@ -403,21 +429,7 @@ export function WhatsappPanel({
     // OPTIMISTA: la foto/video/audio/archivo aparece AL INSTANTE con el
     // archivo LOCAL (blob) y relojito; la subida corre por detras.
     onMutate: (vars) => {
-      const t = vars.file.type;
-      const kind = t.startsWith('image/')
-        ? ('image' as const)
-        : t.startsWith('video/')
-          ? ('video' as const)
-          : t.startsWith('audio/')
-            ? ('audio' as const)
-            : ('file' as const);
-      appendMessage({
-        ...optimistic(''),
-        id: vars.tempId,
-        kind,
-        body: kind === 'file' ? vars.file.name : null,
-        mediaUrl: URL.createObjectURL(vars.file),
-      });
+      if (!vars.preAppended) appendMessage(fileBubble(vars.file, vars.tempId));
     },
     onSuccess: (msg, vars) => {
       qc.setQueryData<WaThread>(['wa-thread', base], (old) => {
@@ -443,6 +455,28 @@ export function WhatsappPanel({
   });
   const sendFileNow = (file: File) =>
     sendFile.mutate({ file, tempId: `temp-${crypto.randomUUID()}` });
+
+  /**
+   * Varios archivos de una vez (vista previa): las burbujas aparecen TODAS al
+   * instante, pero se suben DE A UNO y en orden. En paralelo, una captura
+   * liviana podia terminar antes que una foto pesada y al cliente le llegarian
+   * desordenadas (el servidor las encola segun van terminando de subir).
+   */
+  const sendFilesInOrder = async (files: File[]) => {
+    const jobs = files.map((file) => ({
+      file,
+      tempId: `temp-${crypto.randomUUID()}`,
+      preAppended: true,
+    }));
+    jobs.forEach((j) => appendMessage(fileBubble(j.file, j.tempId)));
+    for (const j of jobs) {
+      try {
+        await sendFile.mutateAsync(j);
+      } catch {
+        /* onError ya quito su burbuja y aviso; se sigue con los demas */
+      }
+    }
+  };
 
   // ===== Estado del composer estilo WhatsApp =====
   const [replyTo, setReplyTo] = useState<WaMessage | null>(null);
@@ -789,6 +823,96 @@ export function WhatsappPanel({
     setRecPaused(false);
   };
 
+  // ===== Archivos PEGADOS (Ctrl+V) o ARRASTRADOS al chat: primero VISTA PREVIA,
+  // nunca envio directo (un Ctrl+V por error le llegaria al cliente). =====
+  const [staged, setStaged] = useState<StagedWaFile[]>([]);
+  const stagedRef = useRef(staged);
+  stagedRef.current = staged;
+  const addMoreRef = useRef<HTMLInputElement>(null);
+  const [dragOver, setDragOver] = useState(false);
+  // dragenter/dragleave saltan en CADA hijo que se cruza: se cuenta la
+  // profundidad para que el aviso no parpadee al pasar sobre las burbujas.
+  const dragDepthRef = useRef(0);
+
+  const stageFiles = (list: FileList | File[] | null | undefined) => {
+    const all = Array.from(list ?? []);
+    if (all.length === 0) return;
+    if (recording) {
+      toast.error('Termina o descarta la nota de voz antes de adjuntar archivos.');
+      return;
+    }
+    const fits = all.filter((f) => f.size <= STAGE_MAX_BYTES);
+    if (fits.length < all.length) {
+      const big = all.find((f) => f.size > STAGE_MAX_BYTES);
+      toast.error(
+        all.length - fits.length === 1
+          ? `"${big?.name ?? 'El archivo'}" pesa más de 50 MB y no se puede enviar.`
+          : `${all.length - fits.length} archivos pesan más de 50 MB y no se agregaron.`,
+      );
+    }
+    const room = Math.max(0, STAGE_MAX_FILES - stagedRef.current.length);
+    const accepted = fits.slice(0, room);
+    if (fits.length > accepted.length) {
+      toast.error(`Máximo ${STAGE_MAX_FILES} archivos por envío.`);
+    }
+    if (accepted.length === 0) return;
+    const items = accepted.map((file) => ({
+      id: crypto.randomUUID(),
+      file,
+      url: URL.createObjectURL(file),
+    }));
+    stagedRef.current = [...stagedRef.current, ...items];
+    setStaged(stagedRef.current);
+  };
+
+  const unstage = (id: string) => {
+    const found = stagedRef.current.find((s) => s.id === id);
+    if (found) URL.revokeObjectURL(found.url);
+    stagedRef.current = stagedRef.current.filter((s) => s.id !== id);
+    setStaged(stagedRef.current);
+  };
+
+  const clearStaged = useCallback(() => {
+    stagedRef.current.forEach((s) => URL.revokeObjectURL(s.url));
+    stagedRef.current = [];
+    setStaged([]);
+  }, []);
+
+  // Cambio de chat/pedido, pestaña oculta o cierre: lo pendiente se DESCARTA.
+  // Si no, una captura pegada en un chat podia terminar enviada en otro.
+  useEffect(() => clearStaged, [base, active, clearStaged]);
+
+  /** Devuelve el foco al campo, solo con mouse: en el cel abriria el teclado. */
+  const refocusComposer = () => {
+    if (window.matchMedia?.('(hover: hover) and (pointer: fine)').matches) {
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
+  };
+
+  const sendStaged = () => {
+    const files = stagedRef.current.map((s) => s.file);
+    if (files.length === 0) return;
+    // Las burbujas crean su propio blob: las URLs de la vista previa ya sobran.
+    clearStaged();
+    void sendFilesInOrder(files);
+    refocusComposer();
+  };
+
+  const onPasteFiles = (e: React.ClipboardEvent) => {
+    const files = Array.from(e.clipboardData?.files ?? []);
+    if (files.length === 0) return;
+    // Copiar celdas de Excel o texto de Word deja TAMBIEN una imagen del
+    // recorte en el portapapeles. Ahi lo que se quiere pegar es el texto (un
+    // numero de guia, una direccion), no una foto de la celda.
+    const text = e.clipboardData.getData('text/plain');
+    if (text.trim() && files.every((f) => f.type.startsWith('image/'))) return;
+    e.preventDefault();
+    stageFiles(files);
+  };
+
+  // Solo arrastres de ARCHIVOS (no texto seleccionado ni burbujas).
+  const dragHasFiles = (e: React.DragEvent) => e.dataTransfer?.types?.includes('Files') ?? false;
+
   /** Imagen cualquiera -> sticker webp 512x512 con transparencia (canvas). */
   const toStickerWebp = (f: File): Promise<File> =>
     new Promise((resolve, reject) => {
@@ -993,7 +1117,59 @@ export function WhatsappPanel({
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div
+      className="relative flex h-full flex-col"
+      // Ctrl+V con una imagen o archivo copiado (desde el campo o cualquier
+      // boton del panel) -> vista previa. Texto normal se pega como siempre.
+      onPaste={onPasteFiles}
+      onDragEnter={(e) => {
+        if (!dragHasFiles(e)) return;
+        e.preventDefault();
+        dragDepthRef.current += 1;
+        setDragOver(true);
+      }}
+      onDragOver={(e) => {
+        if (!dragHasFiles(e)) return;
+        // Sin esto el navegador ABRE el archivo y se sale de la plataforma.
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+      }}
+      onDragLeave={(e) => {
+        if (!dragHasFiles(e)) return;
+        dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+        if (dragDepthRef.current === 0) setDragOver(false);
+      }}
+      onDrop={(e) => {
+        if (!dragHasFiles(e)) return;
+        e.preventDefault();
+        dragDepthRef.current = 0;
+        setDragOver(false);
+        stageFiles(e.dataTransfer.files);
+      }}
+    >
+      {dragOver ? (
+        <div className="pointer-events-none absolute inset-2 z-50 flex items-center justify-center rounded-2xl border-2 border-dashed border-[#00a884] bg-white/85 dark:bg-[#111b21]/85">
+          <p className="flex items-center gap-2 text-[15px] font-medium text-[#008069] dark:text-[#00a884]">
+            <ImageIcon className="h-5 w-5" />
+            Suelta aquí para ver la vista previa
+          </p>
+        </div>
+      ) : null}
+      {staged.length > 0 ? (
+        <AttachPreview
+          files={staged}
+          onAddMore={() => addMoreRef.current?.click()}
+          onRemove={(id) => {
+            unstage(id);
+            if (stagedRef.current.length === 0) refocusComposer();
+          }}
+          onCancel={() => {
+            clearStaged();
+            refocusComposer();
+          }}
+          onSend={sendStaged}
+        />
+      ) : null}
       {/* Cabecera del hilo, estilo WhatsApp (la bandeja pinta la suya). */}
       {showHeader ? (
         <div className="flex items-center gap-3 border-b border-border bg-[#f0f2f5] px-4 py-2 dark:bg-[#202c33]">
@@ -1324,17 +1500,21 @@ export function WhatsappPanel({
             e.target.value = '';
           }}
         />
+        {/* Fotos y videos: varios a la vez y con VISTA PREVIA antes de enviar
+            (como WhatsApp Web), igual que lo pegado o arrastrado. */}
         <input
           ref={mediaRef}
           type="file"
           className="hidden"
           accept="image/*,video/*"
+          multiple
           onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) sendFileNow(f);
+            stageFiles(e.target.files);
             e.target.value = '';
           }}
         />
+        {/* Camara: la foto se REVISA antes de enviarla (salio movida, era la
+            equivocada...); antes salia directo al cliente. */}
         <input
           ref={cameraRef}
           type="file"
@@ -1342,8 +1522,7 @@ export function WhatsappPanel({
           accept="image/*"
           capture="environment"
           onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) sendFileNow(f);
+            stageFiles(e.target.files);
             e.target.value = '';
           }}
         />
@@ -1370,6 +1549,17 @@ export function WhatsappPanel({
             void toStickerWebp(f)
               .then((s) => sendStickerFile.mutate(s))
               .catch(() => toast.error('No se pudo convertir la imagen a sticker'));
+          }}
+        />
+        {/* "+" de la vista previa: agrega a lo pendiente, NO envia. */}
+        <input
+          ref={addMoreRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            stageFiles(e.target.files);
+            e.target.value = '';
           }}
         />
 
