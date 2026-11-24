@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import * as webpush from 'web-push';
 
 import { ControlPlaneService } from '../prisma/control-plane.service';
+import { isSandboxMode } from '../sandbox/sandbox-policy';
 
 /** Lo que se muestra en la notificacion del sistema (lo consume sw.js). */
 export interface PushPayload {
@@ -36,9 +37,13 @@ export class PushService {
     this.publicKey = config.get<string>('VAPID_PUBLIC_KEY') ?? '';
     const privateKey = config.get<string>('VAPID_PRIVATE_KEY') ?? '';
     const subject = config.get<string>('VAPID_SUBJECT') ?? 'mailto:soporte@smartlogistica.app';
-    this.enabled = Boolean(this.publicKey && privateKey);
+    // Modo pruebas: la copia de la base trae las suscripciones de los celulares
+    // del equipo; con las mismas llaves, cada aviso de pruebas les sonaria ahi.
+    this.enabled = Boolean(this.publicKey && privateKey) && !isSandboxMode();
     if (this.enabled) {
       webpush.setVapidDetails(subject, this.publicKey, privateKey);
+    } else if (isSandboxMode()) {
+      this.logger.warn('Web Push apagado: modo pruebas');
     } else {
       this.logger.warn('Web Push apagado: faltan VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY');
     }

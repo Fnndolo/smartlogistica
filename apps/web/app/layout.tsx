@@ -3,8 +3,10 @@ import { GeistMono } from 'geist/font/mono';
 import { GeistSans } from 'geist/font/sans';
 
 import { QueryProvider } from '@/components/providers/query-provider';
+import { SandboxBanner } from '@/components/sandbox-banner';
 import { Toaster } from '@/components/ui/sonner-toaster';
 import { ServiceWorker } from '@/components/pwa/service-worker';
+import { APP_NAME, IS_SANDBOX } from '@/lib/sandbox';
 
 import './globals.css';
 
@@ -25,9 +27,10 @@ const geistSans = GeistSans;
 const geistMono = GeistMono;
 
 export const metadata: Metadata = {
+  // En pruebas la pestaña del navegador dice PRUEBAS (no se confunde con la de produccion).
   title: {
-    default: 'SmartLogistica',
-    template: '%s · SmartLogistica',
+    default: APP_NAME,
+    template: `%s · ${APP_NAME}`,
   },
   description:
     'Plataforma de logistica para marketplaces. Centraliza pedidos de VTEX, Shopify, MercadoLibre y Exito en un solo flujo automatizado.',
@@ -38,13 +41,13 @@ export const metadata: Metadata = {
     type: 'website',
   },
   robots: {
-    index: true,
-    follow: true,
+    index: !IS_SANDBOX,
+    follow: !IS_SANDBOX,
   },
-  applicationName: 'SmartLogistica',
+  applicationName: APP_NAME,
   appleWebApp: {
     capable: true,
-    title: 'SmartLogistica',
+    title: APP_NAME,
     statusBarStyle: 'default',
   },
   icons: {
@@ -81,6 +84,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="es" suppressHydrationWarning>
       <body className={`${geistSans.variable} ${geistMono.variable} font-sans`}>
         <QueryProvider>{children}</QueryProvider>
+        <SandboxBanner />
         <Toaster />
         <ServiceWorker />
       </body>

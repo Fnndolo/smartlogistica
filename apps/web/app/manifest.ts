@@ -1,5 +1,7 @@
 import type { MetadataRoute } from 'next';
 
+import { APP_NAME, IS_SANDBOX } from '@/lib/sandbox';
+
 /**
  * Manifest de la PWA (se sirve en /manifest.webmanifest). Hace la plataforma
  * instalable en el celular: icono propio, arranque a pantalla completa
@@ -7,8 +9,9 @@ import type { MetadataRoute } from 'next';
  */
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: 'SmartLogistica',
-    short_name: 'SmartLog',
+    // Instalada en el celular, la de pruebas se distingue por el nombre.
+    name: APP_NAME,
+    short_name: IS_SANDBOX ? 'SL Pruebas' : 'SmartLog',
     description: 'Centraliza y automatiza la logistica de tus marketplaces.',
     id: '/',
     start_url: '/dashboard',

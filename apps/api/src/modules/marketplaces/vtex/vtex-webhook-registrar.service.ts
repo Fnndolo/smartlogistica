@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 
 import { ControlPlaneService } from '../../../infrastructure/prisma/control-plane.service';
 import { TenantConnectionService } from '../../../infrastructure/prisma/tenant-connection.service';
+import { isSandboxMode } from '../../../infrastructure/sandbox/sandbox-policy';
 import { VtexClient } from './vtex-client.service';
 
 /**
@@ -26,6 +27,12 @@ export class VtexWebhookRegistrar implements OnApplicationBootstrap {
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
+    // VTEX guarda UN webhook por cuenta: si el ambiente de pruebas lo
+    // registrara hacia su URL, produccion dejaria de recibir los pedidos.
+    if (isSandboxMode()) {
+      this.logger.warn('Modo pruebas: webhooks de VTEX NO registrados (siguen apuntando a producción).');
+      return;
+    }
     const base = this.config.get<string>('PUBLIC_WEBHOOK_BASE_URL');
     if (!base || base.includes('CHANGE_ME') || !base.startsWith('https://')) {
       this.logger.warn(

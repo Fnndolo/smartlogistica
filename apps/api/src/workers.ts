@@ -1,4 +1,7 @@
 import 'reflect-metadata';
+// PRIMERO: en el ambiente de pruebas (SANDBOX_MODE) frena las escrituras hacia
+// afuera antes de que cualquier servicio cree su cliente HTTP.
+import './infrastructure/sandbox/network-guard';
 
 import { NestFactory } from '@nestjs/core';
 import { Logger } from 'nestjs-pino';

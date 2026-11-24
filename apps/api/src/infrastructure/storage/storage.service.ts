@@ -8,6 +8,8 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
+import { isSandboxMode } from '../sandbox/sandbox-policy';
+
 const SIGNED_URL_TTL_S = 3600; // 1h de validez
 const SIGNED_URL_CACHE_MS = (SIGNED_URL_TTL_S - 300) * 1000; // refrescar 5min antes
 
@@ -125,6 +127,12 @@ export class StorageService implements OnModuleInit {
   async delete(key: string): Promise<void> {
     this.assertReady();
     this.urlCache.delete(key);
+    // Modo pruebas: el almacenamiento es el MISMO de produccion (los adjuntos
+    // de la copia viven ahi); borrar aqui le quitaria el archivo a produccion.
+    if (isSandboxMode()) {
+      this.logger.warn(`Modo pruebas: no se borró ${key} del almacenamiento compartido`);
+      return;
+    }
     await this.client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
   }
 }
