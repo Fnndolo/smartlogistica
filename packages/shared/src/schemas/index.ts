@@ -20,3 +20,4 @@ export * from './delivery.schema';
 export * from './wa-config.schema';
 export * from './audit.schema';
 export * from './addi-lba.schema';
+export * from './warranty.schema';

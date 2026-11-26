@@ -24,6 +24,7 @@ import { HealthModule } from './modules/health/health.module';
 import { OrdersModule } from './modules/orders/orders.module';
 import { TenantsModule } from './modules/tenants/tenants.module';
 import { WarehousesModule } from './modules/warehouses/warehouses.module';
+import { WarrantiesModule } from './modules/warranties/warranties.module';
 import { WebhooksModule } from './modules/webhooks/webhooks.module';
 import { WhatsappModule } from './modules/whatsapp/whatsapp.module';
 
@@ -92,6 +93,7 @@ import { WhatsappModule } from './modules/whatsapp/whatsapp.module';
     AiModule,
     WebhooksModule,
     WhatsappModule,
+    WarrantiesModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

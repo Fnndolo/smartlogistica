@@ -495,6 +495,76 @@ CREATE TABLE "AuditLog" (
     CONSTRAINT "AuditLog_pkey" PRIMARY KEY ("id")
 );
 
+-- CreateTable
+CREATE TABLE "Warranty" (
+    "id" TEXT NOT NULL,
+    "number" INTEGER NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'received',
+    "resolution" TEXT,
+    "receivedAt" TIMESTAMP(3) NOT NULL,
+    "store" TEXT NOT NULL,
+    "customerName" TEXT NOT NULL,
+    "customerDocument" TEXT NOT NULL,
+    "customerPhone" TEXT NOT NULL,
+    "customerEmail" TEXT,
+    "city" TEXT NOT NULL,
+    "deviceType" TEXT NOT NULL,
+    "brand" TEXT NOT NULL,
+    "model" TEXT NOT NULL,
+    "serial" TEXT NOT NULL,
+    "purchaseDate" TIMESTAMP(3),
+    "invoiceNumber" TEXT,
+    "physicalCondition" TEXT NOT NULL,
+    "reason" TEXT NOT NULL,
+    "accessories" TEXT[],
+    "comments" TEXT,
+    "assigneeId" TEXT,
+    "assigneeName" TEXT,
+    "supplier" TEXT,
+    "supplierSentAt" TIMESTAMP(3),
+    "closureNote" TEXT,
+    "closedAt" TIMESTAMP(3),
+    "createdById" TEXT NOT NULL,
+    "createdByName" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "Warranty_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "WarrantyMessage" (
+    "id" TEXT NOT NULL,
+    "warrantyId" TEXT NOT NULL,
+    "kind" TEXT NOT NULL,
+    "body" TEXT,
+    "tag" TEXT,
+    "attachmentKey" TEXT,
+    "attachmentMime" TEXT,
+    "attachmentName" TEXT,
+    "authorId" TEXT NOT NULL,
+    "authorName" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "WarrantyMessage_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "WarrantyEvent" (
+    "id" TEXT NOT NULL,
+    "warrantyId" TEXT NOT NULL,
+    "type" TEXT NOT NULL,
+    "fromStatus" TEXT,
+    "toStatus" TEXT,
+    "note" TEXT,
+    "data" JSONB,
+    "actorId" TEXT NOT NULL,
+    "actorName" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "WarrantyEvent_pkey" PRIMARY KEY ("id")
+);
+
 -- CreateIndex
 CREATE UNIQUE INDEX "Warehouse_slug_key" ON "Warehouse"("slug");
 
@@ -636,6 +706,24 @@ CREATE INDEX "AuditLog_actorId_createdAt_idx" ON "AuditLog"("actorId", "createdA
 -- CreateIndex
 CREATE INDEX "AuditLog_action_createdAt_idx" ON "AuditLog"("action", "createdAt");
 
+-- CreateIndex
+CREATE UNIQUE INDEX "Warranty_number_key" ON "Warranty"("number");
+
+-- CreateIndex
+CREATE INDEX "Warranty_status_receivedAt_idx" ON "Warranty"("status", "receivedAt");
+
+-- CreateIndex
+CREATE INDEX "Warranty_serial_idx" ON "Warranty"("serial");
+
+-- CreateIndex
+CREATE INDEX "Warranty_customerDocument_idx" ON "Warranty"("customerDocument");
+
+-- CreateIndex
+CREATE INDEX "WarrantyMessage_warrantyId_createdAt_idx" ON "WarrantyMessage"("warrantyId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "WarrantyEvent_warrantyId_createdAt_idx" ON "WarrantyEvent"("warrantyId", "createdAt");
+
 -- AddForeignKey
 ALTER TABLE "CoordinadoraConnection" ADD CONSTRAINT "CoordinadoraConnection_warehouseId_fkey" FOREIGN KEY ("warehouseId") REFERENCES "Warehouse"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
@@ -680,4 +768,10 @@ ALTER TABLE "OrderRead" ADD CONSTRAINT "OrderRead_orderId_fkey" FOREIGN KEY ("or
 
 -- AddForeignKey
 ALTER TABLE "OrderEvent" ADD CONSTRAINT "OrderEvent_orderId_fkey" FOREIGN KEY ("orderId") REFERENCES "Order"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "WarrantyMessage" ADD CONSTRAINT "WarrantyMessage_warrantyId_fkey" FOREIGN KEY ("warrantyId") REFERENCES "Warranty"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "WarrantyEvent" ADD CONSTRAINT "WarrantyEvent_warrantyId_fkey" FOREIGN KEY ("warrantyId") REFERENCES "Warranty"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 

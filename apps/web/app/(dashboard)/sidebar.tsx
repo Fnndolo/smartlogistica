@@ -15,6 +15,7 @@ import {
   Plus,
   ScrollText,
   Settings,
+  ShieldCheck,
   Users,
 } from 'lucide-react';
 import type { WarehouseSummary } from '@smartlogistica/shared';
@@ -60,6 +61,8 @@ const NAV_ITEMS = [
   // mismo mirado de otra forma, y separadas obligaban a elegir en cual entrar
   // antes de saber que habia en cada una.
   { href: '/chats', label: 'Chats', icon: MessagesSquare, show: everyone },
+  // Garantias: todo el equipo las ve y las trabaja.
+  { href: '/garantias', label: 'Garantías', icon: ShieldCheck, show: everyone },
   // La bitacora: solo el propietario (ni los admins).
   { href: '/registros', label: 'Registros', icon: ScrollText, show: canSeeAudit },
   { href: '/connections', label: 'Conexiones', icon: Link2, show: canManageConnections },
