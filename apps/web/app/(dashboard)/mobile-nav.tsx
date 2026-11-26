@@ -2,7 +2,14 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Boxes, Building2, LayoutDashboard, MessagesSquare, Settings } from 'lucide-react';
+import {
+  Boxes,
+  Building2,
+  LayoutDashboard,
+  MessagesSquare,
+  Settings,
+  ShieldCheck,
+} from 'lucide-react';
 
 import { useCurrentUser } from '@/components/providers/current-user-provider';
 import { canManageOrders, canSeeAllWarehouses, type MaybeRole } from '@/lib/rbac';
@@ -46,6 +53,14 @@ const TABS = [
     label: 'Chats',
     icon: MessagesSquare,
     match: (p: string) => p.startsWith('/chats') || p.startsWith('/mentions'),
+    show: everyone,
+  },
+  {
+    // Garantias: todo el equipo las trabaja, tambien desde el celular.
+    href: '/garantias',
+    label: 'Garantías',
+    icon: ShieldCheck,
+    match: (p: string) => p.startsWith('/garantias'),
     show: everyone,
   },
   {
@@ -110,7 +125,13 @@ export function MobileBottomNav() {
     <nav
       className={cn(
         'fixed inset-x-0 bottom-0 z-30 grid border-t border-border bg-card/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden',
-        tabs.length >= 5 ? 'grid-cols-5' : tabs.length === 4 ? 'grid-cols-4' : 'grid-cols-3',
+        tabs.length >= 6
+          ? 'grid-cols-6'
+          : tabs.length === 5
+            ? 'grid-cols-5'
+            : tabs.length === 4
+              ? 'grid-cols-4'
+              : 'grid-cols-3',
       )}
       aria-label="Navegacion principal"
     >

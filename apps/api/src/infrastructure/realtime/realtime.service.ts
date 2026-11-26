@@ -19,7 +19,10 @@ export interface OrderRealtimeEvent {
     | 'chat.reaction'
     | 'chat.edit'
     | 'chat.typing'
-    | 'guide-module.changed';
+    | 'guide-module.changed'
+    // Garantias: solo su pagina lo escucha (la tabla de pedidos tiene lista
+    // blanca de eventos y lo ignora).
+    | 'warranty.changed';
   externalId?: string;
   at: number;
   // Campos extra de los eventos de chat (chat.message / chat.reaction): el

@@ -722,3 +722,91 @@ model AuditLog {
   @@index([actorId, createdAt])
   @@index([action, createdAt])
 }
+
+/// GARANTIA: un equipo que el cliente trae a la tienda por una falla. Reemplaza
+/// la hoja de calculo "GARANTIAS". `number` es el RADICADO (consecutivo).
+/// Ciclo: received -> at_supplier -> ready -> closed (con su `resolution`).
+model Warranty {
+  id                String    @id @default(cuid())
+  number            Int       @unique
+  status            String    @default("received")
+  /// Como termino (solo si esta lista o cerrada): repaired|replaced|refunded|denied.
+  resolution        String?
+  receivedAt        DateTime
+  /// Tienda que la recibe ("SMART MEDELLIN"...). Texto: no son las sedes de pedidos.
+  store             String
+  customerName      String
+  customerDocument  String
+  customerPhone     String
+  customerEmail     String?
+  city              String
+  /// celular|computador|tablet|accesorio|otro
+  deviceType        String
+  brand             String
+  model             String
+  /// IMEI o serial del equipo.
+  serial            String
+  purchaseDate      DateTime?
+  invoiceNumber     String?
+  physicalCondition String
+  reason            String
+  /// cargador|cable|estuche|caja|otro
+  accessories       String[]
+  comments          String?
+  /// Responsable del seguimiento (un miembro del equipo).
+  assigneeId        String?
+  assigneeName      String?
+  supplier          String?
+  supplierSentAt    DateTime?
+  closureNote       String?
+  closedAt          DateTime?
+  createdById       String
+  createdByName     String
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  messages WarrantyMessage[]
+  events   WarrantyEvent[]
+
+  @@index([status, receivedAt])
+  @@index([serial])
+  @@index([customerDocument])
+}
+
+/// Conversacion de la garantia: notas, archivos (fotos/videos/soportes) y avisos
+/// de sistema. `tag` dice para que es el archivo: recepcion|proveedor|cierre.
+model WarrantyMessage {
+  id             String   @id @default(cuid())
+  warrantyId     String
+  kind           String
+  body           String?
+  tag            String?
+  attachmentKey  String?
+  attachmentMime String?
+  attachmentName String?
+  authorId       String
+  authorName     String
+  createdAt      DateTime @default(now())
+
+  warranty Warranty @relation(fields: [warrantyId], references: [id], onDelete: Cascade)
+
+  @@index([warrantyId, createdAt])
+}
+
+/// Linea de tiempo de la garantia: creada, cambios de estado, ediciones.
+model WarrantyEvent {
+  id         String   @id @default(cuid())
+  warrantyId String
+  type       String
+  fromStatus String?
+  toStatus   String?
+  note       String?
+  data       Json?
+  actorId    String
+  actorName  String
+  createdAt  DateTime @default(now())
+
+  warranty Warranty @relation(fields: [warrantyId], references: [id], onDelete: Cascade)
+
+  @@index([warrantyId, createdAt])
+}
