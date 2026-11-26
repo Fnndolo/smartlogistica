@@ -55,11 +55,13 @@ export interface WaClient {
     mediaId: string,
     filename?: string,
   ): Promise<string | null>;
+  /** caption: texto que acompaña la foto/video (como en WhatsApp). */
   sendMediaLink(
     to: string,
     kind: WaMediaKind,
     link: string,
     filename?: string,
+    caption?: string | null,
   ): Promise<string | null>;
   sendInteractiveButtons(
     to: string,

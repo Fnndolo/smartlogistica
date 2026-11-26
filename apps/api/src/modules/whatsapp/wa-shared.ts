@@ -65,6 +65,43 @@ export function waTypeOf(mime: string): 'image' | 'video' | 'audio' | 'file' {
   return 'file';
 }
 
+/** Tope de Meta para el texto que acompaña una foto o un video. */
+export const WA_CAPTION_MAX = 1024;
+
+/**
+ * Texto de la foto/video tal como llega del formulario: recortado, null si va
+ * vacio, y error claro si pasa el tope (antes que Meta lo rechace al enviar,
+ * cuando la burbuja ya se pinto como enviada).
+ */
+export function cleanCaption(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const text = raw.trim();
+  if (!text) return null;
+  if (text.length > WA_CAPTION_MAX) {
+    throw new BadRequestException(
+      `El texto de la foto supera ${WA_CAPTION_MAX} caracteres (tiene ${text.length}).`,
+    );
+  }
+  return text;
+}
+
+/**
+ * Objeto del medio para la Cloud API (igual en 360dialog y en Meta): el enlace,
+ * el nombre en los documentos y el texto (caption) en fotos y videos, como en
+ * WhatsApp. Audio y sticker no admiten texto: si llega, se ignora.
+ */
+export function waMediaObject(
+  kind: 'image' | 'video' | 'audio' | 'document' | 'sticker',
+  link: string,
+  filename?: string,
+  caption?: string | null,
+): Record<string, string> {
+  const media: Record<string, string> = { link };
+  if (kind === 'document' && filename) media.filename = filename;
+  if ((kind === 'image' || kind === 'video') && caption) media.caption = caption;
+  return media;
+}
+
 /**
  * Traduce el error del API de WhatsApp (360dialog) a un mensaje UTIL: SIEMPRE
  * incluye el detalle real que devolvio el servidor (leccion aprendida: un

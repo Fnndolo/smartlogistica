@@ -5,6 +5,7 @@ import type { CreateWaTemplateInput, WaProvider } from '@smartlogistica/shared';
 import type { MetaClient } from './meta-client.service';
 import type { WaClient, WaMediaKind, WaTemplateLite, WaTemplateRaw } from './wa-client.port';
 import { buildTemplateComponents, mapTemplateRow, toTemplateLite } from './wa-template-mapper';
+import { waMediaObject } from './wa-shared';
 
 // Respuestas de terceros: acceso laxo a proposito.
 type Any = Record<string, any>;
@@ -112,9 +113,9 @@ export class MetaWaClient implements WaClient {
     kind: WaMediaKind,
     link: string,
     filename?: string,
+    caption?: string | null,
   ): Promise<string | null> {
-    const media: Any = { link };
-    if (kind === 'document' && filename) media.filename = filename;
+    const media = waMediaObject(kind, link, filename, caption);
     return this.post({
       messaging_product: 'whatsapp',
       recipient_type: 'individual',

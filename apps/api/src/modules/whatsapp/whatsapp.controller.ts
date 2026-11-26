@@ -51,6 +51,7 @@ import {
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
 import type { AuthContext } from '../../common/types/authenticated-request';
+import { cleanCaption } from './wa-shared';
 import { WA_FILE_MAX_BYTES, WhatsappService } from './whatsapp.service';
 
 interface UploadedWaFile {
@@ -213,10 +214,12 @@ export class WhatsappInboxController {
   async sendFile(
     @Param('phone') phone: string,
     @UploadedFile() file: UploadedWaFile | undefined,
+    // Campo de texto del mismo formulario: lo que acompaña la foto o el video.
+    @Body('caption') caption: unknown,
     @CurrentUser() user: AuthContext,
   ): Promise<WaMessage> {
     if (!file) throw new BadRequestException('No se recibio ningun archivo');
-    return this.whatsapp.sendFileToPhone(phone, file, user);
+    return this.whatsapp.sendFileToPhone(phone, file, user, cleanCaption(caption));
   }
 
   @Get('chats/:phone/templates')
@@ -443,9 +446,11 @@ export class OrderWhatsappController {
   async sendFile(
     @Param('id') id: string,
     @UploadedFile() file: UploadedWaFile | undefined,
+    // Campo de texto del mismo formulario: lo que acompaña la foto o el video.
+    @Body('caption') caption: unknown,
     @CurrentUser() user: AuthContext,
   ): Promise<WaMessage> {
     if (!file) throw new BadRequestException('No se recibio ningun archivo');
-    return this.whatsapp.sendFile(id, file, user);
+    return this.whatsapp.sendFile(id, file, user, cleanCaption(caption));
   }
 }

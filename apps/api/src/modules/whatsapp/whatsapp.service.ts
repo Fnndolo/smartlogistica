@@ -49,6 +49,7 @@ import { normalizeSticker, toOggOpus, toWhatsappImage } from './wa-media.util';
 import { WaPublisherService } from './wa-publisher.service';
 import { WaUpsellService } from './wa-upsell.service';
 import {
+  cleanCaption,
   DEFAULT_CONFIRMATION_MAX_AGE_HOURS,
   isD360Sandbox,
   renderTemplateBody,
@@ -651,9 +652,14 @@ export class WhatsappService {
   }
 
   /** Envia un ARCHIVO (imagen/video/audio/documento) y lo guarda en el historial. */
-  async sendFile(orderId: string, file: UploadedWaFile, auth: AuthContext): Promise<WaMessageDto> {
+  async sendFile(
+    orderId: string,
+    file: UploadedWaFile,
+    auth: AuthContext,
+    caption?: string | null,
+  ): Promise<WaMessageDto> {
     const { phone, provider } = await this.orderPhone(orderId);
-    return this.sendFileCore(phone, provider, file, auth);
+    return this.sendFileCore(phone, provider, file, auth, caption);
   }
 
   /** Envia un ARCHIVO a un chat de la BANDEJA (por telefono). */
@@ -661,17 +667,25 @@ export class WhatsappService {
     rawPhone: string,
     file: UploadedWaFile,
     auth: AuthContext,
+    caption?: string | null,
   ): Promise<WaMessageDto> {
     const phone = tenDigits(rawPhone);
     if (phone.length < 7) throw new BadRequestException('Teléfono inválido');
-    return this.sendFileCore(phone, 'external', file, auth);
+    return this.sendFileCore(phone, 'external', file, auth, caption);
   }
 
+  /**
+   * `caption`: texto que acompaña la foto o el video (como en WhatsApp). Se
+   * guarda en `body`, igual que el de los medios ENTRANTES (caption ?? nombre):
+   * el chat ya distingue texto de nombre de archivo. Documentos y audios van
+   * sin texto: su `body` es el nombre del archivo, que la tarjeta necesita.
+   */
   private async sendFileCore(
     phone: string,
     provider: string,
     file: UploadedWaFile,
     auth: AuthContext,
+    rawCaption?: string | null,
   ): Promise<WaMessageDto> {
     this.assertWhatsappAccess(auth);
     const { tenantId, prisma } = getTenantContext();
@@ -701,13 +715,14 @@ export class WhatsappService {
     // URL) y el trabajo pesado (transcodificar audio, subir a Meta, enviar)
     // corre en la cola del chat. Un fallo se ve como bolita roja con motivo.
     const kind = waTypeOf(media.mime);
+    const caption = kind === 'image' || kind === 'video' ? cleanCaption(rawCaption) : null;
     const row = await prisma.waMessage.create({
       data: {
         phone,
         direction: 'out',
         lineId: d360?.lineId ?? null,
         kind,
-        body: name,
+        body: caption ?? name,
         attachmentKey: key,
         authorId: auth.userId,
         authorName: auth.name?.trim() || auth.email,
@@ -742,6 +757,7 @@ export class WhatsappService {
           kind === 'file' ? 'document' : kind,
           url,
           kind === 'file' ? name : undefined,
+          caption,
         );
       },
     );

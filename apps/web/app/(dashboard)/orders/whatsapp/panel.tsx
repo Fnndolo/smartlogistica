@@ -33,7 +33,7 @@ import { cn, titleCaseName } from '@/lib/utils';
 import { ImageLightbox, type LightboxImage } from '../image-lightbox';
 import { useOrdersStream } from '../use-orders-stream';
 
-import { AttachPreview, type StagedWaFile } from './attach-preview';
+import { AttachPreview, CAPTION_MAX, canCaption, type StagedWaFile } from './attach-preview';
 import { LiveWave } from './audio';
 import { WaBubble } from './bubbles';
 import { EmojiStickerPicker } from './emoji-picker';
@@ -400,8 +400,12 @@ export function WhatsappPanel({
       t.body.toLowerCase().includes(tplQuery),
   );
 
-  /** Burbuja OPTIMISTA de un archivo: aparece al instante con el archivo LOCAL (blob). */
-  const fileBubble = (file: File, tempId: string): WaMessage => {
+  /**
+   * Burbuja OPTIMISTA de un archivo: aparece al instante con el archivo LOCAL
+   * (blob) y, si lo lleva, el texto de la foto/video debajo (body = caption,
+   * igual que guarda el servidor).
+   */
+  const fileBubble = (file: File, tempId: string, caption?: string): WaMessage => {
     const t = file.type;
     const kind = t.startsWith('image/')
       ? ('image' as const)
@@ -410,26 +414,31 @@ export function WhatsappPanel({
         : t.startsWith('audio/')
           ? ('audio' as const)
           : ('file' as const);
+    const text = (kind === 'image' || kind === 'video') && caption?.trim() ? caption.trim() : null;
     return {
       ...optimistic(''),
       id: tempId,
       kind,
-      body: kind === 'file' ? file.name : null,
+      body: text ?? (kind === 'file' ? file.name : null),
       mediaUrl: URL.createObjectURL(file),
     };
   };
 
   const sendFile = useMutation({
-    /** preAppended: la burbuja ya la pinto quien llamo (envio de varios, en orden). */
-    mutationFn: (vars: { file: File; tempId: string; preAppended?: boolean }) => {
+    /**
+     * preAppended: la burbuja ya la pinto quien llamo (envio de varios, en orden).
+     * caption: texto de la foto/video (el API lo ignora en documentos y audios).
+     */
+    mutationFn: (vars: { file: File; tempId: string; preAppended?: boolean; caption?: string }) => {
       const fd = new FormData();
       fd.append('file', vars.file, vars.file.name);
+      if (vars.caption?.trim()) fd.append('caption', vars.caption.trim());
       return api.upload<WaMessage>(`${base}/file`, fd);
     },
     // OPTIMISTA: la foto/video/audio/archivo aparece AL INSTANTE con el
     // archivo LOCAL (blob) y relojito; la subida corre por detras.
     onMutate: (vars) => {
-      if (!vars.preAppended) appendMessage(fileBubble(vars.file, vars.tempId));
+      if (!vars.preAppended) appendMessage(fileBubble(vars.file, vars.tempId, vars.caption));
     },
     onSuccess: (msg, vars) => {
       qc.setQueryData<WaThread>(['wa-thread', base], (old) => {
@@ -462,13 +471,14 @@ export function WhatsappPanel({
    * liviana podia terminar antes que una foto pesada y al cliente le llegarian
    * desordenadas (el servidor las encola segun van terminando de subir).
    */
-  const sendFilesInOrder = async (files: File[]) => {
-    const jobs = files.map((file) => ({
+  const sendFilesInOrder = async (items: Array<{ file: File; caption?: string }>) => {
+    const jobs = items.map(({ file, caption }) => ({
       file,
+      caption,
       tempId: `temp-${crypto.randomUUID()}`,
       preAppended: true,
     }));
-    jobs.forEach((j) => appendMessage(fileBubble(j.file, j.tempId)));
+    jobs.forEach((j) => appendMessage(fileBubble(j.file, j.tempId, j.caption)));
     for (const j of jobs) {
       try {
         await sendFile.mutateAsync(j);
@@ -833,6 +843,9 @@ export function WhatsappPanel({
   // dragenter/dragleave saltan en CADA hijo que se cruza: se cuenta la
   // profundidad para que el aviso no parpadee al pasar sobre las burbujas.
   const dragDepthRef = useRef(0);
+  // Archivo que recibio lo que ya estaba escrito en el chat (ver stageFiles):
+  // si se cancela o se quita, ese texto VUELVE al campo en vez de perderse.
+  const draftOwnerRef = useRef<string | null>(null);
 
   const stageFiles = (list: FileList | File[] | null | undefined) => {
     const all = Array.from(list ?? []);
@@ -856,16 +869,42 @@ export function WhatsappPanel({
       toast.error(`Máximo ${STAGE_MAX_FILES} archivos por envío.`);
     }
     if (accepted.length === 0) return;
-    const items = accepted.map((file) => ({
+    const items: StagedWaFile[] = accepted.map((file) => ({
       id: crypto.randomUUID(),
       file,
       url: URL.createObjectURL(file),
+      caption: '',
     }));
+    // Como en WhatsApp: lo que ya estaba escrito en el chat pasa a ser el
+    // texto de la PRIMERA foto/video (no se queda escondido detras).
+    const draft = text.trim();
+    const owner = items.find((it) => canCaption(it.file));
+    if (stagedRef.current.length === 0 && draft && !slashMode && !tpl && owner) {
+      owner.caption = draft.slice(0, CAPTION_MAX);
+      draftOwnerRef.current = owner.id;
+      setText('');
+    }
     stagedRef.current = [...stagedRef.current, ...items];
     setStaged(stagedRef.current);
   };
 
+  /** Texto de UNA foto/video de la vista previa. */
+  const setCaption = (id: string, caption: string) => {
+    stagedRef.current = stagedRef.current.map((s) => (s.id === id ? { ...s, caption } : s));
+    setStaged(stagedRef.current);
+  };
+
+  /** Devuelve al campo del chat lo que se habia escrito antes de adjuntar. */
+  const restoreDraft = (onlyId?: string) => {
+    const ownerId = draftOwnerRef.current;
+    if (!ownerId || (onlyId && onlyId !== ownerId)) return;
+    draftOwnerRef.current = null;
+    const caption = stagedRef.current.find((s) => s.id === ownerId)?.caption.trim();
+    if (caption && !text.trim()) setText(caption);
+  };
+
   const unstage = (id: string) => {
+    restoreDraft(id);
     const found = stagedRef.current.find((s) => s.id === id);
     if (found) URL.revokeObjectURL(found.url);
     stagedRef.current = stagedRef.current.filter((s) => s.id !== id);
@@ -875,6 +914,7 @@ export function WhatsappPanel({
   const clearStaged = useCallback(() => {
     stagedRef.current.forEach((s) => URL.revokeObjectURL(s.url));
     stagedRef.current = [];
+    draftOwnerRef.current = null;
     setStaged([]);
   }, []);
 
@@ -890,11 +930,11 @@ export function WhatsappPanel({
   };
 
   const sendStaged = () => {
-    const files = stagedRef.current.map((s) => s.file);
-    if (files.length === 0) return;
+    const items = stagedRef.current.map((s) => ({ file: s.file, caption: s.caption }));
+    if (items.length === 0) return;
     // Las burbujas crean su propio blob: las URLs de la vista previa ya sobran.
     clearStaged();
-    void sendFilesInOrder(files);
+    void sendFilesInOrder(items);
     refocusComposer();
   };
 
@@ -1163,7 +1203,9 @@ export function WhatsappPanel({
             unstage(id);
             if (stagedRef.current.length === 0) refocusComposer();
           }}
+          onCaption={setCaption}
           onCancel={() => {
+            restoreDraft();
             clearStaged();
             refocusComposer();
           }}
