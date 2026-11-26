@@ -1259,6 +1259,16 @@ export class AlegraService {
 
   private alegraError(err: unknown, fallback: string): BadRequestException {
     if (isAxiosError(err)) {
+      const status = err.response?.status ?? '?';
+      // QUE llamada fallo (GET /contacts, POST /invoices...): el mismo mensaje
+      // de Alegra puede salir de pasos distintos de la factura, y sin esto un
+      // "unauthorized" no decia si era el contacto, la factura o la DIAN.
+      const where =
+        `${(err.config?.method ?? '').toUpperCase()} ${(err.config?.url ?? '').split('?')[0]}`.trim();
+      this.logger.warn(
+        `${fallback} · Alegra ${where} -> HTTP ${status}: ` +
+          `${JSON.stringify(err.response?.data ?? err.message).slice(0, 1000)}`,
+      );
       const data = err.response?.data as { message?: string } | string | undefined;
       const msg =
         data && typeof data === 'object' && typeof data.message === 'string'
@@ -1267,9 +1277,12 @@ export class AlegraService {
             ? data
             : null;
       return new BadRequestException(
-        msg ? `Alegra: ${msg}` : `${fallback} (HTTP ${err.response?.status ?? '?'})`,
+        msg
+          ? `Alegra: ${msg} (${where}, HTTP ${status})`
+          : `${fallback} (${where}, HTTP ${status})`,
       );
     }
+    this.logger.warn(`${fallback}: ${err instanceof Error ? err.message : String(err)}`);
     return new BadRequestException(fallback);
   }
 
