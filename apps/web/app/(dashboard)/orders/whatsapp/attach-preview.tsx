@@ -5,11 +5,28 @@ import { FileText, Film, Plus, Send, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 
-/** Archivo en espera de confirmacion (pegado, arrastrado o agregado con el +). */
-export type StagedWaFile = { id: string; file: File; url: string };
+/**
+ * Archivo en espera de confirmacion (pegado, arrastrado o agregado con el +).
+ * `caption`: el texto que lo acompaña, propio de cada foto o video.
+ */
+export type StagedWaFile = { id: string; file: File; url: string; caption: string };
 
 const isImage = (f: File) => f.type.startsWith('image/');
 const isVideo = (f: File) => f.type.startsWith('video/');
+
+/**
+ * Solo fotos y videos llevan texto, como en WhatsApp: el de un documento o un
+ * audio no tendria donde guardarse (ahi el mensaje guarda el nombre del archivo).
+ */
+export const canCaption = (f: File): boolean => isImage(f) || isVideo(f);
+
+/** Tope de Meta para el texto de una foto o video (el API valida lo mismo). */
+export const CAPTION_MAX = 1024;
+
+/** ¿Hay mouse? En el cel, enfocar un campo abre el teclado y tapa la foto. */
+const hasMouse = () =>
+  typeof window !== 'undefined' &&
+  Boolean(window.matchMedia?.('(hover: hover) and (pointer: fine)').matches);
 
 const fmtSize = (bytes: number): string =>
   bytes < 1024 * 1024
@@ -21,38 +38,59 @@ const fmtSize = (bytes: number): string =>
  * con Ctrl+V o se arrastra al chat NO sale solo. Un Ctrl+V por error (o con
  * otra cosa en el portapapeles) le llegaria al cliente sin poder deshacerlo.
  *
- * Enter o el boton verde envian todo; Esc o la X cancelan. Tapa el panel
- * entero (cabecera, hilo y barra) para que no quede duda de que hay un envio
- * pendiente.
+ * Cada foto o video lleva su propio texto (caption), como en WhatsApp: se
+ * escribe debajo de la vista grande y viaja pegado al archivo.
+ *
+ * Enter o el boton verde envian todo (Shift+Enter, salto de linea); Esc o la X
+ * cancelan. Tapa el panel entero (cabecera, hilo y barra) para que no quede
+ * duda de que hay un envio pendiente.
  */
 export function AttachPreview({
   files,
   onAddMore,
   onRemove,
+  onCaption,
   onCancel,
   onSend,
 }: {
   files: StagedWaFile[];
   onAddMore: () => void;
   onRemove: (id: string) => void;
+  onCaption: (id: string, text: string) => void;
   onCancel: () => void;
   onSend: () => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const sendRef = useRef<HTMLButtonElement>(null);
+  const captionRef = useRef<HTMLTextAreaElement>(null);
   // Por defecto se ve el ULTIMO agregado (lo recien pegado).
   const lastId = files[files.length - 1]?.id ?? null;
   const [selectedId, setSelectedId] = useState<string | null>(lastId);
   useEffect(() => setSelectedId(lastId), [lastId]);
   const current = files.find((f) => f.id === selectedId) ?? files[files.length - 1];
   const currentIdx = current ? files.indexOf(current) : -1;
+  const captionable = current ? canCaption(current.file) : false;
 
-  // El foco pasa al boton Enviar: el campo de texto queda TAPADO y, si
-  // conservara el foco, lo que se tecleara iria a parar ahi sin verse. Los
-  // siguientes Ctrl+V igual llegan al panel (el evento sube desde el boton).
+  // Foco inicial: con mouse, en el TEXTO de la foto (se escribe de una, como en
+  // WhatsApp Web). En el cel, en Enviar: enfocar el texto abriria el teclado
+  // encima de la foto. Nunca queda en el campo del chat, que esta TAPADO.
+  // Los siguientes Ctrl+V igual llegan al panel (el evento sube desde aqui).
   useEffect(() => {
-    sendRef.current?.focus();
+    if (captionable && hasMouse()) captionRef.current?.focus();
+    else sendRef.current?.focus();
+    // Solo al abrir: despues el foco es de quien escribe.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // El texto CRECE con los saltos de linea hasta ~5 lineas; luego hace scroll.
+  const caption = current?.caption ?? '';
+  useEffect(() => {
+    const el = captionRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+    el.style.overflowY = el.scrollHeight > 120 ? 'auto' : 'hidden';
+  }, [caption, current?.id]);
 
   // Teclado en fase de CAPTURA + stopPropagation, como el visor de fotos: el
   // drawer escucha Esc en document y la bandeja en window; sin esto el mismo
@@ -146,8 +184,35 @@ export function AttachPreview({
         )}
       </div>
       <p className="hidden pb-2 text-center text-[11.5px] text-[#667781] dark:text-[#8696a0] md:block">
-        Enter para enviar · Esc para cancelar · Ctrl+V para agregar más
+        Enter para enviar · Shift+Enter salto de línea · Esc para cancelar · Ctrl+V para agregar
+        más
       </p>
+
+      {/* TEXTO de la foto/video que se esta viendo (cada una tiene el suyo). */}
+      {captionable ? (
+        <div className="px-3 pb-2 md:px-6">
+          <textarea
+            ref={captionRef}
+            value={current.caption}
+            onChange={(e) => onCaption(current.id, e.target.value)}
+            rows={1}
+            maxLength={CAPTION_MAX}
+            placeholder="Añade un comentario"
+            aria-label="Texto que acompaña el archivo"
+            // 16px en cel (minimo anti auto-zoom), como el campo del chat.
+            className="scrollbar-none mx-auto block min-h-10 w-full max-w-2xl resize-none overflow-hidden rounded-lg bg-white px-4 py-[9px] text-[16px] leading-[22px] text-[#111b21] outline-none placeholder:text-[#667781] focus-visible:ring-2 focus-visible:ring-[#00a884]/40 dark:bg-[#2a3942] dark:text-[#e9edef] dark:placeholder:text-[#8696a0] md:text-[14.5px]"
+          />
+          {current.caption.length > CAPTION_MAX - 100 ? (
+            <p className="mx-auto mt-1 max-w-2xl text-right text-[11px] text-[#667781] dark:text-[#8696a0]">
+              {current.caption.length}/{CAPTION_MAX}
+            </p>
+          ) : null}
+        </div>
+      ) : (
+        <p className="px-3 pb-2 text-center text-[12px] text-[#667781] dark:text-[#8696a0]">
+          Los documentos y audios se envían sin texto.
+        </p>
+      )}
 
       {/* Miniaturas (elegir / quitar) + agregar mas + ENVIAR. */}
       <div className="flex items-center gap-3 bg-[#f0f2f5] px-3 py-2 dark:bg-[#202c33]">

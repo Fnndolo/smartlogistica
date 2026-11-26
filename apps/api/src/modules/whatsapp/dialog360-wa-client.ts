@@ -50,8 +50,9 @@ export class Dialog360WaClient implements WaClient {
     kind: WaMediaKind,
     link: string,
     filename?: string,
+    caption?: string | null,
   ): Promise<string | null> {
-    return this.api.sendMediaLink(this.http, this.mode, to, kind, link, filename);
+    return this.api.sendMediaLink(this.http, this.mode, to, kind, link, filename, caption);
   }
 
   sendInteractiveButtons(

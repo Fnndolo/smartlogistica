@@ -4,6 +4,7 @@ import axios, { type AxiosInstance } from 'axios';
 import type { CreateWaTemplateInput, Dialog360Mode } from '@smartlogistica/shared';
 
 import type { WaTemplateLite, WaTemplateRaw } from './wa-client.port';
+import { waMediaObject } from './wa-shared';
 import { buildTemplateComponents, mapTemplateRow, toTemplateLite } from './wa-template-mapper';
 
 const TIMEOUT_MS = 30_000;
@@ -218,9 +219,9 @@ export class Dialog360Client {
     kind: 'image' | 'video' | 'audio' | 'document' | 'sticker',
     link: string,
     filename?: string,
+    caption?: string | null,
   ): Promise<string | null> {
-    const media: Record<string, unknown> = { link };
-    if (kind === 'document' && filename) media.filename = filename;
+    const media = waMediaObject(kind, link, filename, caption);
     const res = await http.post(this.messagesPath(mode), {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
